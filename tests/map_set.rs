@@ -229,7 +229,7 @@ fn test_map_keys() {
         const m = new Map();
         m.set("a", 1);
         m.set("b", 2);
-        m.keys().length
+        [...m.keys()].length
         "#
         ),
         2
@@ -247,7 +247,7 @@ fn test_map_values() {
         const m = new Map();
         m.set("a", 10);
         m.set("b", 20);
-        m.values()[0]
+        [...m.values()][0]
         "#
         ),
         10
@@ -263,7 +263,7 @@ fn test_map_entries() {
             &mut ctx,
             r#"
         const m = new Map([["x", 5]]);
-        m.entries().length
+        [...m.entries()].length
         "#
         ),
         1
@@ -471,7 +471,7 @@ fn test_set_values() {
             &mut ctx,
             r#"
         const s = new Set([10, 20, 30]);
-        s.values().length
+        [...s.values()].length
         "#
         ),
         3
@@ -487,7 +487,7 @@ fn test_set_keys_same_as_values() {
             &mut ctx,
             r#"
         const s = new Set([10, 20]);
-        s.keys().length
+        [...s.keys()].length
         "#
         ),
         2
@@ -503,7 +503,7 @@ fn test_set_entries() {
             &mut ctx,
             r#"
         const s = new Set([1, 2]);
-        s.entries().length
+        [...s.entries()].length
         "#
         ),
         2

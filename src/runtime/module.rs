@@ -234,7 +234,9 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
     use crate::compiler::peephole;
     use crate::runtime::vm::VM;
 
-    let resolved = if specifier.starts_with("./")
+    let resolved = if ctx.runtime().module_registry().has(specifier) {
+        specifier.to_string()
+    } else if specifier.starts_with("./")
         || specifier.starts_with("../")
         || specifier.starts_with('/')
     {

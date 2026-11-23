@@ -2231,6 +2231,9 @@ impl CodeGenerator {
                 }
                 return Err("with statement is not supported".to_string());
             }
+            ASTNode::ImportDeclaration(decl) => {
+                self.gen_import_declaration(decl, ctx)?;
+            }
             ASTNode::EmptyStatement => {}
             ASTNode::LabelledStatement(stmt) => {
                 let saved = self.pending_label.clone();
@@ -2254,6 +2257,57 @@ impl CodeGenerator {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn gen_import_declaration(
+        &mut self,
+        decl: &ImportDeclaration,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        let build_call = |binding: Option<&str>| -> Expression {
+            let mut arguments = vec![Argument::Expression(Expression::Literal(Literal::String(
+                decl.source.clone(),
+                false,
+            )))];
+            if let Some(name) = binding {
+                arguments.push(Argument::Expression(Expression::Literal(Literal::String(
+                    name.to_string(),
+                    false,
+                ))));
+            }
+            Expression::CallExpression(CallExpression {
+                callee: Box::new(Expression::Identifier(Identifier {
+                    name: "__pipa_import__".to_string(),
+                })),
+                arguments,
+            })
+        };
+
+        if decl.specifiers.is_empty() {
+            let reg = self.gen_expression(&build_call(None), ctx)?;
+            self.free_register(reg);
+            return Ok(());
+        }
+
+        for specifier in &decl.specifiers {
+            let (local, binding) = match specifier {
+                ImportSpecifier::Named { imported, local } => {
+                    (local.clone(), Some(imported.clone()))
+                }
+                ImportSpecifier::Default { local } => (local.clone(), Some("default".to_string())),
+                ImportSpecifier::Namespace { local } => (local.clone(), None),
+            };
+            let declaration = VariableDeclaration {
+                kind: VariableKind::Var,
+                declarations: vec![VariableDeclarator {
+                    id: BindingPattern::Identifier(local),
+                    init: Some(build_call(binding.as_deref())),
+                }],
+            };
+            self.gen_variable_declaration(&declaration, ctx)?;
+        }
+
         Ok(())
     }
 
@@ -4706,6 +4760,15 @@ impl CodeGenerator {
                 let class_slot = self.alloc_register();
                 self.gen_class_body(class_slot, class_name, &ce.super_class, &ce.body, ctx)?;
                 Ok(class_slot)
+            }
+            Expression::MetaProperty(_) => {
+                let call = Expression::CallExpression(CallExpression {
+                    callee: Box::new(Expression::Identifier(Identifier {
+                        name: "__pipa_import_meta__".to_string(),
+                    })),
+                    arguments: Vec::new(),
+                });
+                self.gen_expression(&call, ctx)
             }
             _ => {
                 let r = self.alloc_register();

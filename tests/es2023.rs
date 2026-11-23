@@ -315,7 +315,6 @@ fn test_import_syntax() {
 }
 
 #[test]
-#[ignore = "import system needs full implementation"]
 fn test_import_namespace() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
@@ -333,7 +332,6 @@ fn test_import_namespace() {
 }
 
 #[test]
-#[ignore = "import system needs full implementation"]
 fn test_import_named() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
@@ -351,7 +349,6 @@ fn test_import_named() {
 }
 
 #[test]
-#[ignore = "import system needs full implementation"]
 fn test_import_default() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();

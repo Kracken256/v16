@@ -86,6 +86,14 @@ pub fn init_globals(ctx: &mut JSContext) {
     );
     ctx.register_builtin("import", HostFunction::new("import", 1, js_import));
     ctx.register_builtin(
+        "__pipa_import__",
+        HostFunction::new("__pipa_import__", 2, pipa_import),
+    );
+    ctx.register_builtin(
+        "__pipa_import_meta__",
+        HostFunction::new("__pipa_import_meta__", 0, pipa_import_meta),
+    );
+    ctx.register_builtin(
         "disassemble",
         HostFunction::new("disassemble", 1, js_disassemble),
     );
@@ -526,6 +534,56 @@ fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             promise::create_rejected_promise(ctx, err_msg)
         }
     }
+}
+
+fn pipa_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if args.is_empty() || !args[0].is_string() {
+        return throw_type_error(ctx, "Import specifier must be a string");
+    }
+
+    let specifier = ctx.get_atom_str(args[0].get_atom()).to_string();
+    let binding_name = if args.len() >= 2 && args[1].is_string() {
+        Some(ctx.get_atom_str(args[1].get_atom()).to_string())
+    } else {
+        None
+    };
+
+    match crate::runtime::module::load_and_evaluate_module(ctx, &specifier) {
+        Ok(ns_ptr) => match binding_name {
+            None => JSValue::new_object(ns_ptr),
+            Some(name) => {
+                let atom = ctx.intern(&name);
+                let ns_obj = unsafe { &*(ns_ptr as *const JSObject) };
+                ns_obj.get(atom).unwrap_or_else(JSValue::undefined)
+            }
+        },
+        Err(e) => throw_type_error(ctx, &e),
+    }
+}
+
+fn pipa_import_meta(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
+    let url = ctx
+        .get_current_module()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    if let Some(ptr) = ctx.get_import_meta() {
+        let existing = unsafe { &*(ptr as *const JSObject) };
+        let matches = existing
+            .get(ctx.intern("url"))
+            .map(|v| v.is_string() && ctx.get_atom_str(v.get_atom()) == url)
+            .unwrap_or(false);
+        if matches {
+            return JSValue::new_object(ptr);
+        }
+    }
+
+    let mut meta = JSObject::new();
+    meta.set(ctx.intern("url"), JSValue::new_string(ctx.intern(&url)));
+    let ptr = Box::into_raw(Box::new(meta)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.set_import_meta(Some(ptr));
+    JSValue::new_object(ptr)
 }
 
 fn global_isnan(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -3198,6 +3256,16 @@ fn init_global_funcs(ctx: &mut JSContext) {
             global_obj,
             ctx.intern("import"),
             create_builtin_function(ctx, "import"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("__pipa_import__"),
+            create_builtin_function(ctx, "__pipa_import__"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("__pipa_import_meta__"),
+            create_builtin_function(ctx, "__pipa_import_meta__"),
         );
         set_non_enumerable(
             global_obj,

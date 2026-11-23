@@ -1981,7 +1981,7 @@ impl Parser {
             if self.peek_at(".") {
                 self.advance();
                 self.expect(".")?;
-                self.expect_keyword("meta")?;
+                self.expect("meta")?;
                 return Ok(Expression::MetaProperty(MetaProperty {
                     meta: "import".to_string(),
                     property: "meta".to_string(),

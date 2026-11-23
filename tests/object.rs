@@ -121,7 +121,8 @@ fn test_object_get_prototype_of() {
         .is_ok()
     );
 
-    assert!(eval(&mut ctx, "Object.getPrototypeOf(null)").is_ok());
+    assert!(eval(&mut ctx, "Object.getPrototypeOf(null)").is_err());
+    assert!(eval(&mut ctx, "Object.getPrototypeOf(undefined)").is_err());
 }
 
 #[test]

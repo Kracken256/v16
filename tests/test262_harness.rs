@@ -13,7 +13,7 @@ fn test262_create_realm(ctx: &mut pipa::JSContext, _args: &[JSValue]) -> JSValue
 }
 
 fn test262_eval_script(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
-    let script = if let Some(v) = args.get(1) {
+    let script = if let Some(v) = args.first() {
         if v.is_string() {
             let atom = v.get_atom();
             ctx.get_atom_str(atom).to_string()

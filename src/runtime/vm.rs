@@ -192,6 +192,16 @@ impl VM {
         vm
     }
 
+    pub fn prime(&mut self) {
+        if self.registers.is_empty() {
+            self.registers.push(JSValue::undefined());
+        }
+        self.cached_registers_base = 0;
+        self.cached_registers_ptr = self.registers.as_mut_ptr();
+        self.frame_index = 0;
+        self.pc = 0;
+    }
+
     fn cleanup_handlers_for_frame(&mut self) {
         let fi = self.frame_index;
         while self

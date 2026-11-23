@@ -912,25 +912,46 @@ impl JSContext {
     }
 
     pub fn run_event_loop(&mut self) -> Result<super::event_loop::EventLoopResult, String> {
-        let mut event_loop = std::mem::take(&mut self.event_loop);
-
-        self.running_event_loop = Some(&mut event_loop as *mut EventLoop);
-        let result = event_loop.run_until_complete(self, None);
-        self.running_event_loop = None;
-        self.event_loop = event_loop;
-        result
+        self.run_event_loop_impl(None)
     }
 
     pub fn run_event_loop_with_timeout(
         &mut self,
         timeout_ms: u64,
     ) -> Result<super::event_loop::EventLoopResult, String> {
-        let mut event_loop = std::mem::take(&mut self.event_loop);
+        self.run_event_loop_impl(Some(timeout_ms))
+    }
 
-        self.running_event_loop = Some(&mut event_loop as *mut EventLoop);
-        let result = event_loop.run_until_complete(self, Some(timeout_ms));
-        self.running_event_loop = None;
-        self.event_loop = event_loop;
+    fn run_event_loop_impl(
+        &mut self,
+        timeout_ms: Option<u64>,
+    ) -> Result<super::event_loop::EventLoopResult, String> {
+        let saved_register_vm_ptr = self.register_vm_ptr;
+
+        let mut owned_vm = if saved_register_vm_ptr.is_none() {
+            let mut vm = crate::runtime::vm::VM::new();
+            vm.prime();
+            Some(vm)
+        } else {
+            None
+        };
+        if let Some(vm) = owned_vm.as_mut() {
+            self.register_vm_ptr = Some(vm as *mut _ as usize);
+        }
+
+        let result = {
+            let mut event_loop = std::mem::take(&mut self.event_loop);
+
+            self.running_event_loop = Some(&mut event_loop as *mut EventLoop);
+            let result = event_loop.run_until_complete(self, timeout_ms);
+            self.running_event_loop = None;
+            self.event_loop = event_loop;
+
+            result
+        };
+
+        drop(owned_vm.take());
+        self.register_vm_ptr = saved_register_vm_ptr;
         result
     }
 }
