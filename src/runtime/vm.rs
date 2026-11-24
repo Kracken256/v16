@@ -7236,22 +7236,11 @@ impl VM {
                         func.upvalues_mut().upvalue_cells.insert(atom, cell);
                     }
 
-                    let name_atom = if func_name_atom != 0 {
-                        crate::runtime::atom::Atom(func_name_atom)
-                    } else {
-                        ctx.intern("")
-                    };
-                    func.name = name_atom;
-                    {
-                        let name_desc = crate::object::object::PropertyDescriptor {
-                            value: Some(JSValue::new_string(name_atom)),
-                            writable: false,
-                            enumerable: false,
-                            configurable: true,
-                            get: None,
-                            set: None,
-                        };
-                        func.base.define_property(ctx.common_atoms.name, name_desc);
+                    if func_name_atom != 0 {
+                        let name_atom = crate::runtime::atom::Atom(func_name_atom);
+                        func.name = name_atom;
+                        let name_str = JSValue::new_string(name_atom);
+                        func.base.set(ctx.common_atoms.name, name_str);
                     }
 
                     {
