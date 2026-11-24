@@ -1106,6 +1106,17 @@ impl JSObject {
         getter: Option<JSValue>,
         setter: Option<JSValue>,
     ) {
+        self.define_accessor_flags(prop, getter, setter, true, true);
+    }
+
+    pub fn define_accessor_flags(
+        &mut self,
+        prop: Atom,
+        getter: Option<JSValue>,
+        setter: Option<JSValue>,
+        enumerable: bool,
+        configurable: bool,
+    ) {
         let extra = self.ensure_extra();
         extra
             .accessors
@@ -1115,8 +1126,8 @@ impl JSObject {
                 AccessorEntry {
                     get: getter,
                     set: setter,
-                    enumerable: true,
-                    configurable: true,
+                    enumerable,
+                    configurable,
                 },
             );
         let order = extra
@@ -1360,11 +1371,18 @@ impl JSObject {
     pub fn set_cached(&mut self, prop: Atom, value: JSValue, cache: &mut ShapeCache) {
         if let Some(offset) = self.shape_offset(prop) {
             let off = offset as usize;
-            if off < self.props.len() {
+            if off < self.props.len() && self.props[off].attrs != ATTR_DELETED {
                 if self.props[off].attrs & ATTR_WRITABLE == 0 {
                     return;
                 }
                 self.props[off].value = value;
+                return;
+            }
+            if let Some(offset) = self.find_offset(prop) {
+                if self.props[offset].attrs & ATTR_WRITABLE == 0 {
+                    return;
+                }
+                self.props[offset].value = value;
                 return;
             }
         } else {
