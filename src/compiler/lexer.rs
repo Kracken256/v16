@@ -334,32 +334,35 @@ impl Lexer {
 
         if self.source[self.pos] == '0'
             && self.pos + 1 < self.source.len()
-            && (self.source[self.pos + 1] == 'x' || self.source[self.pos + 1] == 'X')
+            && matches!(
+                self.source[self.pos + 1],
+                'x' | 'X' | 'o' | 'O' | 'b' | 'B'
+            )
         {
+            let radix = self.source[self.pos + 1];
             self.advance();
             self.advance();
-            while self.pos < self.source.len() {
-                if self.source[self.pos].is_ascii_hexdigit() {
-                    self.advance();
-                } else if self.source[self.pos] == '_' {
-                    if self.pos + 1 < self.source.len()
-                        && (self.source[self.pos + 1].is_ascii_hexdigit())
-                    {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
+            let digits_start = self.pos;
+            while self.pos < self.source.len()
+                && (self.source[self.pos] == '_' || is_radix_digit(radix, self.source[self.pos]))
+            {
+                self.advance();
             }
-            let is_bigint = self.pos < self.source.len() && self.source[self.pos] == 'n';
+            let digits: String = self.source[digits_start..self.pos].iter().collect();
+            let mut is_bigint = false;
+            if self.pos < self.source.len() && self.source[self.pos] == 'n' {
+                is_bigint = true;
+            }
+            let value_end = self.pos;
             if is_bigint {
                 self.advance();
             }
-            let value: String = self.source[start..self.pos].iter().collect();
+            let value: String = self.source[start..value_end].iter().collect();
+            let valid = valid_digit_run(&digits);
             return Token {
-                token_type: if is_bigint {
+                token_type: if !valid {
+                    TokenType::Punctuator
+                } else if is_bigint {
                     TokenType::BigInt
                 } else {
                     TokenType::Number
@@ -370,134 +373,75 @@ impl Lexer {
             };
         }
 
-        if self.source[self.pos] == '0'
-            && self.pos + 1 < self.source.len()
-            && (self.source[self.pos + 1] == 'o' || self.source[self.pos + 1] == 'O')
+        let int_start = self.pos;
+        while self.pos < self.source.len()
+            && (self.source[self.pos].is_ascii_digit() || self.source[self.pos] == '_')
         {
             self.advance();
-            self.advance();
-            while self.pos < self.source.len() {
-                if matches!(self.source[self.pos], '0'..='7') {
-                    self.advance();
-                } else if self.source[self.pos] == '_' {
-                    if self.pos + 1 < self.source.len()
-                        && matches!(self.source[self.pos + 1], '0'..='7')
-                    {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-            let is_bigint = self.pos < self.source.len() && self.source[self.pos] == 'n';
-            if is_bigint {
-                self.advance();
-            }
-            let value: String = self.source[start..self.pos].iter().collect();
-            return Token {
-                token_type: if is_bigint {
-                    TokenType::BigInt
-                } else {
-                    TokenType::Number
-                },
-                value,
-                line: self.line,
-                column: self.column,
-            };
         }
-
-        if self.source[self.pos] == '0'
-            && self.pos + 1 < self.source.len()
-            && (self.source[self.pos + 1] == 'b' || self.source[self.pos + 1] == 'B')
-        {
-            self.advance();
-            self.advance();
-            while self.pos < self.source.len() {
-                if matches!(self.source[self.pos], '0' | '1') {
-                    self.advance();
-                } else if self.source[self.pos] == '_' {
-                    if self.pos + 1 < self.source.len()
-                        && matches!(self.source[self.pos + 1], '0' | '1')
-                    {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-            let is_bigint = self.pos < self.source.len() && self.source[self.pos] == 'n';
-            if is_bigint {
-                self.advance();
-            }
-            let value: String = self.source[start..self.pos].iter().collect();
-            return Token {
-                token_type: if is_bigint {
-                    TokenType::BigInt
-                } else {
-                    TokenType::Number
-                },
-                value,
-                line: self.line,
-                column: self.column,
-            };
-        }
+        let int_part: String = self.source[int_start..self.pos].iter().collect();
 
         let mut has_dot = false;
-        while self.pos < self.source.len() {
-            if self.source[self.pos].is_ascii_digit() {
+        let mut frac_part = String::new();
+        if self.pos < self.source.len() && self.source[self.pos] == '.' {
+            has_dot = true;
+            self.advance();
+            let frac_start = self.pos;
+            while self.pos < self.source.len()
+                && (self.source[self.pos].is_ascii_digit() || self.source[self.pos] == '_')
+            {
                 self.advance();
-            } else if self.source[self.pos] == '_' {
-                if self.pos + 1 < self.source.len() && self.source[self.pos + 1].is_ascii_digit() {
-                    self.advance();
-                } else {
-                    break;
-                }
-            } else if self.source[self.pos] == '.' && !has_dot {
-                has_dot = true;
-                self.advance();
-            } else {
-                break;
             }
+            frac_part = self.source[frac_start..self.pos].iter().collect();
         }
 
+        let mut has_exp = false;
+        let mut exp_part = String::new();
         if self.pos < self.source.len()
             && (self.source[self.pos] == 'e' || self.source[self.pos] == 'E')
         {
+            has_exp = true;
             self.advance();
             if self.pos < self.source.len()
                 && (self.source[self.pos] == '+' || self.source[self.pos] == '-')
             {
                 self.advance();
             }
-            while self.pos < self.source.len() {
-                if self.source[self.pos].is_ascii_digit() {
-                    self.advance();
-                } else if self.source[self.pos] == '_' {
-                    if self.pos + 1 < self.source.len()
-                        && self.source[self.pos + 1].is_ascii_digit()
-                    {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
+            let exp_start = self.pos;
+            while self.pos < self.source.len()
+                && (self.source[self.pos].is_ascii_digit() || self.source[self.pos] == '_')
+            {
+                self.advance();
             }
+            exp_part = self.source[exp_start..self.pos].iter().collect();
         }
 
+        let mut is_bigint = false;
+        if !has_dot && !has_exp && self.pos < self.source.len() && self.source[self.pos] == 'n' {
+            is_bigint = true;
+        }
         let value_end = self.pos;
-        let is_bigint = self.pos < self.source.len() && self.source[self.pos] == 'n';
         if is_bigint {
             self.advance();
         }
+
         let value: String = self.source[start..value_end].iter().collect();
+
+        let mut valid = if has_dot {
+            !(int_part.is_empty() && frac_part.is_empty())
+                && (int_part.is_empty() || valid_digit_run(&int_part))
+                && (frac_part.is_empty() || valid_digit_run(&frac_part))
+        } else {
+            valid_digit_run(&int_part)
+        };
+        if has_exp && !valid_digit_run(&exp_part) {
+            valid = false;
+        }
+
         Token {
-            token_type: if is_bigint {
+            token_type: if !valid {
+                TokenType::Punctuator
+            } else if is_bigint {
                 TokenType::BigInt
             } else {
                 TokenType::Number
@@ -1431,4 +1375,16 @@ impl Lexer {
         }
         true
     }
+}
+
+fn is_radix_digit(radix: char, c: char) -> bool {
+    match radix {
+        'x' | 'X' => c.is_ascii_hexdigit(),
+        'o' | 'O' => matches!(c, '0'..='7'),
+        _ => matches!(c, '0' | '1'),
+    }
+}
+
+fn valid_digit_run(s: &str) -> bool {
+    !s.is_empty() && !s.starts_with('_') && !s.ends_with('_') && !s.contains("__")
 }
