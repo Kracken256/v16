@@ -1,0 +1,5 @@
+# Generated Test262 reports. They are checked in on purpose (they are the
+# conformance record), but they are multi-megabyte and change on every run, so
+# mark them as generated so review tools skip them in diffs.
+docs/test/**/*.md linguist-generated=true
+docs/test/master.md linguist-generated=true

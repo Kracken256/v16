@@ -1,0 +1,54 @@
+{
+  // This repository vendors the full Test262 suite (~57k files) and a Rust
+  // target directory (~11k files). Watching/indexing both exhausts inotify
+  // instances and extension-host memory, which crashes VS Code. Keep them out
+  // of the file watcher, the search index and the explorer.
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/target/**": true,
+    "**/test262/**": true,
+    "**/bench-v8/**": true,
+    "**/docs/test/**": true
+  },
+  "search.exclude": {
+    "**/target": true,
+    "**/test262": true,
+    "**/bench-v8": true,
+    "**/docs/test": true
+  },
+  "files.exclude": {
+    "**/target": true,
+    "**/bench-v8": true
+  },
+  "rust-analyzer.files.excludeDirs": [
+    "target",
+    "bench-v8",
+    "test262"
+  ],
+  // Pylance/Python: the only Python in this repo is scripts/, so keep the
+  // vendored suite and the build directory out of the analysis project.
+  "python.analysis.exclude": [
+    "**/test262/**",
+    "**/target/**",
+    "**/bench-v8/**",
+    "**/docs/test/**"
+  ],
+  "python.analysis.ignore": [
+    "**/test262/**",
+    "**/target/**",
+    "**/bench-v8/**",
+    "**/docs/test/**"
+  ],
+  // Copilot Chat tries to embed-index the whole workspace. For a repo that
+  // vendors 57k Test262 files that is an enormous amount of CPU and memory,
+  // and it is the main reason the extension host falls over. Disable its
+  // workspace code search and keep its indexing away from the generated docs.
+  "github.copilot.chat.codesearch.enabled": false,
+  "github.copilot.chat.copilotDebugCommand.enabled": false,
+  // Generated reports are large; keep large-file handling enabled and give the
+  // editor enough headroom to open them without falling back to a plain view.
+  "editor.largeFileOptimizations": true,
+  "files.maxMemoryForLargeFilesMB": 4096,
+  "search.followSymlinks": false
+}
