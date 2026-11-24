@@ -9865,11 +9865,13 @@ impl VM {
             let pre_offset = js_obj.find_offset(atom);
 
             if !js_obj.is_prop_writable_at(pre_offset) {
-                let msg = format!(
-                    "Cannot assign to read only property '{}'",
-                    ctx.get_atom_str(atom)
-                );
-                self.set_pending_type_error(ctx, &msg);
+                if self.frames[self.frame_index].is_strict_frame {
+                    let msg = format!(
+                        "Cannot assign to read only property '{}'",
+                        ctx.get_atom_str(atom)
+                    );
+                    self.set_pending_type_error(ctx, &msg);
+                }
                 return false;
             }
 
@@ -9901,11 +9903,13 @@ impl VM {
             }
 
             if pre_offset.is_none() && !js_obj.extensible() {
-                let msg = format!(
-                    "Cannot define property '{}', object is not extensible",
-                    ctx.get_atom_str(atom)
-                );
-                self.set_pending_type_error(ctx, &msg);
+                if self.frames[self.frame_index].is_strict_frame {
+                    let msg = format!(
+                        "Cannot define property '{}', object is not extensible",
+                        ctx.get_atom_str(atom)
+                    );
+                    self.set_pending_type_error(ctx, &msg);
+                }
                 return false;
             }
 
