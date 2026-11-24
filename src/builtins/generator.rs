@@ -123,6 +123,7 @@ fn run_generator_step(
     let snapshot_clone = state.snapshot.clone();
     let current_send_reg = state.send_reg;
     let saved_args = state.saved_args.clone();
+    let func_ptr = state.func_ptr;
 
     let (value, new_snapshot, new_pc, done, new_send_reg) = {
         let bytecode = &*gen_obj.get_generator_state().unwrap().bytecode;
@@ -137,6 +138,7 @@ fn run_generator_step(
             send_value,
             current_send_reg,
             &saved_args,
+            func_ptr,
         );
         let uncaught = vm.last_uncaught;
         ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
@@ -249,8 +251,40 @@ fn async_generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     match run_generator_step(ctx, gen_obj, send_value) {
         Ok((value, _new_pc, done)) => {
-            let iter_result = create_iterator_result(ctx, value, done);
-            ctx.call_builtin("promise_resolve", &[iter_result])
+            if done {
+                let iter_result = create_iterator_result(ctx, value, true);
+                return ctx.call_builtin("promise_resolve", &[iter_result]);
+            }
+            if crate::builtins::promise::is_promise(&value) {
+                let ptr = value.get_ptr();
+                let promise_obj = unsafe { &*(ptr as *mut JSObject) };
+                let state_atom = ctx.common_atoms.__promise_state__;
+                let result_atom = ctx.common_atoms.__promise_result__;
+                let state = promise_obj
+                    .get(state_atom)
+                    .unwrap_or(JSValue::new_int(0))
+                    .get_int();
+                let result = promise_obj.get(result_atom).unwrap_or(JSValue::undefined());
+                match state {
+                    1 => {
+                        let iter_result = create_iterator_result(ctx, result, false);
+                        ctx.call_builtin("promise_resolve", &[iter_result])
+                    }
+                    2 => {
+                        if let Some(state) = gen_obj.get_generator_state_mut() {
+                            state.done = true;
+                        }
+                        ctx.call_builtin("promise_reject", &[result])
+                    }
+                    _ => {
+                        let iter_result = create_iterator_result(ctx, value, false);
+                        ctx.call_builtin("promise_resolve", &[iter_result])
+                    }
+                }
+            } else {
+                let iter_result = create_iterator_result(ctx, value, false);
+                ctx.call_builtin("promise_resolve", &[iter_result])
+            }
         }
         Err((e, exc)) => {
             if let Some(state) = gen_obj.get_generator_state_mut() {

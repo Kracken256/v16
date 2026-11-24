@@ -154,6 +154,8 @@ pub struct VM {
 
     pub pending_saved_args: Option<Vec<JSValue>>,
 
+    pub pending_function_ptr: Option<usize>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -199,6 +201,7 @@ impl VM {
             last_yield_src: None,
             last_uncaught: None,
             pending_saved_args: None,
+            pending_function_ptr: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -948,6 +951,7 @@ impl VM {
                             JSValue::undefined(),
                             None,
                             args,
+                            Some(func_val.get_ptr()),
                         );
                         let uncaught = generator_vm.last_uncaught.take();
                         ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
@@ -988,6 +992,7 @@ impl VM {
                         send_reg: result_send_reg,
                         argc: args.len() as u32,
                         saved_args: args.to_vec(),
+                        func_ptr: Some(func_val.get_ptr()),
                     });
                     let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -2032,6 +2037,7 @@ impl VM {
                         JSValue::undefined(),
                         None,
                         args,
+                        Some(ptr),
                     );
                     let uncaught = generator_vm.last_uncaught.take();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
@@ -2069,6 +2075,7 @@ impl VM {
                     send_reg: result_send_reg,
                     argc: args.len() as u32,
                     saved_args: args.to_vec(),
+                    func_ptr: Some(ptr),
                 });
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -2495,7 +2502,7 @@ impl VM {
             frame.constants_ptr = bytecode.effective_const_ptr();
             frame.constants_len = bytecode.effective_const_len();
             frame.return_pc = 0;
-            frame.function_ptr = None;
+            frame.function_ptr = self.pending_function_ptr.take();
             frame.this_value = global_val;
             frame.saved_args.clear();
             if let Some(args) = saved_args {
@@ -2506,6 +2513,15 @@ impl VM {
             frame.uses_arguments = false;
             frame.var_name_map = std::rc::Rc::as_ptr(&bytecode.var_name_to_slot);
             frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
+            frame.has_upvalues = match frame.function_ptr {
+                Some(ptr) => {
+                    let func = unsafe { JSValue::function_from_ptr(ptr) };
+                    func.upvalues
+                        .as_ref()
+                        .map_or(false, |uv| !uv.upvalue_slots.is_empty())
+                }
+                None => false,
+            };
 
             self.frame_index = 0;
             self.exception_handlers.clear();
@@ -6786,6 +6802,7 @@ impl VM {
                                         send_reg: None,
                                         argc: args.len() as u32,
                                         saved_args: args.to_vec(),
+                                        func_ptr: Some(ptr),
                                     },
                                 );
                                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -7700,12 +7717,14 @@ impl VM {
         send_value: JSValue,
         send_reg: Option<u16>,
         saved_args: &[JSValue],
+        func_ptr: Option<usize>,
     ) -> Result<(JSValue, Vec<JSValue>, usize, bool, Option<u16>), String> {
         self.ctx_ptr = ctx;
         self.last_yield_src = None;
         self.last_uncaught = None;
 
         self.pending_saved_args = Some(saved_args.to_vec());
+        self.pending_function_ptr = func_ptr;
 
         let needed = bytecode.locals_count as usize;
         if needed > self.registers.len() {
