@@ -441,6 +441,49 @@ impl JSContext {
         unsafe { &mut *self.runtime }
     }
 
+    pub fn array_index_has_own(&self, value: &JSValue, atom: Atom) -> bool {
+        if !value.is_object() {
+            return false;
+        }
+        let obj = value.as_object();
+        if !obj.is_dense_array() {
+            return false;
+        }
+        let Some(index) = self.atom_table().get_array_index(atom) else {
+            return false;
+        };
+        let array =
+            unsafe { &*(value.get_ptr() as *const crate::object::array_obj::JSArrayObject) };
+        index < array.elements.len()
+    }
+
+    pub fn array_index_own_descriptor(
+        &self,
+        value: &JSValue,
+        atom: Atom,
+    ) -> Option<crate::object::object::PropertyDescriptor> {
+        if !value.is_object() {
+            return None;
+        }
+        let obj = value.as_object();
+        if !obj.is_dense_array() {
+            return None;
+        }
+        let index = self.atom_table().get_array_index(atom)?;
+        let array =
+            unsafe { &*(value.get_ptr() as *const crate::object::array_obj::JSArrayObject) };
+        let element = *array.elements.get(index)?;
+        let frozen = obj.frozen();
+        Some(crate::object::object::PropertyDescriptor {
+            value: Some(element),
+            writable: !frozen,
+            enumerable: true,
+            configurable: !(frozen || obj.sealed()),
+            get: None,
+            set: None,
+        })
+    }
+
     pub fn atom_table(&self) -> &AtomTable {
         self.runtime().atom_table()
     }

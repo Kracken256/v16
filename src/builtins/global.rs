@@ -696,7 +696,10 @@ fn reflect_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     while let Some(obj) = current {
         depth += 1;
         if depth > 1000 { break; }
-        if let Some(desc) = obj.get_own_descriptor(key) {
+        if let Some(desc) = ctx
+            .array_index_own_descriptor(&args[0], key)
+            .or_else(|| obj.get_own_descriptor(key))
+        {
             if let Some(value) = desc.value {
                 return value;
             }
@@ -956,7 +959,10 @@ fn reflect_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) ->
         if ctx.pending_exception.is_some() { return JSValue::undefined(); }
         ctx.intern(&s)
     };
-    if let Some(desc) = args[0].as_object().get_own_descriptor(key) {
+    if let Some(desc) = ctx
+        .array_index_own_descriptor(&args[0], key)
+        .or_else(|| args[0].as_object().get_own_descriptor(key))
+    {
         let mut result = JSObject::new();
         result.prototype = ctx.get_object_prototype();
         if desc.get.is_some() || desc.set.is_some() {

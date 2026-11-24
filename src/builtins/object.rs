@@ -1052,7 +1052,9 @@ fn object_has_own_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         object_to_object(ctx, this_val)
     };
     match key_atom {
-        Some(atom) => JSValue::bool(this_obj.as_object().has_own(atom)),
+        Some(atom) => JSValue::bool(
+            this_obj.as_object().has_own(atom) || ctx.array_index_has_own(&this_obj, atom),
+        ),
         None => JSValue::bool(false),
     }
 }
@@ -1180,7 +1182,10 @@ fn object_property_is_enumerable(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
         return JSValue::bool(false);
     };
     let obj = this.as_object();
-    if let Some(desc) = obj.get_own_descriptor(atom) {
+    if let Some(desc) = ctx
+        .array_index_own_descriptor(this, atom)
+        .or_else(|| obj.get_own_descriptor(atom))
+    {
         return JSValue::bool(desc.enumerable);
     }
     JSValue::bool(false)
@@ -1367,7 +1372,7 @@ fn object_has_own(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let Some(atom) = to_property_atom(ctx, prop) else {
         return JSValue::bool(false);
     };
-    JSValue::bool(obj.as_object().has_own(atom))
+    JSValue::bool(obj.as_object().has_own(atom) || ctx.array_index_has_own(&obj, atom))
 }
 
 fn object_is(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1739,7 +1744,10 @@ fn object_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) -> 
 
     let obj_ref = obj.as_object();
 
-    if let Some(pd) = obj_ref.get_own_descriptor(prop_atom) {
+    if let Some(pd) = ctx
+        .array_index_own_descriptor(obj, prop_atom)
+        .or_else(|| obj_ref.get_own_descriptor(prop_atom))
+    {
         let mut desc_obj = JSObject::new();
         desc_obj.prototype = ctx.get_object_prototype();
         if pd.get.is_some() || pd.set.is_some() {
