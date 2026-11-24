@@ -426,26 +426,12 @@ pub fn init_string(ctx: &mut JSContext) {
         ctx.intern("trim"),
         create_builtin_function(ctx, "string_trim"),
     );
-    set_ne(
-        &mut proto_obj,
-        ctx.intern("trimStart"),
-        create_builtin_function(ctx, "string_trimStart"),
-    );
-    set_ne(
-        &mut proto_obj,
-        ctx.intern("trimLeft"),
-        create_builtin_function(ctx, "string_trimStart"),
-    );
-    set_ne(
-        &mut proto_obj,
-        ctx.intern("trimEnd"),
-        create_builtin_function(ctx, "string_trimEnd"),
-    );
-    set_ne(
-        &mut proto_obj,
-        ctx.intern("trimRight"),
-        create_builtin_function(ctx, "string_trimEnd"),
-    );
+    let trim_start_fn = create_builtin_function(ctx, "string_trimStart");
+    set_ne(&mut proto_obj, ctx.intern("trimStart"), trim_start_fn);
+    set_ne(&mut proto_obj, ctx.intern("trimLeft"), trim_start_fn);
+    let trim_end_fn = create_builtin_function(ctx, "string_trimEnd");
+    set_ne(&mut proto_obj, ctx.intern("trimEnd"), trim_end_fn);
+    set_ne(&mut proto_obj, ctx.intern("trimRight"), trim_end_fn);
     set_ne(
         &mut proto_obj,
         ctx.intern("startsWith"),
@@ -535,6 +521,71 @@ pub fn init_string(ctx: &mut JSContext) {
         &mut proto_obj,
         ctx.intern("substr"),
         create_builtin_function(ctx, "string_substr"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("anchor"),
+        create_builtin_function(ctx, "string_anchor"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("big"),
+        create_builtin_function(ctx, "string_big"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("blink"),
+        create_builtin_function(ctx, "string_blink"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("bold"),
+        create_builtin_function(ctx, "string_bold"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("fixed"),
+        create_builtin_function(ctx, "string_fixed"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("fontcolor"),
+        create_builtin_function(ctx, "string_fontcolor"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("fontsize"),
+        create_builtin_function(ctx, "string_fontsize"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("italics"),
+        create_builtin_function(ctx, "string_italics"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("link"),
+        create_builtin_function(ctx, "string_link"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("small"),
+        create_builtin_function(ctx, "string_small"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("strike"),
+        create_builtin_function(ctx, "string_strike"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("sub"),
+        create_builtin_function(ctx, "string_sub"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("sup"),
+        create_builtin_function(ctx, "string_sup"),
     );
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
@@ -724,6 +775,43 @@ pub fn register_builtins(ctx: &mut JSContext) {
         "string_substr",
         HostFunction::method("substr", 2, string_substr),
     );
+    ctx.register_builtin(
+        "string_anchor",
+        HostFunction::method("anchor", 1, string_anchor),
+    );
+    ctx.register_builtin("string_big", HostFunction::method("big", 0, string_big));
+    ctx.register_builtin(
+        "string_blink",
+        HostFunction::method("blink", 0, string_blink),
+    );
+    ctx.register_builtin("string_bold", HostFunction::method("bold", 0, string_bold));
+    ctx.register_builtin(
+        "string_fixed",
+        HostFunction::method("fixed", 0, string_fixed),
+    );
+    ctx.register_builtin(
+        "string_fontcolor",
+        HostFunction::method("fontcolor", 1, string_fontcolor),
+    );
+    ctx.register_builtin(
+        "string_fontsize",
+        HostFunction::method("fontsize", 1, string_fontsize),
+    );
+    ctx.register_builtin(
+        "string_italics",
+        HostFunction::method("italics", 0, string_italics),
+    );
+    ctx.register_builtin("string_link", HostFunction::method("link", 1, string_link));
+    ctx.register_builtin(
+        "string_small",
+        HostFunction::method("small", 0, string_small),
+    );
+    ctx.register_builtin(
+        "string_strike",
+        HostFunction::method("strike", 0, string_strike),
+    );
+    ctx.register_builtin("string_sub", HostFunction::method("sub", 0, string_sub));
+    ctx.register_builtin("string_sup", HostFunction::method("sup", 0, string_sup));
 }
 
 fn string_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -2385,37 +2473,157 @@ fn string_match(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 }
 
-fn string_substr(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this_str = match this_to_string(ctx, &args[0]) {
-        Some(s) => s,
-        None => return JSValue::new_string(ctx.intern("")),
-    };
-    let s = &this_str;
-    let len = s.chars().count();
-    let start = if args.len() > 1 {
-        let v = args[1].get_int();
-        if v < 0 {
-            ((len as i64) + v).max(0) as usize
-        } else {
-            (v as usize).min(len)
-        }
+fn to_integer_or_infinity(ctx: &mut JSContext, val: &JSValue) -> Result<f64, ()> {
+    let n = crate::builtins::global::js_to_number_value(ctx, val)?;
+    if n.is_nan() {
+        Ok(0.0)
     } else {
-        0
+        Ok(n.trunc())
+    }
+}
+
+fn string_substr(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if args.is_empty() {
+        return JSValue::new_string(ctx.intern(""));
+    }
+    let s = match require_string_coercible(ctx, &args[0]) {
+        Some(s) => s,
+        None => return JSValue::undefined(),
+    };
+    let size = s.chars().count() as f64;
+
+    let start_arg = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let int_start = match to_integer_or_infinity(ctx, &start_arg) {
+        Ok(v) => v,
+        Err(_) => return JSValue::undefined(),
+    };
+    let int_start = if int_start == f64::NEG_INFINITY {
+        0.0
+    } else if int_start < 0.0 {
+        (size + int_start).max(0.0)
+    } else {
+        int_start.min(size)
     };
 
-    let end = if args.len() > 2 {
-        let v = args[2].get_int();
-        if v <= 0 {
-            return JSValue::new_string(ctx.intern(""));
+    let int_length = if args.len() > 2 && !args[2].is_undefined() {
+        match to_integer_or_infinity(ctx, &args[2]) {
+            Ok(v) => v,
+            Err(_) => return JSValue::undefined(),
         }
-        (start + v as usize).min(len)
     } else {
-        len
+        f64::INFINITY
     };
+
+    let result_length = int_length.max(0.0).min(size - int_start);
+    if result_length <= 0.0 {
+        return JSValue::new_string(ctx.intern(""));
+    }
+
+    let start = int_start as usize;
+    let end = start + result_length as usize;
     let start_b = byte_index_for_char_pos(&s, start);
     let end_b = byte_index_for_char_pos(&s, end);
     JSValue::new_string(ctx.intern(&s[start_b..end_b]))
 }
+fn html_to_string_attr(ctx: &mut JSContext, val: &JSValue) -> String {
+    if val.is_undefined() {
+        return "undefined".to_string();
+    }
+    if val.is_null() {
+        return "null".to_string();
+    }
+    if val.is_object() || val.is_function() {
+        return this_to_string(ctx, val).unwrap_or_default();
+    }
+    js_to_string_arg(val, ctx)
+}
+
+fn html_tag(ctx: &mut JSContext, args: &[JSValue], open: &str, close: &str) -> JSValue {
+    if args.is_empty() {
+        return JSValue::undefined();
+    }
+    let s = match require_string_coercible(ctx, &args[0]) {
+        Some(s) => s,
+        None => return JSValue::undefined(),
+    };
+    JSValue::new_string(ctx.intern(&format!("{}{}{}", open, s, close)))
+}
+
+fn html_attr_tag(
+    ctx: &mut JSContext,
+    args: &[JSValue],
+    prefix: &str,
+    close: &str,
+) -> JSValue {
+    if args.is_empty() {
+        return JSValue::undefined();
+    }
+    let s = match require_string_coercible(ctx, &args[0]) {
+        Some(s) => s,
+        None => return JSValue::undefined(),
+    };
+    let raw = if args.len() > 1 {
+        html_to_string_attr(ctx, &args[1])
+    } else {
+        "undefined".to_string()
+    };
+    let attr = raw.replace('"', "&quot;");
+    JSValue::new_string(ctx.intern(&format!("{}{}\">{}{}", prefix, attr, s, close)))
+}
+
+fn string_anchor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_attr_tag(ctx, args, "<a name=\"", "</a>")
+}
+
+fn string_big(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<big>", "</big>")
+}
+
+fn string_blink(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<blink>", "</blink>")
+}
+
+fn string_bold(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<b>", "</b>")
+}
+
+fn string_fixed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<tt>", "</tt>")
+}
+
+fn string_fontcolor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_attr_tag(ctx, args, "<font color=\"", "</font>")
+}
+
+fn string_fontsize(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_attr_tag(ctx, args, "<font size=\"", "</font>")
+}
+
+fn string_italics(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<i>", "</i>")
+}
+
+fn string_link(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_attr_tag(ctx, args, "<a href=\"", "</a>")
+}
+
+fn string_small(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<small>", "</small>")
+}
+
+fn string_strike(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<strike>", "</strike>")
+}
+
+fn string_sub(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<sub>", "</sub>")
+}
+
+fn string_sup(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    html_tag(ctx, args, "<sup>", "</sup>")
+}
+
+
 
 fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
