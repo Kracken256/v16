@@ -164,6 +164,7 @@ pub enum Opcode {
     IteratorClose = 203,
     IteratorStep = 222,
     IteratorCloseFinally = 223,
+    ToPropertyKey = 224,
     GetAsyncIterator = 204,
     IteratorNextAwait = 205,
     ObjectRest = 206,
@@ -297,6 +298,7 @@ impl Opcode {
             203 => Some(Opcode::IteratorClose),
             222 => Some(Opcode::IteratorStep),
             223 => Some(Opcode::IteratorCloseFinally),
+            224 => Some(Opcode::ToPropertyKey),
             204 => Some(Opcode::GetAsyncIterator),
             205 => Some(Opcode::IteratorNextAwait),
             206 => Some(Opcode::ObjectRest),
@@ -513,6 +515,7 @@ impl Opcode {
             Opcode::IteratorClose => 3,
             Opcode::IteratorStep => 5,
             Opcode::IteratorCloseFinally => 3,
+            Opcode::ToPropertyKey => 3,
             Opcode::GetAsyncIterator => 5,
             Opcode::IteratorNextAwait => 7,
             Opcode::ObjectRest => 7,
@@ -1200,6 +1203,10 @@ impl Bytecode {
                 Opcode::IteratorCloseFinally => {
                     let iter = read_u16(1);
                     write!(operands, " r{}", iter).unwrap();
+                }
+                Opcode::ToPropertyKey => {
+                    let reg = read_u16(1);
+                    write!(operands, " r{}", reg).unwrap();
                 }
                 Opcode::GetAsyncIterator => {
                     let dst = read_u16(1);

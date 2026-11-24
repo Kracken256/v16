@@ -4850,7 +4850,7 @@ impl VM {
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
-                    let key_val = self.get_reg(key_reg);
+                    let mut key_val = self.get_reg(key_reg);
                     if obj_val.is_null_or_undefined() {
                         self.set_pending_type_error(
                             ctx,
@@ -4864,6 +4864,20 @@ impl VM {
                             }
                         }
                         continue;
+                    }
+                    if !key_val.is_string()
+                        && !key_val.is_symbol()
+                        && !key_val.is_int()
+                        && !key_val.is_float()
+                    {
+                        key_val = self.to_property_key_value(ctx, key_val);
+                        if let Some(exc) = self.take_pending_exception(ctx) {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
                     }
                     let result = if obj_val.is_object_like() && key_val.is_int() {
                         let ptr = obj_val.get_ptr();
@@ -5047,12 +5061,31 @@ impl VM {
                     };
                     self.set_reg(dst, result);
                 }
+                Opcode::ToPropertyKey => {
+                    let reg = self.read_u16_pc();
+                    let value = self.get_reg(reg);
+                    if !value.is_string()
+                        && !value.is_symbol()
+                        && !value.is_int()
+                        && !value.is_float()
+                    {
+                        let key = self.to_property_key_value(ctx, value);
+                        if let Some(exc) = self.take_pending_exception(ctx) {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        self.set_reg(reg, key);
+                    }
+                }
                 Opcode::SetField => {
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
                     let val_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
-                    let key_val = self.get_reg(key_reg);
+                    let mut key_val = self.get_reg(key_reg);
                     let value = self.get_reg(val_reg);
                     if obj_val.is_null_or_undefined() {
                         self.set_pending_type_error(
@@ -5067,6 +5100,20 @@ impl VM {
                             }
                         }
                         continue;
+                    }
+                    if !key_val.is_string()
+                        && !key_val.is_symbol()
+                        && !key_val.is_int()
+                        && !key_val.is_float()
+                    {
+                        key_val = self.to_property_key_value(ctx, key_val);
+                        if let Some(exc) = self.take_pending_exception(ctx) {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
                     }
                     if obj_val.is_object_like() && key_val.is_int() {
                         let ptr = obj_val.get_ptr();
@@ -5287,7 +5334,7 @@ impl VM {
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
-                    let key_val = self.get_reg(key_reg);
+                    let mut key_val = self.get_reg(key_reg);
                     if obj_val.is_null_or_undefined() {
                         self.set_pending_type_error(
                             ctx,
@@ -5301,6 +5348,20 @@ impl VM {
                             }
                         }
                         continue;
+                    }
+                    if !key_val.is_string()
+                        && !key_val.is_symbol()
+                        && !key_val.is_int()
+                        && !key_val.is_float()
+                    {
+                        key_val = self.to_property_key_value(ctx, key_val);
+                        if let Some(exc) = self.take_pending_exception(ctx) {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
                     }
 
                     if !obj_val.is_object_like()
@@ -5451,7 +5512,7 @@ impl VM {
                     let key_reg = self.read_u16_pc();
                     let val_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
-                    let key_val = self.get_reg(key_reg);
+                    let mut key_val = self.get_reg(key_reg);
                     let value = self.get_reg(val_reg);
                     if obj_val.is_null_or_undefined() {
                         self.set_pending_type_error(
@@ -5466,6 +5527,20 @@ impl VM {
                             }
                         }
                         continue;
+                    }
+                    if !key_val.is_string()
+                        && !key_val.is_symbol()
+                        && !key_val.is_int()
+                        && !key_val.is_float()
+                    {
+                        key_val = self.to_property_key_value(ctx, key_val);
+                        if let Some(exc) = self.take_pending_exception(ctx) {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
                     }
 
                     if key_val.is_string() {
@@ -10116,6 +10191,14 @@ impl VM {
     }
 
     #[inline(always)]
+    fn to_property_key_value(&mut self, ctx: &mut JSContext, value: JSValue) -> JSValue {
+        if value.is_string() || value.is_symbol() || value.is_int() || value.is_float() {
+            return value;
+        }
+        let s = crate::builtins::global::to_property_key_string(ctx, &value);
+        JSValue::new_string(ctx.intern(&s))
+    }
+
     fn set_named_prop_fast(
         &mut self,
         ctx: &mut JSContext,

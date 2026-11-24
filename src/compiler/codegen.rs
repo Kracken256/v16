@@ -6807,11 +6807,14 @@ impl CodeGenerator {
                     MemberProperty::Identifier(name) => {
                         let atom = ctx.intern(name);
                         if let Some(opcode) = is_compound {
+                            self.emit(Opcode::CheckObjectCoercible);
+                            self.emit_u16(obj);
                             let tmp = self.alloc_register();
                             self.emit(Opcode::GetNamedProp);
                             self.emit_u16(tmp);
                             self.emit_u16(obj);
                             self.emit_u32(atom.0);
+                            let val = self.gen_expression(&assign.right, ctx)?;
                             self.emit(opcode);
                             self.emit_u16(tmp);
                             self.emit_u16(tmp);
@@ -6821,22 +6824,31 @@ impl CodeGenerator {
                             self.emit_u16(tmp);
                             self.emit_u32(atom.0);
                             self.free_register(val);
-                            result_reg = tmp;
+                            self.free_register(obj);
+                            Ok(tmp)
                         } else {
+                            let val = self.gen_expression(&assign.right, ctx)?;
                             self.emit(Opcode::SetNamedProp);
                             self.emit_u16(obj);
                             self.emit_u16(val);
                             self.emit_u32(atom.0);
+                            self.free_register(obj);
+                            Ok(val)
                         }
                     }
                     MemberProperty::Computed(expr) => {
                         let key = self.gen_expression(expr, ctx)?;
                         if let Some(opcode) = is_compound {
+                            self.emit(Opcode::CheckObjectCoercible);
+                            self.emit_u16(obj);
+                            self.emit(Opcode::ToPropertyKey);
+                            self.emit_u16(key);
                             let tmp = self.alloc_register();
                             self.emit(Opcode::GetField);
                             self.emit_u16(tmp);
                             self.emit_u16(obj);
                             self.emit_u16(key);
+                            let val = self.gen_expression(&assign.right, ctx)?;
                             self.emit(opcode);
                             self.emit_u16(tmp);
                             self.emit_u16(tmp);
@@ -6846,14 +6858,19 @@ impl CodeGenerator {
                             self.emit_u16(key);
                             self.emit_u16(tmp);
                             self.free_register(val);
-                            result_reg = tmp;
+                            self.free_register(key);
+                            self.free_register(obj);
+                            Ok(tmp)
                         } else {
+                            let val = self.gen_expression(&assign.right, ctx)?;
                             self.emit(Opcode::SetField);
                             self.emit_u16(obj);
                             self.emit_u16(key);
                             self.emit_u16(val);
+                            self.free_register(key);
+                            self.free_register(obj);
+                            Ok(val)
                         }
-                        self.free_register(key);
                     }
                     MemberProperty::PrivateIdentifier(name) => {
                         let key_idx = self.intern_and_add_const(ctx, name);
@@ -6862,11 +6879,14 @@ impl CodeGenerator {
                         self.emit_u16(key);
                         self.emit_u32(key_idx);
                         if let Some(opcode) = is_compound {
+                            self.emit(Opcode::CheckObjectCoercible);
+                            self.emit_u16(obj);
                             let tmp = self.alloc_register();
                             self.emit(Opcode::GetPrivate);
                             self.emit_u16(tmp);
                             self.emit_u16(obj);
                             self.emit_u16(key);
+                            let val = self.gen_expression(&assign.right, ctx)?;
                             self.emit(opcode);
                             self.emit_u16(tmp);
                             self.emit_u16(tmp);
@@ -6876,18 +6896,21 @@ impl CodeGenerator {
                             self.emit_u16(key);
                             self.emit_u16(tmp);
                             self.free_register(val);
-                            result_reg = tmp;
+                            self.free_register(key);
+                            self.free_register(obj);
+                            Ok(tmp)
                         } else {
+                            let val = self.gen_expression(&assign.right, ctx)?;
                             self.emit(Opcode::SetPrivate);
                             self.emit_u16(obj);
                             self.emit_u16(key);
                             self.emit_u16(val);
+                            self.free_register(key);
+                            self.free_register(obj);
+                            Ok(val)
                         }
-                        self.free_register(key);
                     }
                 }
-                self.free_register(obj);
-                Ok(result_reg)
             }
             _ => {
                 let val = self.gen_expression(&assign.right, ctx)?;
@@ -7329,7 +7352,12 @@ impl CodeGenerator {
                 } => {
                     let key_reg = if *computed {
                         match key {
-                            PropertyKey::Computed(expr) => self.gen_expression(expr, ctx)?,
+                            PropertyKey::Computed(expr) => {
+                                let key_reg = self.gen_expression(expr, ctx)?;
+                                self.emit(Opcode::ToPropertyKey);
+                                self.emit_u16(key_reg);
+                                key_reg
+                            }
                             _ => return Err("Expected computed key".to_string()),
                         }
                     } else {
