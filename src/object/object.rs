@@ -20,6 +20,8 @@ pub struct GeneratorState {
     pub saved_args: Vec<JSValue>,
 
     pub func_ptr: Option<usize>,
+
+    pub handlers: Vec<crate::runtime::vm::ExceptionHandler>,
 }
 
 pub struct AsyncState {

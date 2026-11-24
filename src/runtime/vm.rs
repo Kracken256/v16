@@ -344,6 +344,8 @@ pub struct VM {
 
     pub pending_handlers: Option<Vec<ExceptionHandler>>,
 
+    pending_return_value: Option<JSValue>,
+
     pub async_step: bool,
 
     pub await_suspend: Option<(JSValue, u16)>,
@@ -396,6 +398,7 @@ impl VM {
             pending_function_ptr: None,
             pending_this: None,
             pending_handlers: None,
+            pending_return_value: None,
             async_step: false,
             await_suspend: None,
             gc_roots: Vec::with_capacity(512),
@@ -2284,7 +2287,7 @@ impl VM {
                 for (i, arg) in args.iter().enumerate() {
                     snapshot[i + 1] = *arg;
                 }
-                let (result_snapshot, result_pc, result_done, result_send_reg) = {
+                let (result_snapshot, result_pc, result_done, result_send_reg, result_handlers) = {
                     let mut generator_vm = crate::runtime::vm::VM::new();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
                     let step = generator_vm.execute_generator_step(
@@ -2296,20 +2299,22 @@ impl VM {
                         None,
                         args,
                         Some(ptr),
+                        &[],
+                        None,
                     );
                     let uncaught = generator_vm.last_uncaught.take();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
                     drop(generator_vm);
                     match step {
-                        Ok((_val, new_snapshot, new_pc, done, src)) => {
-                            (new_snapshot, new_pc, done, src)
+                        Ok((_val, new_snapshot, new_pc, done, src, handlers)) => {
+                            (new_snapshot, new_pc, done, src, handlers)
                         }
                         Err(_) => {
                             if let Some(exc) = uncaught {
                                 self.last_caught_exception = Some(exc.clone());
                                 self.pending_throw = Some(exc);
                             }
-                            (snapshot, 0, false, None)
+                            (snapshot, 0, false, None, Vec::new())
                         }
                     }
                 };
@@ -2332,6 +2337,7 @@ impl VM {
                     argc: args.len() as u32,
                     saved_args: args.to_vec(),
                     func_ptr: Some(ptr),
+                    handlers: result_handlers,
                 });
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -2788,6 +2794,32 @@ impl VM {
             self.frame_index = 0;
             self.exception_handlers = self.pending_handlers.take().unwrap_or_default();
             self.frames[0].is_strict_frame = bytecode.is_strict;
+        }
+        let mut start_pc = start_pc;
+        if let Some(value) = self.pending_return_value.take() {
+            let mut finally_pc = None;
+            while let Some(handler) = self.exception_handlers.last().cloned() {
+                if handler.frame_index != self.frame_index {
+                    break;
+                }
+                self.exception_handlers.pop();
+                if let Some(fp) = handler.finally_pc {
+                    finally_pc = Some(fp);
+                    break;
+                }
+            }
+            match finally_pc {
+                Some(fp) => {
+                    self.pending_finally_return = Some(value);
+                    start_pc = fp;
+                }
+                None => {
+                    if self.frame_index == 0 {
+                        return Ok(ExecutionOutcome::Complete(value));
+                    }
+                    self.pop_frame(value);
+                }
+            }
         }
         self.pc = start_pc;
         self.refresh_cache();
@@ -8596,7 +8628,7 @@ impl VM {
             snapshot[i + 1] = *arg;
         }
 
-        let (result_snapshot, result_pc, result_done, result_send_reg) = {
+        let (result_snapshot, result_pc, result_done, result_send_reg, result_handlers) = {
             let mut generator_vm = crate::runtime::vm::VM::new();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
             let step = generator_vm.execute_generator_step(
@@ -8608,12 +8640,16 @@ impl VM {
                 None,
                 args,
                 Some(func_val.get_ptr()),
+                &[],
+                None,
             );
             let uncaught = generator_vm.last_uncaught.take();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
             drop(generator_vm);
             match step {
-                Ok((_val, new_snapshot, new_pc, done, src)) => (new_snapshot, new_pc, done, src),
+                Ok((_val, new_snapshot, new_pc, done, src, handlers)) => {
+                    (new_snapshot, new_pc, done, src, handlers)
+                }
                 Err(e) => {
                     if let Some(exc) = uncaught {
                         self.last_caught_exception = Some(exc.clone());
@@ -8623,7 +8659,7 @@ impl VM {
                     if e.contains("SyntaxError") || e.contains("Uncaught") {
                         return Err(e);
                     }
-                    (snapshot, 0, false, None)
+                    (snapshot, 0, false, None, Vec::new())
                 }
             }
         };
@@ -8647,6 +8683,7 @@ impl VM {
             argc: args.len() as u32,
             saved_args: args.to_vec(),
             func_ptr: Some(func_val.get_ptr()),
+            handlers: result_handlers,
         });
         let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -8663,7 +8700,19 @@ impl VM {
         send_reg: Option<u16>,
         saved_args: &[JSValue],
         func_ptr: Option<usize>,
-    ) -> Result<(JSValue, Vec<JSValue>, usize, bool, Option<u16>), String> {
+        handlers: &[ExceptionHandler],
+        return_value: Option<JSValue>,
+    ) -> Result<
+        (
+            JSValue,
+            Vec<JSValue>,
+            usize,
+            bool,
+            Option<u16>,
+            Vec<ExceptionHandler>,
+        ),
+        String,
+    > {
         self.ctx_ptr = ctx;
         self.last_yield_src = None;
         self.last_uncaught = None;
@@ -8671,6 +8720,8 @@ impl VM {
         self.pending_saved_args = Some(saved_args.to_vec());
         self.pending_function_ptr = func_ptr;
         self.pending_this = registers_snapshot.first().copied();
+        self.pending_handlers = Some(handlers.to_vec());
+        self.pending_return_value = return_value;
 
         let needed = bytecode.locals_count as usize;
         if needed > self.registers.len() {
@@ -8705,6 +8756,7 @@ impl VM {
             }
         };
         ctx.set_register_vm_ptr(saved_vm_ptr);
+        let handlers = self.exception_handlers.clone();
         match result {
             ExecutionOutcome::Complete(val) => Ok((
                 val,
@@ -8712,6 +8764,7 @@ impl VM {
                 self.pc,
                 true,
                 self.last_yield_src,
+                handlers,
             )),
             ExecutionOutcome::Yield(val) => Ok((
                 val,
@@ -8719,6 +8772,7 @@ impl VM {
                 self.pc,
                 false,
                 self.last_yield_src,
+                handlers,
             )),
         }
     }

@@ -109,6 +109,7 @@ fn run_generator_step(
     ctx: &mut JSContext,
     gen_obj: &mut JSObject,
     send_value: JSValue,
+    return_value: Option<JSValue>,
 ) -> Result<(JSValue, usize, bool), (String, Option<JSValue>)> {
     let state = match gen_obj.get_generator_state() {
         Some(s) => s,
@@ -124,8 +125,9 @@ fn run_generator_step(
     let current_send_reg = state.send_reg;
     let saved_args = state.saved_args.clone();
     let func_ptr = state.func_ptr;
+    let handlers = state.handlers.clone();
 
-    let (value, new_snapshot, new_pc, done, new_send_reg) = {
+    let (value, new_snapshot, new_pc, done, new_send_reg, new_handlers) = {
         let bytecode = &*gen_obj.get_generator_state().unwrap().bytecode;
         let mut vm = crate::runtime::vm::VM::new();
 
@@ -139,6 +141,8 @@ fn run_generator_step(
             current_send_reg,
             &saved_args,
             func_ptr,
+            &handlers,
+            return_value,
         );
         let uncaught = vm.last_uncaught;
         ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
@@ -153,6 +157,7 @@ fn run_generator_step(
         state.pc = new_pc;
         state.done = done;
         state.send_reg = new_send_reg;
+        state.handlers = new_handlers;
     }
 
     Ok((value, new_pc, done))
@@ -182,7 +187,16 @@ fn generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let send_value = args.get(1).copied().unwrap_or(JSValue::undefined());
 
-    match run_generator_step(ctx, gen_obj, send_value) {
+    let step = run_generator_step(ctx, gen_obj, send_value, None);
+    finish_generator_step(ctx, gen_obj, step)
+}
+
+fn finish_generator_step(
+    ctx: &mut JSContext,
+    gen_obj: &mut JSObject,
+    step: Result<(JSValue, usize, bool), (String, Option<JSValue>)>,
+) -> JSValue {
+    match step {
         Ok((value, _new_pc, done)) => create_iterator_result(ctx, value, done),
         Err((msg, exc)) => {
             if let Some(state) = gen_obj.get_generator_state_mut() {
@@ -211,12 +225,22 @@ fn generator_return(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let gen_obj = this.as_object_mut();
 
-    if let Some(state) = gen_obj.get_generator_state_mut() {
-        state.done = true;
+    if !gen_obj.is_generator() {
+        return create_iterator_result(ctx, JSValue::undefined(), true);
     }
 
     let value = args.get(1).copied().unwrap_or(JSValue::undefined());
-    create_iterator_result(ctx, value, true)
+    let is_done = gen_obj
+        .get_generator_state()
+        .map(|s| s.done)
+        .unwrap_or(true);
+
+    if is_done {
+        return create_iterator_result(ctx, value, true);
+    }
+
+    let step = run_generator_step(ctx, gen_obj, JSValue::undefined(), Some(value));
+    finish_generator_step(ctx, gen_obj, step)
 }
 
 fn generator_symbol_iterator(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -249,7 +273,7 @@ fn async_generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let send_value = args.get(1).copied().unwrap_or(JSValue::undefined());
 
-    match run_generator_step(ctx, gen_obj, send_value) {
+    match run_generator_step(ctx, gen_obj, send_value, None) {
         Ok((value, _new_pc, done)) => {
             if done {
                 let iter_result = create_iterator_result(ctx, value, true);
