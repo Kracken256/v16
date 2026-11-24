@@ -1626,6 +1626,38 @@ impl VM {
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
 
+    fn execute_return_completion(
+        &mut self,
+        ctx: &mut JSContext,
+        mut value: JSValue,
+    ) -> Option<ExecutionOutcome> {
+        while let Some(handler) = self.exception_handlers.last().cloned() {
+            if handler.frame_index != self.frame_index {
+                break;
+            }
+            self.exception_handlers.pop();
+            if let Some(fp) = handler.finally_pc {
+                self.pending_finally_return = Some(value);
+                self.pc = fp;
+                self.refresh_cache();
+                return None;
+            }
+        }
+        if self.frame_index == 0 {
+            if self.frames[0].is_async {
+                value = ctx.call_builtin("promise_resolve", &[value]);
+            }
+            return Some(ExecutionOutcome::Complete(value));
+        }
+        let is_async = self.frames[self.frame_index].is_async;
+        self.cleanup_handlers_for_frame();
+        if is_async {
+            value = ctx.call_builtin("promise_resolve", &[value]);
+        }
+        self.pop_frame(value);
+        None
+    }
+
     #[cold]
     fn dispatch_throw_value(&mut self, ctx: &mut JSContext, value: JSValue) -> ThrowDispatch {
         if self
@@ -2779,32 +2811,10 @@ impl VM {
                         }
                     }
 
-                    // Check if there's a pending finally handler — defer the return
-                    if let Some(handler) = self.exception_handlers.last() {
-                        if let Some(fp) = handler.finally_pc {
-                            if handler.frame_index == self.frame_index {
-                                self.pending_finally_return = Some(ret);
-                                self.exception_handlers.pop();
-                                self.pc = fp;
-                                self.refresh_cache();
-                                continue;
-                            }
-                        }
+                    if let Some(outcome) = self.execute_return_completion(ctx, ret) {
+                        return Ok(outcome);
                     }
-
-                    if self.frame_index == 0 {
-                        if self.frames[0].is_async {
-                            let result = ctx.call_builtin("promise_resolve", &[ret]);
-                            return Ok(ExecutionOutcome::Complete(result));
-                        }
-                        return Ok(ExecutionOutcome::Complete(ret));
-                    }
-                    let is_async = self.frames[self.frame_index].is_async;
-                    self.cleanup_handlers_for_frame();
-                    if is_async {
-                        ret = ctx.call_builtin("promise_resolve", &[ret]);
-                    }
-                    self.pop_frame(ret);
+                    continue;
                 }
                 Opcode::Yield => {
                     let src = self.read_u16_pc();
@@ -3953,35 +3963,19 @@ impl VM {
                     }
                 }
                 Opcode::EndFinally => {
-                    // Check if there's a pending rethrow after the finally body
                     if let Some(value) = self.pending_finally_rethrow.take() {
-                        if let Some(handler) = self.exception_handlers.last().cloned() {
-                            self.exception_handlers.pop();
-                            if self.frame_index != handler.frame_index {
-                                while self.frame_index > handler.frame_index {
-                                    if self.frame_index == 0 {
-                                        break;
-                                    }
-                                    self.frame_index -= 1;
-                                }
-                            }
-                            self.pc = handler.catch_pc;
-                            self.refresh_cache();
-                            self.set_reg(0, value);
-                            continue;
+                        match self.dispatch_throw_value(ctx, value) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
                         }
-                        self.pending_throw = Some(value);
-                        let msg = self.format_thrown_value(&value, ctx);
-                        let trace = self.format_stack_trace(ctx);
-                        return Err(format!("Uncaught: {}\nStack trace:\n{}", msg, trace));
                     }
 
-                    // Check if there's a pending return value
                     if let Some(value) = self.pending_finally_return.take() {
-                        if self.frame_index == 0 {
-                            return Ok(ExecutionOutcome::Complete(value));
+                        if let Some(outcome) = self.execute_return_completion(ctx, value) {
+                            return Ok(outcome);
                         }
-                        self.pop_frame(value);
+                        continue;
                     }
                 }
                 Opcode::ResetPerIterVar => {
