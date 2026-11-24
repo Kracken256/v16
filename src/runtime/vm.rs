@@ -1600,8 +1600,10 @@ impl VM {
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
 
-    fn rethrow_last_caught(&mut self) {
-        if let Some(exc) = self.last_caught_exception.take() {
+    fn rethrow_last_caught(&mut self, ctx: &mut JSContext) {
+        let caught = self.last_caught_exception.take();
+        let host = ctx.pending_exception.take();
+        if let Some(exc) = caught.or(host) {
             self.pending_throw = Some(exc);
         }
     }
@@ -1626,6 +1628,18 @@ impl VM {
 
     #[cold]
     fn dispatch_throw_value(&mut self, ctx: &mut JSContext, value: JSValue) -> ThrowDispatch {
+        if self
+            .last_caught_exception
+            .map_or(false, |caught| caught.raw_bits() == value.raw_bits())
+        {
+            self.last_caught_exception = None;
+        }
+        if ctx
+            .pending_exception
+            .map_or(false, |pending| pending.raw_bits() == value.raw_bits())
+        {
+            ctx.pending_exception = None;
+        }
         let find_async_frame = |frames: &[CallFrame], frame_index: usize| {
             for i in (0..=frame_index).rev() {
                 if frames[i].is_async {
@@ -8980,7 +8994,7 @@ impl VM {
                                 Err(e) => {
                                     self.set_reg(dst_val, JSValue::undefined());
                                     self.set_reg(dst_done, JSValue::bool(true));
-                                    self.rethrow_last_caught();
+                                    self.rethrow_last_caught(ctx);
                                     return Err(e);
                                 }
                             };
@@ -9000,7 +9014,7 @@ impl VM {
                                 Err(e) => {
                                     self.set_reg(dst_val, JSValue::undefined());
                                     self.set_reg(dst_done, JSValue::bool(true));
-                                    self.rethrow_last_caught();
+                                    self.rethrow_last_caught(ctx);
                                     return Err(e);
                                 }
                             };
@@ -9014,7 +9028,7 @@ impl VM {
                     Err(e) => {
                         self.set_reg(dst_val, JSValue::undefined());
                         self.set_reg(dst_done, JSValue::bool(true));
-                        self.rethrow_last_caught();
+                        self.rethrow_last_caught(ctx);
                         return Err(e);
                     }
                 }
@@ -9352,9 +9366,15 @@ impl VM {
                         } else {
                             obj_val
                         };
-                        if let Ok(v) = self.call_function_with_this(ctx, getter, fn_this, &[]) {
-                            self.set_reg(dst, v);
-                            return Some(v);
+                        match self.call_function_with_this(ctx, getter, fn_this, &[]) {
+                            Ok(v) => {
+                                self.set_reg(dst, v);
+                                return Some(v);
+                            }
+                            Err(_) => {
+                                self.rethrow_last_caught(ctx);
+                                return None;
+                            }
                         }
                     }
                     self.set_reg(dst, JSValue::undefined());
@@ -9490,7 +9510,7 @@ impl VM {
                                         self.set_reg(dst, ret);
                                     }
                                     Err(msg) => {
-                                        self.rethrow_last_caught();
+                                        self.rethrow_last_caught(ctx);
                                         return None;
                                     }
                                 }
@@ -9541,7 +9561,7 @@ impl VM {
                                                     self.set_reg(dst, ret);
                                                 }
                                                 Err(_msg) => {
-                                                    self.rethrow_last_caught();
+                                                    self.rethrow_last_caught(ctx);
                                                     return None;
                                                 }
                                             }
@@ -9638,9 +9658,9 @@ impl VM {
                         value = if getter.is_function() {
                             match self.call_function_with_this(ctx, getter, obj_val, &[]) {
                                 Ok(ret) => ret,
-                                Err(msg) => {
-                                    self.set_pending_type_error(ctx, &msg);
-                                    JSValue::undefined()
+                                Err(_) => {
+                                    self.rethrow_last_caught(ctx);
+                                    return None;
                                 }
                             }
                         } else {
@@ -9673,9 +9693,9 @@ impl VM {
                                             &[],
                                         ) {
                                             Ok(ret) => ret,
-                                            Err(msg) => {
-                                                self.set_pending_type_error(ctx, &msg);
-                                                JSValue::undefined()
+                                            Err(_) => {
+                                                self.rethrow_last_caught(ctx);
+                                                return None;
                                             }
                                         }
                                     } else {
@@ -9705,9 +9725,9 @@ impl VM {
                                 value = if getter.is_function() {
                                     match self.call_function_with_this(ctx, getter, obj_val, &[]) {
                                         Ok(ret) => ret,
-                                        Err(msg) => {
-                                            self.set_pending_type_error(ctx, &msg);
-                                            JSValue::undefined()
+                                        Err(_) => {
+                                            self.rethrow_last_caught(ctx);
+                                            return None;
                                         }
                                     }
                                 } else {
