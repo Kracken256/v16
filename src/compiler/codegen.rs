@@ -2545,6 +2545,19 @@ impl CodeGenerator {
             BindingPattern::ObjectPattern(obj) => {
                 self.emit(Opcode::CheckObjectCoercible);
                 self.emit_u16(value_reg);
+                let has_rest = obj
+                    .properties
+                    .iter()
+                    .any(|p| matches!(p, ObjectPatternProperty::RestElement(_)));
+                let keys_reg = if has_rest {
+                    let r = self.alloc_register();
+                    self.emit(Opcode::NewArray);
+                    self.emit_u16(r);
+                    self.emit_u16(0);
+                    Some(r)
+                } else {
+                    None
+                };
                 for prop in &obj.properties {
                     match prop {
                         ObjectPatternProperty::Property {
@@ -2594,6 +2607,11 @@ impl CodeGenerator {
                             self.emit_u16(elem_reg);
                             self.emit_u16(value_reg);
                             self.emit_u16(key_reg);
+                            if let Some(kreg) = keys_reg {
+                                self.emit(Opcode::ArrayPush);
+                                self.emit_u16(kreg);
+                                self.emit_u16(key_reg);
+                            }
                             self.free_register(key_reg);
                             self.gen_assignment_target_binding(value, elem_reg, kind, ctx)?;
                             self.free_register(elem_reg);
@@ -2602,9 +2620,16 @@ impl CodeGenerator {
                             let rest_reg = self.alloc_register();
                             self.emit(Opcode::NewObject);
                             self.emit_u16(rest_reg);
-                            self.emit(Opcode::ObjectSpread);
-                            self.emit_u16(rest_reg);
-                            self.emit_u16(value_reg);
+                            if let Some(kreg) = keys_reg {
+                                self.emit(Opcode::ObjectRest);
+                                self.emit_u16(rest_reg);
+                                self.emit_u16(value_reg);
+                                self.emit_u16(kreg);
+                            } else {
+                                self.emit(Opcode::ObjectSpread);
+                                self.emit_u16(rest_reg);
+                                self.emit_u16(value_reg);
+                            }
                             self.gen_assignment_target_binding(
                                 &rest.argument,
                                 rest_reg,
@@ -2614,6 +2639,9 @@ impl CodeGenerator {
                             self.free_register(rest_reg);
                         }
                     }
+                }
+                if let Some(kreg) = keys_reg {
+                    self.free_register(kreg);
                 }
                 Ok(())
             }
@@ -6272,6 +6300,19 @@ impl CodeGenerator {
         value_reg: u16,
         ctx: &mut JSContext,
     ) -> Result<(), String> {
+        let has_rest = obj
+            .properties
+            .iter()
+            .any(|p| matches!(p, ObjectPatternProperty::RestElement(_)));
+        let keys_reg = if has_rest {
+            let r = self.alloc_register();
+            self.emit(Opcode::NewArray);
+            self.emit_u16(r);
+            self.emit_u16(0);
+            Some(r)
+        } else {
+            None
+        };
         for prop in &obj.properties {
             match prop {
                 ObjectPatternProperty::Property {
@@ -6319,6 +6360,11 @@ impl CodeGenerator {
                     self.emit_u16(elem_reg);
                     self.emit_u16(value_reg);
                     self.emit_u16(key_reg);
+                    if let Some(kreg) = keys_reg {
+                        self.emit(Opcode::ArrayPush);
+                        self.emit_u16(kreg);
+                        self.emit_u16(key_reg);
+                    }
                     self.free_register(key_reg);
                     self.gen_assignment_target_destructure(value, elem_reg, ctx)?;
                     self.free_register(elem_reg);
@@ -6327,13 +6373,23 @@ impl CodeGenerator {
                     let rest_reg = self.alloc_register();
                     self.emit(Opcode::NewObject);
                     self.emit_u16(rest_reg);
-                    self.emit(Opcode::ObjectSpread);
-                    self.emit_u16(rest_reg);
-                    self.emit_u16(value_reg);
+                    if let Some(kreg) = keys_reg {
+                        self.emit(Opcode::ObjectRest);
+                        self.emit_u16(rest_reg);
+                        self.emit_u16(value_reg);
+                        self.emit_u16(kreg);
+                    } else {
+                        self.emit(Opcode::ObjectSpread);
+                        self.emit_u16(rest_reg);
+                        self.emit_u16(value_reg);
+                    }
                     self.gen_assignment_target_destructure(&rest.argument, rest_reg, ctx)?;
                     self.free_register(rest_reg);
                 }
             }
+        }
+        if let Some(kreg) = keys_reg {
+            self.free_register(kreg);
         }
         Ok(())
     }

@@ -150,6 +150,7 @@ pub enum Opcode {
     IteratorClose = 203,
     GetAsyncIterator = 204,
     IteratorNextAwait = 205,
+    ObjectRest = 206,
 
     LtJumpIfNot = 158,
     LtJumpIf = 159,
@@ -279,6 +280,7 @@ impl Opcode {
             203 => Some(Opcode::IteratorClose),
             204 => Some(Opcode::GetAsyncIterator),
             205 => Some(Opcode::IteratorNextAwait),
+            206 => Some(Opcode::ObjectRest),
             152 => Some(Opcode::GetArguments),
             153 => Some(Opcode::GetCurrentFunction),
             154 => Some(Opcode::CallCurrent),
@@ -467,6 +469,7 @@ impl Opcode {
             Opcode::IteratorClose => 3,
             Opcode::GetAsyncIterator => 5,
             Opcode::IteratorNextAwait => 7,
+            Opcode::ObjectRest => 7,
         }
     }
 }
@@ -1079,6 +1082,12 @@ impl Bytecode {
                     let dst_done = read_u16(3);
                     let iter = read_u16(5);
                     write!(operands, " r{}, r{}, r{}", dst_val, dst_done, iter).unwrap();
+                }
+                Opcode::ObjectRest => {
+                    let dst = read_u16(1);
+                    let src = read_u16(3);
+                    let keys = read_u16(5);
+                    write!(operands, " r{}, r{}, r{}", dst, src, keys).unwrap();
                 }
             }
             writeln!(out, "{:04}  {:?}{}", pc, op, operands).unwrap();

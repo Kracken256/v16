@@ -5940,6 +5940,91 @@ impl VM {
                         }
                     }
                 }
+                Opcode::ObjectRest => {
+                    let dst = self.read_u16_pc();
+                    let src = self.read_u16_pc();
+                    let keys_reg = self.read_u16_pc();
+                    let dst_val = self.get_reg(dst);
+                    let src_val = self.get_reg(src);
+                    let keys_val = self.get_reg(keys_reg);
+                    if (dst_val.is_object() || dst_val.is_function())
+                        && (src_val.is_object() || src_val.is_function())
+                    {
+                        let mut excluded = std::collections::HashSet::new();
+                        if keys_val.is_object() {
+                            let keys_obj = keys_val.as_object();
+                            let (len, dense) = if keys_obj.is_dense_array() {
+                                let arr = unsafe {
+                                    &*(keys_val.get_ptr()
+                                        as *const crate::object::array_obj::JSArrayObject)
+                                };
+                                (arr.elements.len(), true)
+                            } else {
+                                (
+                                    keys_obj
+                                        .get(ctx.common_atoms.length)
+                                        .map(|v| v.get_int() as usize)
+                                        .unwrap_or(0),
+                                    false,
+                                )
+                            };
+                            for i in 0..len {
+                                let k = if dense {
+                                    let arr = unsafe {
+                                        &*(keys_val.get_ptr()
+                                            as *const crate::object::array_obj::JSArrayObject)
+                                    };
+                                    arr.get(i).unwrap_or(JSValue::undefined())
+                                } else {
+                                    let key = self.int_atom(i, ctx);
+                                    keys_obj.get(key).unwrap_or(JSValue::undefined())
+                                };
+                                let atom = if k.is_string() {
+                                    Some(k.get_atom())
+                                } else if k.is_symbol() {
+                                    Some(crate::runtime::atom::Atom(
+                                        0x40000000 | k.get_symbol_id(),
+                                    ))
+                                } else if k.is_int() {
+                                    let s = k.get_int().to_string();
+                                    Some(ctx.atom_table_mut().intern(&s))
+                                } else if k.is_float() {
+                                    let f = k.get_float();
+                                    let s = if f.fract() == 0.0
+                                        && f.is_finite()
+                                        && f.abs() < 9.007_199_254_740_992e15
+                                    {
+                                        (f as i64).to_string()
+                                    } else {
+                                        format!("{}", f)
+                                    };
+                                    Some(ctx.atom_table_mut().intern(&s))
+                                } else {
+                                    None
+                                };
+                                if let Some(atom) = atom {
+                                    excluded.insert(atom);
+                                }
+                            }
+                        }
+                        let entries: Vec<crate::runtime::atom::Atom> = {
+                            let src_obj = src_val.as_object();
+                            src_obj
+                                .own_properties_including_symbols()
+                                .into_iter()
+                                .map(|(atom, _)| atom)
+                                .collect()
+                        };
+                        for atom in entries {
+                            if excluded.contains(&atom) {
+                                continue;
+                            }
+                            let value = self.get_prop_value(ctx, src_val, atom)?;
+                            let dst_obj = dst_val.as_object_mut();
+                            dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
+                        }
+                    }
+                }
                 Opcode::GetPropertyNames => {
                     let dst = self.read_u16_pc();
                     let obj_reg = self.read_u16_pc();
