@@ -343,9 +343,15 @@ fn collect_lexical_names(stmt: &ASTNode, top_level: bool, out: &mut Vec<(String,
         }
         ASTNode::ExportDefaultDeclaration(ed) => match &ed.declaration {
             ExportDefaultDeclarationKind::Function(fd) => {
-                out.push((fd.name.clone(), !fd.generator && !fd.is_async))
+                if !top_level && !fd.name.is_empty() {
+                    out.push((fd.name.clone(), !fd.generator && !fd.is_async))
+                }
             }
-            ExportDefaultDeclarationKind::Class(cd) => out.push((cd.name.clone(), false)),
+            ExportDefaultDeclarationKind::Class(cd) => {
+                if !cd.name.is_empty() {
+                    out.push((cd.name.clone(), false))
+                }
+            }
             _ => {}
         },
         _ => {}
@@ -522,7 +528,9 @@ fn collect_var_names(stmt: &ASTNode, top_level: bool, out: &mut HashSet<String>)
         ASTNode::ExportDefaultDeclaration(ed) => {
             if top_level {
                 if let ExportDefaultDeclarationKind::Function(fd) = &ed.declaration {
-                    out.insert(fd.name.clone());
+                    if !fd.name.is_empty() {
+                        out.insert(fd.name.clone());
+                    }
                 }
             }
         }
