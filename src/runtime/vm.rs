@@ -7676,6 +7676,27 @@ impl VM {
                             }
                         }
 
+                        let sym_iter_atom =
+                            crate::builtins::symbol::get_symbol_iterator_atom(ctx);
+                        if sym_iter_atom.0 != 0 {
+                            let iter_fn = ctx
+                                .get_array_prototype()
+                                .and_then(|p| unsafe { (*p).get(sym_iter_atom) });
+                            if let Some(f) = iter_fn {
+                                args_obj.define_property(
+                                    sym_iter_atom,
+                                    crate::object::object::PropertyDescriptor {
+                                        value: Some(f),
+                                        writable: true,
+                                        enumerable: false,
+                                        configurable: true,
+                                        get: None,
+                                        set: None,
+                                    },
+                                );
+                            }
+                        }
+
                         let ptr = if ctx
                             .runtime_mut()
                             .gc_heap_mut()
@@ -7893,48 +7914,38 @@ impl VM {
                     self.set_reg(dst_val, JSValue::undefined());
                     self.set_reg(dst_done, JSValue::bool(true));
                 }
+                return Ok(());
             } else if arr_val.is_object() {
                 let arr_ptr = arr_val.get_ptr();
                 let is_jsarray = unsafe { &*(arr_ptr as *const crate::object::object::JSObject) }
                     .is_dense_array();
-                let length = if is_jsarray {
+                if is_jsarray {
                     let arr = unsafe {
                         &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
                     };
-                    arr.len()
-                } else {
-                    let obj = unsafe { &*(arr_ptr as *const crate::object::object::JSObject) };
-                    let len_atom = ctx.common_atoms.length;
-                    obj.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
-                };
-
-                if idx < length {
-                    let value = if is_jsarray {
-                        let arr = unsafe {
-                            &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                        };
-                        arr.get(idx).unwrap_or(JSValue::undefined())
+                    let length = arr.len();
+                    if idx < length {
+                        let value = arr.get(idx).unwrap_or(JSValue::undefined());
+                        iter_obj.set_cached(
+                            idx_atom,
+                            JSValue::new_int((idx + 1) as i64),
+                            ctx.shape_cache_mut(),
+                        );
+                        self.set_reg(dst_val, value);
+                        self.set_reg(dst_done, JSValue::bool(false));
                     } else {
-                        let obj = unsafe { &*(arr_ptr as *const crate::object::object::JSObject) };
-                        let key = self.int_atom(idx, ctx);
-                        obj.get(key).unwrap_or(JSValue::undefined())
-                    };
-                    iter_obj.set_cached(
-                        idx_atom,
-                        JSValue::new_int((idx + 1) as i64),
-                        ctx.shape_cache_mut(),
-                    );
-                    self.set_reg(dst_val, value);
-                    self.set_reg(dst_done, JSValue::bool(false));
-                } else {
-                    self.set_reg(dst_val, JSValue::undefined());
-                    self.set_reg(dst_done, JSValue::bool(true));
+                        self.set_reg(dst_val, JSValue::undefined());
+                        self.set_reg(dst_done, JSValue::bool(true));
+                    }
+                    return Ok(());
                 }
+                // Non-dense array-like iterables fall through to the
+                // iterator's own `next` method so generic index access is used.
             } else {
                 self.set_reg(dst_val, JSValue::undefined());
                 self.set_reg(dst_done, JSValue::bool(true));
+                return Ok(());
             }
-            return Ok(());
         }
 
         let next_atom = ctx.intern("next");
