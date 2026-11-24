@@ -1364,7 +1364,15 @@ fn validate_update_target(arg: &Expression, ctx: Ctx) -> Result<(), String> {
 
 fn validate_assignment_target(t: &AssignmentTarget, ctx: Ctx) -> Result<(), String> {
         match t {
-        AssignmentTarget::Identifier(name) => check_identifier_reference(name, ctx),
+        AssignmentTarget::Identifier(name) => {
+            if ctx.strict && (name == "eval" || name == "arguments") {
+                return Err(format!(
+                    "SyntaxError: '{}' may not be an assignment target in strict mode",
+                    name
+                ));
+            }
+            check_identifier_reference(name, ctx)
+        }
         AssignmentTarget::MemberExpression(m) => {
             if expression_contains_optional_chain(&m.object) {
                 return Err(
