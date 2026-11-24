@@ -99,6 +99,18 @@ pub fn init_globals(ctx: &mut JSContext) {
         HostFunction::new("__v16_import_meta__", 0, v16_import_meta),
     );
     ctx.register_builtin(
+        "__v16_export__",
+        HostFunction::new("__v16_export__", 2, v16_export),
+    );
+    ctx.register_builtin(
+        "__v16_export_live__",
+        HostFunction::new("__v16_export_live__", 2, v16_export_live),
+    );
+    ctx.register_builtin(
+        "__v16_export_all__",
+        HostFunction::new("__v16_export_all__", 1, v16_export_all),
+    );
+    ctx.register_builtin(
         "disassemble",
         HostFunction::new("disassemble", 1, js_disassemble),
     );
@@ -578,6 +590,9 @@ fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             result
         }
         Err(e) => {
+            if let Some(exc) = ctx.pending_exception.take() {
+                return promise::create_rejected_promise(ctx, exc);
+            }
             let err_msg = JSValue::new_string(ctx.intern(&e));
             promise::create_rejected_promise(ctx, err_msg)
         }
@@ -601,12 +616,111 @@ fn v16_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             None => JSValue::new_object(ns_ptr),
             Some(name) => {
                 let atom = ctx.intern(&name);
+                let ns_value = JSValue::new_object(ns_ptr);
                 let ns_obj = unsafe { &*(ns_ptr as *const JSObject) };
+                if ns_obj.is_module_namespace() {
+                    if let Some(desc) = ns_obj.get_own_descriptor(atom) {
+                        return crate::builtins::object::namespace_live_descriptor_value(
+                            ctx, &ns_value, &desc,
+                        );
+                    }
+                }
                 ns_obj.get(atom).unwrap_or_else(JSValue::undefined)
             }
         },
-        Err(e) => throw_type_error(ctx, &e),
+        Err(e) => {
+            if let Some(exc) = ctx.pending_exception.take() {
+                ctx.pending_exception = Some(exc);
+                return JSValue::undefined();
+            }
+            throw_type_error(ctx, &e)
+        }
     }
+}
+
+fn v16_export(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if args.len() < 2 {
+        return JSValue::undefined();
+    }
+    let name = if args[0].is_string() {
+        ctx.get_atom_str(args[0].get_atom()).to_string()
+    } else {
+        to_property_key_string(ctx, &args[0])
+    };
+    if let Some(spec) = ctx.get_current_module().map(|s| s.to_string()) {
+        let registry = ctx.runtime_mut().module_registry_mut();
+        if let Some(module_cell) = registry.get_mut(&spec) {
+            module_cell
+                .borrow_mut()
+                .add_export(name, args[1].clone(), true);
+        }
+    }
+    JSValue::undefined()
+}
+
+fn v16_export_live(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if args.len() < 2 {
+        return JSValue::undefined();
+    }
+    let name = if args[0].is_string() {
+        ctx.get_atom_str(args[0].get_atom()).to_string()
+    } else {
+        to_property_key_string(ctx, &args[0])
+    };
+    let mut snapshot = JSValue::undefined();
+    if args[1].is_function() {
+        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+            if let Ok(value) =
+                vm.call_function_with_this(ctx, args[1], JSValue::undefined(), &[])
+            {
+                snapshot = value;
+            }
+        }
+    }
+    if let Some(spec) = ctx.get_current_module().map(|s| s.to_string()) {
+        let registry = ctx.runtime_mut().module_registry_mut();
+        if let Some(module_cell) = registry.get_mut(&spec) {
+            let mut module = module_cell.borrow_mut();
+            if let Some(export) = module.exports.get_mut(&name) {
+                export.getter = Some(args[1]);
+                export.value = snapshot;
+            } else {
+                module.add_live_export(name.clone(), args[1]);
+                if let Some(export) = module.exports.get_mut(&name) {
+                    export.value = snapshot;
+                }
+            }
+        }
+    }
+    JSValue::undefined()
+}
+
+fn v16_export_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(namespace) = args.first().copied().filter(|v| v.is_object()) else {
+        return JSValue::undefined();
+    };
+    let mut entries: Vec<(String, JSValue)> = Vec::new();
+    for (atom, value) in namespace.as_object().own_properties_including_symbols() {
+        if atom.0 & 0x40000000 != 0 {
+            continue;
+        }
+        let name = ctx.get_atom_str(atom).to_string();
+        if name == "default" {
+            continue;
+        }
+        entries.push((name, value));
+    }
+    if let Some(spec) = ctx.get_current_module().map(|s| s.to_string()) {
+        let registry = ctx.runtime_mut().module_registry_mut();
+        if let Some(module_cell) = registry.get_mut(&spec) {
+            let mut module = module_cell.borrow_mut();
+            for (name, value) in entries {
+                module.add_export(name, value, true);
+            }
+        }
+    }
+    JSValue::undefined()
 }
 
 fn v16_import_meta(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
@@ -966,6 +1080,13 @@ fn reflect_define_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(v) = obj.get(ctx.intern("get")) { desc.get = Some(v); }
         if let Some(v) = obj.get(ctx.intern("set")) { desc.set = Some(v); }
     }
+    let has_writable = attrs.is_object_like()
+        && attrs.as_object().get(ctx.intern("writable")).is_some();
+    let has_enumerable = attrs.is_object_like()
+        && attrs.as_object().get(ctx.intern("enumerable")).is_some();
+    let has_configurable = attrs.is_object_like()
+        && attrs.as_object().get(ctx.intern("configurable")).is_some();
+    let has_value = desc.value.is_some();
     if desc.get.is_some() || desc.set.is_some() {
         desc.value = None;
         desc.writable = false;
@@ -974,6 +1095,18 @@ fn reflect_define_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if v.is_undefined() && desc.get.is_none() && desc.set.is_none() {
             desc.value = None;
         }
+    }
+    if let Some(allowed) = crate::builtins::object::namespace_define_own_property(
+        ctx,
+        &args[0],
+        key,
+        &desc,
+        has_writable,
+        has_enumerable,
+        has_configurable,
+        has_value,
+    ) {
+        return JSValue::bool(allowed);
     }
     let result = args[0].as_object_mut().define_property(key, desc);
     JSValue::bool(result)
@@ -1010,7 +1143,11 @@ fn reflect_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) ->
     {
         let mut result = JSObject::new();
         result.prototype = ctx.get_object_prototype();
-        if desc.get.is_some() || desc.set.is_some() {
+        if args[0].as_object().is_module_namespace() && key.0 & 0x40000000 == 0 {
+            let value = crate::builtins::object::namespace_live_descriptor_value(ctx, &args[0], &desc);
+            result.set(ctx.intern("value"), value);
+            result.set(ctx.intern("writable"), JSValue::bool(true));
+        } else if desc.get.is_some() || desc.set.is_some() {
             result.set(
                 ctx.intern("get"),
                 desc.get.unwrap_or(JSValue::undefined()),
@@ -3460,6 +3597,21 @@ fn init_global_funcs(ctx: &mut JSContext) {
             global_obj,
             ctx.intern("__v16_import_meta__"),
             create_builtin_function(ctx, "__v16_import_meta__"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("__v16_export__"),
+            create_builtin_function(ctx, "__v16_export__"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("__v16_export_live__"),
+            create_builtin_function(ctx, "__v16_export_live__"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("__v16_export_all__"),
+            create_builtin_function(ctx, "__v16_export_all__"),
         );
         set_non_enumerable(
             global_obj,

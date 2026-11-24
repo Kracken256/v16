@@ -20,6 +20,7 @@ pub struct ModuleExport {
     pub name: String,
     pub value: JSValue,
     pub mutable: bool,
+    pub getter: Option<JSValue>,
 }
 
 #[derive(Clone)]
@@ -61,6 +62,19 @@ impl Module {
                 name,
                 value,
                 mutable,
+                getter: None,
+            },
+        );
+    }
+
+    pub fn add_live_export(&mut self, name: String, getter: JSValue) {
+        self.exports.insert(
+            name.clone(),
+            ModuleExport {
+                name,
+                value: JSValue::undefined(),
+                mutable: true,
+                getter: Some(getter),
             },
         );
     }
@@ -99,22 +113,85 @@ impl Module {
         }
     }
 
-    pub fn create_namespace_object(&mut self, atom_table: &mut AtomTable) -> usize {
+    pub fn create_namespace_object(
+        &mut self,
+        atom_table: &mut AtomTable,
+        to_string_tag_key: crate::runtime::atom::Atom,
+        module_tag_atom: crate::runtime::atom::Atom,
+    ) -> usize {
+        let mut names: Vec<String> = self.exports.keys().cloned().collect();
+        names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         let mut ns_obj = JSObject::new();
-        for (name, export) in &self.exports {
-            let atom = atom_table.intern(name);
-            ns_obj.set(atom, export.value.clone());
+        for name in names {
+            let export = self.exports.get(&name).cloned();
+            let atom = atom_table.intern(&name);
+            if let Some(getter) = export.as_ref().and_then(|e| e.getter) {
+                ns_obj.define_property_ext(
+                    atom,
+                    crate::object::object::PropertyDescriptor {
+                        value: None,
+                        writable: false,
+                        enumerable: true,
+                        configurable: false,
+                        get: Some(getter),
+                        set: None,
+                    },
+                    false,
+                    true,
+                    true,
+                );
+            } else {
+                let value = export
+                    .as_ref()
+                    .map(|e| e.value.clone())
+                    .unwrap_or_else(JSValue::undefined);
+                ns_obj.define_property_ext(
+                    atom,
+                    crate::object::object::PropertyDescriptor {
+                        value: Some(value),
+                        writable: false,
+                        enumerable: true,
+                        configurable: false,
+                        get: None,
+                        set: None,
+                    },
+                    true,
+                    true,
+                    true,
+                );
+            }
         }
+        ns_obj.define_property_ext(
+            to_string_tag_key,
+            crate::object::object::PropertyDescriptor {
+                value: Some(JSValue::new_string(module_tag_atom)),
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                get: None,
+                set: None,
+            },
+            true,
+            true,
+            true,
+        );
+        ns_obj.set_extensible(false);
+        ns_obj.set_module_namespace();
         let ptr = Box::into_raw(Box::new(ns_obj)) as usize;
         self.namespace_object = Some(ptr);
         ptr
     }
 
-    pub fn get_or_create_namespace_object(&mut self, atom_table: &mut AtomTable) -> usize {
+    pub fn get_or_create_namespace_object(
+        &mut self,
+        atom_table: &mut AtomTable,
+        to_string_tag_key: crate::runtime::atom::Atom,
+        module_tag_atom: crate::runtime::atom::Atom,
+    ) -> usize {
         if let Some(ptr) = self.namespace_object {
             ptr
         } else {
-            self.create_namespace_object(atom_table)
+            self.create_namespace_object(atom_table, to_string_tag_key, module_tag_atom)
         }
     }
 
@@ -221,6 +298,45 @@ pub fn resolve_specifier(specifier: &str, base_path: &str) -> String {
     }
 }
 
+fn collect_static_dependencies(body: &[crate::compiler::ast::ASTNode]) -> Vec<String> {
+    let mut dependencies = Vec::new();
+    for node in body {
+        match node {
+            crate::compiler::ast::ASTNode::ImportDeclaration(decl) => {
+                dependencies.push(decl.source.clone());
+            }
+            crate::compiler::ast::ASTNode::ExportNamedDeclaration(decl) => {
+                if let Some(source) = &decl.source {
+                    dependencies.push(source.clone());
+                }
+            }
+            crate::compiler::ast::ASTNode::ExportAllDeclaration(decl) => {
+                dependencies.push(decl.source.clone());
+            }
+            _ => {}
+        }
+    }
+    dependencies
+}
+
+fn namespace_object_for(ctx: &mut JSContext, resolved: &str) -> Result<usize, String> {
+    let to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+    let module_tag_atom = ctx.intern("Module");
+    let atom_table_ptr = ctx.atom_table_mut() as *mut _;
+    unsafe {
+        let registry = ctx.runtime_mut().module_registry_mut();
+        if let Some(module_cell) = registry.get_mut(resolved) {
+            Ok(module_cell.borrow_mut().get_or_create_namespace_object(
+                &mut *atom_table_ptr,
+                to_string_tag_key,
+                module_tag_atom,
+            ))
+        } else {
+            Err(format!("Module {} not found", resolved))
+        }
+    }
+}
+
 pub fn load_module_source(specifier: &str) -> Result<String, String> {
     let path = if specifier.ends_with(".js") || specifier.ends_with(".mjs") {
         specifier.to_string()
@@ -267,19 +383,34 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
     };
 
     if already_evaluated {
-        let atom_table_ptr = ctx.atom_table_mut() as *mut _;
-        let ns_ptr = unsafe {
-            let registry = ctx.runtime_mut().module_registry_mut();
-            let module_cell = registry.get_mut(&resolved);
-            if let Some(module_cell) = module_cell {
-                module_cell
-                    .borrow_mut()
-                    .get_or_create_namespace_object(&mut *atom_table_ptr)
-            } else {
-                return Err(format!("Module {} not found", resolved));
-            }
-        };
-        return Ok(ns_ptr);
+        return namespace_object_for(ctx, &resolved);
+    }
+
+    let (evaluating, errored) = {
+        let registry = ctx.runtime().module_registry();
+        registry
+            .get(&resolved)
+            .map(|m| {
+                let module = m.borrow();
+                (
+                    module.state == ModuleState::Evaluating,
+                    module.state == ModuleState::Errored,
+                )
+            })
+            .unwrap_or((false, false))
+    };
+
+    if errored {
+        let registry = ctx.runtime().module_registry();
+        let message = registry
+            .get(&resolved)
+            .and_then(|m| m.borrow().error.clone())
+            .unwrap_or_else(|| format!("Module {} failed to evaluate", resolved));
+        return Err(message);
+    }
+
+    if evaluating {
+        return namespace_object_for(ctx, &resolved);
     }
 
     let is_manually_registered = {
@@ -300,19 +431,7 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
                 module_cell.borrow_mut().state = ModuleState::Evaluated;
             }
         }
-        let atom_table_ptr = ctx.atom_table_mut() as *mut _;
-        let ns_ptr = unsafe {
-            let registry = ctx.runtime_mut().module_registry_mut();
-            let module_cell = registry.get_mut(&resolved);
-            if let Some(module_cell) = module_cell {
-                module_cell
-                    .borrow_mut()
-                    .get_or_create_namespace_object(&mut *atom_table_ptr)
-            } else {
-                return Err(format!("Module {} not found", resolved));
-            }
-        };
-        return Ok(ns_ptr);
+        return namespace_object_for(ctx, &resolved);
     }
 
     {
@@ -333,14 +452,20 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
         }
     };
 
-    let dependencies: Vec<String> = {
-        let registry = ctx.runtime().module_registry();
-        if let Some(module_cell) = registry.get(&resolved) {
-            module_cell.borrow().get_dependencies()
-        } else {
-            Vec::new()
+    let ast = Parser::new(&source).parse()?;
+    crate::compiler::early_errors::validate_program(&ast, true)?;
+
+    let dependencies = collect_static_dependencies(&ast.body);
+    {
+        let registry = ctx.runtime_mut().module_registry_mut();
+        if let Some(module_cell) = registry.get_mut(&resolved) {
+            let mut module = module_cell.borrow_mut();
+            module.imports.clear();
+            for dependency in &dependencies {
+                module.add_import(dependency.clone(), String::new(), String::new());
+            }
         }
-    };
+    }
 
     {
         let registry = ctx.runtime_mut().module_registry_mut();
@@ -355,6 +480,19 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
         } else {
             dep_specifier.clone()
         };
+        if resolved_dep == resolved {
+            continue;
+        }
+        let dep_evaluating = {
+            let registry = ctx.runtime().module_registry();
+            registry
+                .get(&resolved_dep)
+                .map(|m| m.borrow().state == ModuleState::Evaluating)
+                .unwrap_or(false)
+        };
+        if dep_evaluating {
+            continue;
+        }
         load_and_evaluate_module(ctx, &resolved_dep)?;
     }
 
@@ -362,8 +500,6 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
     ctx.set_current_module(Some(resolved.clone()));
 
     let rb = {
-        let ast = Parser::new(&source).parse()?;
-        crate::compiler::early_errors::validate_program(&ast, true)?;
         let opt_level = ctx.get_compiler_opt_level();
         let mut codegen = CodeGenerator::with_opt_level(opt_level);
         let block = BlockStatement {
@@ -375,10 +511,9 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
         rb
     };
 
-    let result = {
-        let mut vm = VM::new();
-        vm.execute(ctx, &rb)
-    };
+    let mut module_vm = VM::new();
+    let result = module_vm.execute_preserving_registers(ctx, &rb);
+    let thrown = module_vm.pending_throw.take();
 
     ctx.set_current_module(old_module);
 
@@ -390,22 +525,18 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
                     module_cell.borrow_mut().state = ModuleState::Evaluated;
                 }
             }
-            let ns_ptr = {
-                let atom_table_ptr = ctx.atom_table_mut() as *mut _;
+            {
                 let registry = ctx.runtime_mut().module_registry_mut();
                 if let Some(module_cell) = registry.get_mut(&resolved) {
-                    unsafe {
-                        module_cell
-                            .borrow_mut()
-                            .get_or_create_namespace_object(&mut *atom_table_ptr)
-                    }
-                } else {
-                    return Err(format!("Module {} not found after evaluation", resolved));
+                    module_cell.borrow_mut().namespace_object = None;
                 }
-            };
-            Ok(ns_ptr)
+            }
+            namespace_object_for(ctx, &resolved)
         }
         Err(e) => {
+            if let Some(value) = thrown {
+                ctx.pending_exception = Some(value);
+            }
             {
                 let registry = ctx.runtime_mut().module_registry_mut();
                 if let Some(module_cell) = registry.get_mut(&resolved) {

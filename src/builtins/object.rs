@@ -1588,6 +1588,39 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return obj.clone();
     };
 
+    if let Some(allowed) = namespace_define_own_property(
+        _ctx,
+        obj,
+        prop_atom,
+        &pd,
+        has_writable,
+        has_enumerable,
+        has_configurable,
+        pd.value.is_some(),
+    ) {
+        if !allowed {
+            let mut err = crate::object::object::JSObject::new_typed(
+                crate::object::object::ObjectType::Error,
+            );
+            if let Some(proto) = _ctx.get_type_error_prototype() {
+                err.prototype = Some(proto);
+            }
+            err.set(
+                _ctx.common_atoms.name,
+                JSValue::new_string(_ctx.intern("TypeError")),
+            );
+            err.set(
+                _ctx.common_atoms.message,
+                JSValue::new_string(_ctx.intern("Cannot redefine property")),
+            );
+            let ptr = Box::into_raw(Box::new(err)) as usize;
+            _ctx.runtime_mut().gc_heap_mut().track(ptr);
+            _ctx.pending_exception = Some(JSValue::new_object(ptr));
+            return JSValue::undefined();
+        }
+        return obj.clone();
+    }
+
     let obj_ref = obj.as_object_mut();
 
     // Array exotic object: length is always non-configurable
@@ -1739,6 +1772,80 @@ fn object_define_properties(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     obj.clone()
 }
 
+pub fn namespace_same_value(a: &JSValue, b: &JSValue) -> bool {
+    if a.is_string() && b.is_string() {
+        return a.get_atom().0 == b.get_atom().0;
+    }
+    if a.is_int() && b.is_int() {
+        return a.get_int() == b.get_int();
+    }
+    if a.is_float() && b.is_float() {
+        let (x, y) = (a.get_float(), b.get_float());
+        return x == y || (x.is_nan() && y.is_nan());
+    }
+    a.raw_bits() == b.raw_bits()
+}
+
+pub fn namespace_define_own_property(
+    ctx: &mut JSContext,
+    obj: &JSValue,
+    prop_atom: crate::runtime::atom::Atom,
+    pd: &crate::object::object::PropertyDescriptor,
+    has_writable: bool,
+    has_enumerable: bool,
+    has_configurable: bool,
+    has_value: bool,
+) -> Option<bool> {
+    let obj_ref = obj.as_object();
+    if !obj_ref.is_module_namespace() {
+        return None;
+    }
+    let Some(own) = obj_ref.get_own_descriptor(prop_atom) else {
+        return Some(false);
+    };
+    if pd.get.is_some() || pd.set.is_some() {
+        return Some(false);
+    }
+    let is_symbol = prop_atom.0 & 0x40000000 != 0;
+    if has_value {
+        let projected = namespace_live_descriptor_value(ctx, obj, &own);
+        if let Some(value) = pd.value {
+            if !namespace_same_value(&value, &projected) {
+                return Some(false);
+            }
+        }
+    }
+    if has_writable && pd.writable != (!is_symbol || own.writable) {
+        return Some(false);
+    }
+    if has_enumerable && pd.enumerable != own.enumerable {
+        return Some(false);
+    }
+    if has_configurable && pd.configurable {
+        return Some(false);
+    }
+    Some(true)
+}
+
+pub fn namespace_live_descriptor_value(
+    ctx: &mut JSContext,
+    obj: &JSValue,
+    desc: &crate::object::object::PropertyDescriptor,
+) -> JSValue {
+    if let Some(getter) = desc.get {
+        if getter.is_function() {
+            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+                if let Ok(value) = vm.call_function_with_this(ctx, getter, *obj, &[]) {
+                    return value;
+                }
+            }
+        }
+        return JSValue::undefined();
+    }
+    desc.value.unwrap_or(JSValue::undefined())
+}
+
 fn object_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 2 || !(args[0].is_object() || args[0].is_function()) {
         return JSValue::undefined();
@@ -1756,7 +1863,11 @@ fn object_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) -> 
     {
         let mut desc_obj = JSObject::new();
         desc_obj.prototype = ctx.get_object_prototype();
-        if pd.get.is_some() || pd.set.is_some() {
+        if obj_ref.is_module_namespace() && prop_atom.0 & 0x40000000 == 0 {
+            let value = namespace_live_descriptor_value(ctx, obj, &pd);
+            desc_obj.set(ctx.intern("value"), value);
+            desc_obj.set(ctx.intern("writable"), JSValue::bool(true));
+        } else if pd.get.is_some() || pd.set.is_some() {
             desc_obj.set(ctx.intern("get"), pd.get.unwrap_or(JSValue::undefined()));
             desc_obj.set(ctx.intern("set"), pd.set.unwrap_or(JSValue::undefined()));
         } else {
@@ -1786,11 +1897,16 @@ fn object_get_own_property_descriptors(ctx: &mut JSContext, args: &[JSValue]) ->
     let obj = &args[0];
     let obj_ref = obj.as_object();
 
+    let is_namespace = obj_ref.is_module_namespace();
     for key_atom in obj_ref.keys() {
         if let Some(pd) = obj_ref.get_own_descriptor(key_atom) {
             let mut desc_obj = JSObject::new();
             desc_obj.prototype = ctx.get_object_prototype();
-            if pd.get.is_some() || pd.set.is_some() {
+            if is_namespace && key_atom.0 & 0x40000000 == 0 {
+                let value = namespace_live_descriptor_value(ctx, obj, &pd);
+                desc_obj.set(ctx.intern("value"), value);
+                desc_obj.set(ctx.intern("writable"), JSValue::bool(true));
+            } else if pd.get.is_some() || pd.set.is_some() {
                 desc_obj.set(ctx.intern("get"), pd.get.unwrap_or(JSValue::undefined()));
                 desc_obj.set(ctx.intern("set"), pd.set.unwrap_or(JSValue::undefined()));
             } else {
@@ -1854,6 +1970,7 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
     };
 
     let obj_ref = obj_val.as_object();
+    let is_namespace = obj_ref.is_module_namespace();
 
     let mut names: Vec<Atom> = obj_ref
         .keys()
@@ -1872,7 +1989,13 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
                 .cmp(&b_str.parse::<i64>().unwrap()),
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
-            (false, false) => std::cmp::Ordering::Equal,
+            (false, false) => {
+                if is_namespace {
+                    a_str.encode_utf16().cmp(b_str.encode_utf16())
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            }
         }
     });
 

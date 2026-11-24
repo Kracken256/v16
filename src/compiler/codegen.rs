@@ -2490,6 +2490,15 @@ impl CodeGenerator {
             ASTNode::ImportDeclaration(decl) => {
                 self.gen_import_declaration(decl, ctx)?;
             }
+            ASTNode::ExportNamedDeclaration(decl) => {
+                self.gen_export_named_declaration(decl, ctx)?;
+            }
+            ASTNode::ExportDefaultDeclaration(decl) => {
+                self.gen_export_default_declaration(decl, ctx)?;
+            }
+            ASTNode::ExportAllDeclaration(decl) => {
+                self.gen_export_all_declaration(decl, ctx)?;
+            }
             ASTNode::EmptyStatement => {}
             ASTNode::LabelledStatement(stmt) => {
                 let saved = self.pending_label.clone();
@@ -2513,6 +2522,254 @@ impl CodeGenerator {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn emit_export_value(&mut self, name: &str, value_reg: u16, ctx: &mut JSContext) {
+        let name_idx = self.add_constant(JSValue::new_string(ctx.intern(name)));
+        let name_reg = self.alloc_register();
+        self.emit(Opcode::LoadConst);
+        self.emit_u16(name_reg);
+        self.emit_u32(name_idx);
+        let fn_idx = self.add_constant(JSValue::new_string(ctx.intern("__v16_export__")));
+        let fn_reg = self.alloc_register();
+        self.emit(Opcode::GetGlobal);
+        self.emit_u16(fn_reg);
+        self.emit_u32(fn_idx);
+        let dst = self.alloc_register();
+        self.emit(Opcode::Call);
+        self.emit_u16(dst);
+        self.emit_u16(fn_reg);
+        self.emit_u16(2);
+        self.emit_u16(name_reg);
+        self.emit_u16(value_reg);
+        self.free_register(dst);
+        self.free_register(fn_reg);
+        self.free_register(name_reg);
+    }
+
+    fn emit_export_binding(
+        &mut self,
+        binding: &str,
+        exported: &str,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        let expr = Expression::Identifier(Identifier {
+            name: binding.to_string(),
+            parenthesized: false,
+        });
+        let reg = self.gen_expression(&expr, ctx)?;
+        let tmp = self.alloc_register();
+        self.emit(Opcode::Move);
+        self.emit_u16(tmp);
+        self.emit_u16(reg);
+        self.emit_export_value(exported, tmp, ctx);
+        self.free_register(tmp);
+
+        let getter = Expression::FunctionExpression(FunctionExpression {
+            name: None,
+            params: Vec::new(),
+            body: BlockStatement {
+                body: vec![ASTNode::ReturnStatement(ReturnStatement {
+                    argument: Some(Expression::Identifier(Identifier {
+                        name: binding.to_string(),
+                        parenthesized: false,
+                    })),
+                })],
+                lines: Vec::new(),
+            },
+            generator: false,
+            is_async: false,
+        });
+        let getter_reg = self.gen_expression(&getter, ctx)?;
+        self.emit_export_live(exported, getter_reg, ctx);
+        self.free_register(getter_reg);
+        Ok(())
+    }
+
+    fn emit_export_live(&mut self, name: &str, value_reg: u16, ctx: &mut JSContext) {
+        let name_idx = self.add_constant(JSValue::new_string(ctx.intern(name)));
+        let name_reg = self.alloc_register();
+        self.emit(Opcode::LoadConst);
+        self.emit_u16(name_reg);
+        self.emit_u32(name_idx);
+        let fn_idx = self.add_constant(JSValue::new_string(ctx.intern("__v16_export_live__")));
+        let fn_reg = self.alloc_register();
+        self.emit(Opcode::GetGlobal);
+        self.emit_u16(fn_reg);
+        self.emit_u32(fn_idx);
+        let dst = self.alloc_register();
+        self.emit(Opcode::Call);
+        self.emit_u16(dst);
+        self.emit_u16(fn_reg);
+        self.emit_u16(2);
+        self.emit_u16(name_reg);
+        self.emit_u16(value_reg);
+        self.free_register(dst);
+        self.free_register(fn_reg);
+        self.free_register(name_reg);
+    }
+
+    fn gen_export_named_declaration(
+        &mut self,
+        decl: &ExportNamedDeclaration,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        if let Some(declaration) = &decl.declaration {
+            match declaration {
+                ExportDeclaration::Variable(variable) => {
+                    self.gen_variable_declaration(variable, ctx)?;
+                    for declarator in &variable.declarations {
+                        let mut names = std::collections::HashSet::new();
+                        Self::collect_binding_pattern_bindings(&declarator.id, &mut names);
+                        let mut names: Vec<String> = names.into_iter().collect();
+                        names.sort();
+                        for name in names {
+                            self.emit_export_binding(&name, &name, ctx)?;
+                        }
+                    }
+                }
+                ExportDeclaration::Function(function) => {
+                    self.gen_statement(&ASTNode::FunctionDeclaration(function.clone()), ctx)?;
+                    self.emit_export_binding(&function.name, &function.name, ctx)?;
+                }
+                ExportDeclaration::Class(class) => {
+                    self.gen_statement(&ASTNode::ClassDeclaration(class.clone()), ctx)?;
+                    self.emit_export_binding(&class.name, &class.name, ctx)?;
+                }
+            }
+            return Ok(());
+        }
+        if let Some(source) = &decl.source {
+            for specifier in &decl.specifiers {
+                let expr = Expression::CallExpression(CallExpression {
+                    callee: Box::new(Expression::Identifier(Identifier {
+                        name: "__v16_import__".to_string(),
+                        parenthesized: false,
+                    })),
+                    arguments: vec![
+                        Argument::Expression(Expression::Literal(Literal::String(
+                            source.clone(),
+                            false,
+                            false,
+                        ))),
+                        Argument::Expression(Expression::Literal(Literal::String(
+                            specifier.local.clone(),
+                            false,
+                            false,
+                        ))),
+                    ],
+                });
+                let reg = self.gen_expression(&expr, ctx)?;
+                self.emit_export_value(&specifier.exported, reg, ctx);
+                self.free_register(reg);
+            }
+            return Ok(());
+        }
+        for specifier in &decl.specifiers {
+            self.emit_export_binding(&specifier.local, &specifier.exported, ctx)?;
+        }
+        Ok(())
+    }
+
+    fn gen_export_default_declaration(
+        &mut self,
+        decl: &ExportDefaultDeclaration,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        match &decl.declaration {
+            ExportDefaultDeclarationKind::Function(function) => {
+                if function.name.is_empty() {
+                    let expression = Expression::FunctionExpression(FunctionExpression {
+                        name: None,
+                        params: function.params.clone(),
+                        body: function.body.clone(),
+                        generator: function.generator,
+                        is_async: function.is_async,
+                    });
+                    let reg = self.gen_expression_with_assign_name(
+                        &expression,
+                        "default",
+                        ctx,
+                    )?;
+                    self.emit_export_value("default", reg, ctx);
+                    self.free_register(reg);
+                } else {
+                    self.gen_statement(&ASTNode::FunctionDeclaration(function.clone()), ctx)?;
+                    self.emit_export_binding(&function.name, "default", ctx)?;
+                }
+            }
+            ExportDefaultDeclarationKind::Class(class) => {
+                if class.name.is_empty() {
+                    let expression = Expression::ClassExpression(ClassExpression {
+                        name: None,
+                        super_class: class.super_class.clone(),
+                        body: class.body.clone(),
+                    });
+                    let reg = self.gen_expression_with_assign_name(
+                        &expression,
+                        "default",
+                        ctx,
+                    )?;
+                    self.emit_export_value("default", reg, ctx);
+                    self.free_register(reg);
+                } else {
+                    self.gen_statement(&ASTNode::ClassDeclaration(class.clone()), ctx)?;
+                    self.emit_export_binding(&class.name, "default", ctx)?;
+                }
+            }
+            ExportDefaultDeclarationKind::Expression(expression) => {
+                let reg = self.gen_expression_with_assign_name(expression, "default", ctx)?;
+                self.emit_export_value("default", reg, ctx);
+                self.free_register(reg);
+            }
+        }
+        Ok(())
+    }
+
+    fn gen_export_all_declaration(
+        &mut self,
+        decl: &ExportAllDeclaration,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        let mut arguments = vec![Argument::Expression(Expression::Literal(Literal::String(
+            decl.source.clone(),
+            false,
+            false,
+        )))];
+        if let Some(exported) = &decl.exported {
+            arguments.push(Argument::Expression(Expression::Literal(Literal::String(
+                exported.clone(),
+                false,
+                false,
+            ))));
+        }
+        let expr = Expression::CallExpression(CallExpression {
+            callee: Box::new(Expression::Identifier(Identifier {
+                name: "__v16_import__".to_string(),
+                parenthesized: false,
+            })),
+            arguments,
+        });
+        let reg = self.gen_expression(&expr, ctx)?;
+        if decl.exported.is_some() {
+            self.emit_export_value(decl.exported.as_ref().unwrap(), reg, ctx);
+        } else {
+            let all_idx = self.add_constant(JSValue::new_string(ctx.intern("__v16_export_all__")));
+            let fn_reg = self.alloc_register();
+            self.emit(Opcode::GetGlobal);
+            self.emit_u16(fn_reg);
+            self.emit_u32(all_idx);
+            let dst = self.alloc_register();
+            self.emit(Opcode::Call);
+            self.emit_u16(dst);
+            self.emit_u16(fn_reg);
+            self.emit_u16(1);
+            self.emit_u16(reg);
+            self.free_register(dst);
+            self.free_register(fn_reg);
+        }
+        self.free_register(reg);
         Ok(())
     }
 
