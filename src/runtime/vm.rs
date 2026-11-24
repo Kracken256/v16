@@ -6519,6 +6519,26 @@ impl VM {
                             } else {
                                 None
                             };
+                            if class_accessor
+                                && obj_val.is_function()
+                                && atom == ctx.common_atoms.prototype
+                                && obj
+                                    .get_own_descriptor(atom)
+                                    .map_or(false, |d| !d.configurable)
+                            {
+                                self.set_pending_type_error(
+                                    ctx,
+                                    "Classes may not have a static property named 'prototype'",
+                                );
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                                continue;
+                            }
                             let existing = obj.get_own_accessor_entry(atom);
                             let final_getter = getter.or_else(|| existing.and_then(|e| e.get));
                             let final_setter = setter.or_else(|| existing.and_then(|e| e.set));
@@ -6615,6 +6635,25 @@ impl VM {
                         } else {
                             self.int_atom(key_val.get_int() as usize, ctx)
                         };
+                        let static_prototype = obj_val.is_function()
+                            && atom == ctx.common_atoms.prototype
+                            && js_obj
+                                .get_own_descriptor(atom)
+                                .map_or(false, |d| !d.configurable);
+                        if static_prototype {
+                            self.set_pending_type_error(
+                                ctx,
+                                "Classes may not have a static property named 'prototype'",
+                            );
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                         let desc = crate::object::object::PropertyDescriptor {
                             value: Some(value),
                             writable: true,
