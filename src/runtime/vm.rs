@@ -7754,18 +7754,6 @@ impl VM {
                     };
                     func.name = display_name;
                     {
-                        let name_desc = crate::object::object::PropertyDescriptor {
-                            value: Some(JSValue::new_string(display_name)),
-                            writable: false,
-                            enumerable: false,
-                            configurable: true,
-                            get: None,
-                            set: None,
-                        };
-                        func.base.define_property(ctx.common_atoms.name, name_desc);
-                    }
-
-                    {
                         let length_desc = crate::object::object::PropertyDescriptor {
                             value: Some(JSValue::new_int(param_count as i64)),
                             writable: false,
@@ -7775,6 +7763,18 @@ impl VM {
                             set: None,
                         };
                         func.base.define_property(ctx.common_atoms.length, length_desc);
+                    }
+
+                    {
+                        let name_desc = crate::object::object::PropertyDescriptor {
+                            value: Some(JSValue::new_string(display_name)),
+                            writable: false,
+                            enumerable: false,
+                            configurable: true,
+                            get: None,
+                            set: None,
+                        };
+                        func.base.define_property(ctx.common_atoms.name, name_desc);
                     }
 
                     let has_prototype = function_kind & 1 != 0;
