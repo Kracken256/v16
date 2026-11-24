@@ -366,6 +366,7 @@ fn run_test_mode(
     meta: &TestMeta,
     harness_code: &str,
     force_strict: bool,
+    timeout_ms: u64,
 ) -> TestOutcome {
     let full_code = build_code(code, harness_code, force_strict);
     let is_async = meta.flags.contains(&"async".to_string());
@@ -381,6 +382,11 @@ fn run_test_mode(
             if meta.has_negative {
                 TestOutcome::Failed("Expected error but test passed".to_string())
             } else if is_async {
+                if timeout_ms > 0 {
+                    let _ = ctx.run_event_loop_with_timeout(timeout_ms);
+                } else {
+                    let _ = ctx.run_event_loop();
+                }
                 let outputs = PRINT_OUTPUT.with(|buf| buf.borrow().clone());
                 let mut async_failed = false;
                 let mut fail_msg = String::new();
@@ -665,7 +671,14 @@ fn runner_main() {
                     std::sync::atomic::Ordering::Relaxed,
                 );
             }
-            let outcome = run_test_mode(&mut ctx, code_ref, &meta, &harness_code, force_strict);
+            let outcome = run_test_mode(
+                &mut ctx,
+                code_ref,
+                &meta,
+                &harness_code,
+                force_strict,
+                per_test_timeout_ms,
+            );
             WATCHDOG_DEADLINE_MS.store(0, std::sync::atomic::Ordering::Relaxed);
             pipa::set_external_interrupt(false);
 
