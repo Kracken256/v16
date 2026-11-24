@@ -14,3 +14,4 @@ perf.data*
 .boa_history
 perf*.data
 book/
+scripts/test/__pycache__/
