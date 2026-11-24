@@ -10305,6 +10305,10 @@ impl VM {
         atom: crate::runtime::atom::Atom,
         ic_pc: usize,
     ) -> bool {
+        if obj_val.is_null_or_undefined() {
+            self.set_pending_type_error(ctx, "Cannot set property of null or undefined");
+            return false;
+        }
         if !obj_val.is_object_like() {
             if self.frames[self.frame_index].is_strict_frame {
                 self.set_pending_type_error(ctx, "Cannot assign to a primitive value");
@@ -10406,6 +10410,12 @@ impl VM {
                             self.pending_throw = Some(exc);
                         }
                     }
+                } else if self.frames[self.frame_index].is_strict_frame {
+                    let msg = format!(
+                        "Cannot set property '{}' which has only a getter",
+                        ctx.get_atom_str(atom)
+                    );
+                    self.set_pending_type_error(ctx, &msg);
                 }
                 return true;
             }
