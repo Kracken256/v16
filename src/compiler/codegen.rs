@@ -6891,7 +6891,11 @@ impl CodeGenerator {
                 self.gen_object_destructuring_target(obj, value_reg, ctx)
             }
             AssignmentTarget::AssignmentPattern(ap) => {
-                self.gen_default_value_assignment(&ap.right, value_reg, ctx)?;
+                let binding_name = match &*ap.left {
+                    AssignmentTarget::Identifier(name) => Some(name.as_str()),
+                    _ => None,
+                };
+                self.gen_default_value_assignment(&ap.right, value_reg, binding_name, ctx)?;
                 self.gen_assignment_target_destructure(&ap.left, value_reg, ctx)
             }
             AssignmentTarget::RestElement(_) => {
@@ -6986,7 +6990,16 @@ impl CodeGenerator {
                         return Err("SyntaxError: rest element not at end".to_string());
                     }
                     PatternElement::AssignmentPattern(ap) => {
-                        self.gen_default_value_assignment(&ap.right, val_reg, ctx)?;
+                        let binding_name = match &*ap.left {
+                            AssignmentTarget::Identifier(name) => Some(name.as_str()),
+                            _ => None,
+                        };
+                        self.gen_default_value_assignment(
+                            &ap.right,
+                            val_reg,
+                            binding_name,
+                            ctx,
+                        )?;
                         self.gen_assignment_target_destructure(&ap.left, val_reg, ctx)?;
                     }
                 }
@@ -7105,6 +7118,7 @@ impl CodeGenerator {
         &mut self,
         default_expr: &Expression,
         value_reg: u16,
+        binding_name: Option<&str>,
         ctx: &mut JSContext,
     ) -> Result<(), String> {
         let cmp_reg = self.alloc_register();
@@ -7122,7 +7136,11 @@ impl CodeGenerator {
         self.emit_i32(0);
         self.free_register(cmp_reg);
 
-        let default_reg = self.gen_expression(default_expr, ctx)?;
+        let default_reg = if let Some(name) = binding_name {
+            self.gen_expression_with_assign_name(default_expr, name, ctx)?
+        } else {
+            self.gen_expression(default_expr, ctx)?
+        };
         if default_reg != value_reg {
             self.emit(Opcode::Move);
             self.emit_u16(value_reg);
