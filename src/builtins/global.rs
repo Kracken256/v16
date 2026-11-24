@@ -1299,6 +1299,7 @@ fn reflect_own_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let obj = args[0].as_object();
+    let is_namespace = obj.is_module_namespace();
     let order: Vec<Atom> = if obj.has_property_order() {
         obj.property_order_keys()
     } else {
@@ -1354,10 +1355,19 @@ fn reflect_own_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             (Some(ai), Some(bi)) => ai.cmp(&bi),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.1.cmp(&b.1),
+            (None, None) => {
+                if is_namespace {
+                    a_str.encode_utf16().cmp(b_str.encode_utf16())
+                } else {
+                    a.1.cmp(&b.1)
+                }
+            }
         }
     });
     let mut result = crate::object::object::JSObject::new_array();
+    if let Some(proto_ptr) = ctx.get_array_prototype() {
+        result.prototype = Some(proto_ptr);
+    }
     let mut idx = 0usize;
     for (atom, _) in &string_keys {
         if atom.0 & 0x40000000 == 0 {
