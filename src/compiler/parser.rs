@@ -1489,13 +1489,21 @@ impl Parser {
 
         if self.at_punct("*") {
             self.advance();
+            let exported = if self.at_keyword("as") {
+                self.advance();
+                let name = self.cur_value().to_string();
+                self.advance();
+                Some(name)
+            } else {
+                None
+            };
             self.expect_keyword("from")?;
             let source = self.cur_value().to_string();
             self.advance();
             self.expect_semicolon()?;
             return Ok(ASTNode::ExportAllDeclaration(ExportAllDeclaration {
                 source,
-                exported: None,
+                exported,
             }));
         }
 
