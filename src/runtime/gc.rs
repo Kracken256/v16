@@ -449,6 +449,10 @@ impl GcHeap {
             self.mark(proto_ptr as usize);
         }
 
+        if let Some(ref env) = func.with_env {
+            self.mark_value(env);
+        }
+
         if let Some(uv) = func.upvalues_ref() {
             for (_, upvalue) in &uv.upvalues {
                 self.mark_value(upvalue);

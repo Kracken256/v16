@@ -13,6 +13,13 @@ struct BreakableFrame {
     continue_target: Option<usize>,
 }
 
+#[derive(Clone)]
+struct WithScope {
+    function_id: u32,
+    scope_index: usize,
+    inner_bindings: std::collections::HashSet<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum VarLocation {
     Local(u16),
@@ -201,6 +208,8 @@ pub struct CodeGenerator {
     in_async_generator: bool,
     pending_label: Option<String>,
     all_var_names: Vec<(String, u16)>,
+    with_scopes: Vec<WithScope>,
+    function_id: u32,
 }
 
 impl CodeGenerator {
@@ -265,6 +274,8 @@ impl CodeGenerator {
             in_async_generator: false,
             pending_label: None,
             all_var_names: Vec::new(),
+            with_scopes: Vec::new(),
+            function_id: 0,
         }
     }
 
@@ -286,6 +297,8 @@ impl CodeGenerator {
         nested.is_strict = self.is_strict;
         nested.is_eval = self.is_eval;
         nested.in_static_method = self.in_static_method;
+        nested.with_scopes = self.with_scopes.clone();
+        nested.function_id = self.function_id + 1;
         nested
     }
 
@@ -786,6 +799,14 @@ impl CodeGenerator {
         };
         self.reserved_slots.insert(slot);
         self.all_var_names.push((name.to_string(), slot));
+        if kind != VariableKind::Var {
+            let depth = self.depth as usize;
+            for scope in self.with_scopes.iter_mut().rev() {
+                if scope.function_id == self.function_id && scope.scope_index < depth {
+                    scope.inner_bindings.insert(name.to_string());
+                }
+            }
+        }
         match kind {
             VariableKind::Var => {
                 self.scope_stack[0].insert(name.to_string(), entry);
@@ -870,6 +891,30 @@ impl CodeGenerator {
 
     fn lookup_var_slot(&self, name: &str) -> Option<u16> {
         self.lookup_var(name).map(|e| e.slot)
+    }
+
+    fn lookup_var_scope_index(&self, name: &str) -> Option<usize> {
+        let len = self.scope_stack.len();
+        for (i, scope) in self.scope_stack.iter().enumerate().rev() {
+            if scope.contains_key(name) {
+                return Some(len - 1 - i);
+            }
+        }
+        None
+    }
+
+    fn with_applies_to_local(&self, name: &str, scope_index: usize) -> bool {
+        let _ = scope_index;
+        self.with_scopes.iter().rev().any(|scope| {
+            scope.function_id == self.function_id && !scope.inner_bindings.contains(name)
+        })
+    }
+
+    fn with_applies_to_outer(&self, name: &str) -> bool {
+        self.with_scopes
+            .iter()
+            .rev()
+            .any(|scope| !scope.inner_bindings.contains(name))
     }
 
     fn resolve_var(&mut self, name: &str, ctx: &mut JSContext) -> Option<VarLocation> {
@@ -2140,6 +2185,40 @@ impl CodeGenerator {
         Ok(())
     }
 
+    fn gen_with_statement_common(
+        &mut self,
+        stmt: &WithStatement,
+        ctx: &mut JSContext,
+        target_reg: Option<u16>,
+    ) -> Result<(), String> {
+        if self.is_strict {
+            return Err(
+                "SyntaxError: Strict mode code may not include a with statement".to_string(),
+            );
+        }
+        if let Some(target) = target_reg {
+            self.emit(Opcode::LoadUndefined);
+            self.emit_u16(target);
+        }
+        let object_reg = self.gen_expression(&stmt.object, ctx)?;
+        self.emit(Opcode::WithEnter);
+        self.emit_u16(object_reg);
+        self.free_register(object_reg);
+        self.with_scopes.push(WithScope {
+            function_id: self.function_id,
+            scope_index: self.depth as usize,
+            inner_bindings: std::collections::HashSet::new(),
+        });
+        let result = if let Some(target) = target_reg {
+            self.gen_statement_with_target(&stmt.body, ctx, target)
+        } else {
+            self.gen_statement(&stmt.body, ctx)
+        };
+        self.with_scopes.pop();
+        self.emit(Opcode::WithExit);
+        result
+    }
+
     fn gen_statement(&mut self, stmt: &ASTNode, ctx: &mut JSContext) -> Result<(), String> {
         match stmt {
             ASTNode::ExpressionStatement(es) => {
@@ -2307,14 +2386,8 @@ impl CodeGenerator {
             ASTNode::TryStatement(stmt) => {
                 self.gen_try_statement(stmt, ctx, None)?;
             }
-            ASTNode::WithStatement(_) => {
-                if self.is_strict {
-                    return Err(
-                        "SyntaxError: Strict mode code may not include a with statement"
-                            .to_string(),
-                    );
-                }
-                return Err("with statement is not supported".to_string());
+            ASTNode::WithStatement(stmt) => {
+                self.gen_with_statement_common(stmt, ctx, None)?;
             }
             ASTNode::ImportDeclaration(decl) => {
                 self.gen_import_declaration(decl, ctx)?;
@@ -2423,6 +2496,19 @@ impl CodeGenerator {
                         entry.initialized = true;
                         break;
                     }
+                }
+                let with_target = if kind == VariableKind::Var && !self.with_scopes.is_empty()
+                {
+                    match self.lookup_var_scope_index(name) {
+                        Some(index) => self.with_applies_to_local(name, index),
+                        None => self.with_applies_to_outer(name),
+                    }
+                } else {
+                    false
+                };
+                if with_target {
+                    self.gen_with_store(name, value_reg, ctx)?;
+                    return Ok(());
                 }
                 if slot != value_reg {
                     self.emit(Opcode::Move);
@@ -3042,9 +3128,14 @@ impl CodeGenerator {
                 self.pending_label = None;
                 result
             }
-            ASTNode::WithStatement(_) | ASTNode::EmptyStatement | ASTNode::DebuggerStatement => {
-                Ok(None)
+            ASTNode::WithStatement(with_stmt) => {
+                let result_reg = self.alloc_register();
+                self.emit(Opcode::LoadUndefined);
+                self.emit_u16(result_reg);
+                self.gen_with_statement_common(with_stmt, ctx, Some(result_reg))?;
+                Ok(Some(result_reg))
             }
+            ASTNode::EmptyStatement | ASTNode::DebuggerStatement => Ok(None),
             _ => Ok(None),
         }
     }
@@ -3099,6 +3190,9 @@ impl CodeGenerator {
                     self.gen_statement_with_target(s, ctx, target_reg)?;
                 }
                 self.pop_scope();
+            }
+            ASTNode::WithStatement(stmt) => {
+                self.gen_with_statement_common(stmt, ctx, Some(target_reg))?;
             }
             ASTNode::ExpressionStatement(es) => {
                 let reg = self.gen_expression(&es.expression, ctx)?;
@@ -4553,6 +4647,272 @@ impl CodeGenerator {
         Ok(value_reg)
     }
 
+    fn with_local_tdz(&self, name: &str) -> bool {
+        if let Some(entry) = self.lookup_var(name) {
+            return entry.kind != VariableKind::Var && !entry.initialized;
+        }
+        if let Some(parent) = self.parent_vars.get(name) {
+            return !parent.is_inherited
+                && parent.kind != VariableKind::Var
+                && !parent.initialized;
+        }
+        false
+    }
+
+    fn emit_with_resolve(&mut self, name: &str, ctx: &mut JSContext) -> u16 {
+        let atom = ctx.intern(name);
+        let dst = self.alloc_register();
+        self.emit(Opcode::WithResolve);
+        self.emit_u16(dst);
+        self.emit_u32(atom.0);
+        dst
+    }
+
+    fn emit_jump_if_nullish(&mut self, reg: u16) -> usize {
+        self.emit(Opcode::JumpIfNullish);
+        self.emit_u16(reg);
+        let patch = self.code.len();
+        self.emit_i32(0);
+        patch
+    }
+
+    fn emit_with_get_resolved(
+        &mut self,
+        dst: u16,
+        object: u16,
+        name: &str,
+        ctx: &mut JSContext,
+    ) {
+        let atom = ctx.intern(name);
+        self.emit(Opcode::WithGetResolved);
+        self.emit_u16(dst);
+        self.emit_u16(object);
+        self.emit_u32(atom.0);
+    }
+
+    fn emit_with_set_resolved(
+        &mut self,
+        object: u16,
+        value: u16,
+        name: &str,
+        ctx: &mut JSContext,
+    ) {
+        let atom = ctx.intern(name);
+        self.emit(Opcode::WithSetResolved);
+        self.emit_u16(object);
+        self.emit_u16(value);
+        self.emit_u32(atom.0);
+    }
+
+    fn emit_with_get_var(
+        &mut self,
+        name: &str,
+        kind: u8,
+        index: u16,
+        flags: u8,
+        ctx: &mut JSContext,
+    ) -> u16 {
+        let atom = ctx.intern(name);
+        let dst = self.alloc_register();
+        self.emit(Opcode::WithGetVar);
+        self.emit_u16(dst);
+        self.emit_u32(atom.0);
+        self.emit_u8(kind);
+        self.emit_u16(index);
+        self.emit_u8(flags);
+        dst
+    }
+
+    fn gen_with_global_read(&mut self, name: &str, ctx: &mut JSContext) -> Result<u16, String> {
+        let atom = ctx.intern(name);
+        let idx = self.add_constant(JSValue::new_string(atom));
+        let dst = self.alloc_register();
+        self.emit(Opcode::WithHas);
+        self.emit_u16(dst);
+        self.emit_u32(atom.0);
+        self.emit(Opcode::JumpIfNot);
+        self.emit_u16(dst);
+        let has_jump = self.code.len();
+        self.emit_i32(0);
+        self.emit(Opcode::WithGet);
+        self.emit_u16(dst);
+        self.emit_u32(atom.0);
+        self.emit(Opcode::Jump);
+        let end_jump = self.code.len();
+        self.emit_i32(0);
+        let fallback = self.code.len();
+        self.patch_jump(has_jump, fallback);
+        self.emit(Opcode::GetGlobal);
+        self.emit_u16(dst);
+        self.emit_u32(idx);
+        if !self.suppress_ref_error {
+            self.emit(Opcode::CheckRef);
+            self.emit_u16(dst);
+            self.emit_u32(idx);
+        }
+        let end = self.code.len();
+        self.patch_jump(end_jump, end);
+        Ok(dst)
+    }
+
+    fn gen_with_read(&mut self, name: &str, ctx: &mut JSContext) -> Result<u16, String> {
+        match self.resolve_var(name, ctx) {
+            Some(VarLocation::Local(slot)) => {
+                if self.is_global_var(name) {
+                    let flags = if self.suppress_ref_error { 0 } else { 2 };
+                    Ok(self.emit_with_get_var(name, 0, 0, flags, ctx))
+                } else {
+                    let tdz = self.with_local_tdz(name);
+                    Ok(self.emit_with_get_var(name, 1, slot, if tdz { 1 } else { 0 }, ctx))
+                }
+            }
+            Some(VarLocation::Upvalue(slot)) => {
+                let tdz = self.with_local_tdz(name);
+                Ok(self.emit_with_get_var(name, 2, slot, if tdz { 1 } else { 0 }, ctx))
+            }
+            None => {
+                let flags = if self.suppress_ref_error { 0 } else { 2 };
+                Ok(self.emit_with_get_var(name, 0, 0, flags, ctx))
+            }
+        }
+    }
+
+    fn gen_with_global_set(
+        &mut self,
+        name: &str,
+        value_reg: u16,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        let atom = ctx.intern(name);
+        let idx = self.add_constant(JSValue::new_string(atom));
+        let cond = self.alloc_register();
+        self.emit(Opcode::WithHas);
+        self.emit_u16(cond);
+        self.emit_u32(atom.0);
+        self.emit(Opcode::JumpIfNot);
+        self.emit_u16(cond);
+        let has_jump = self.code.len();
+        self.emit_i32(0);
+        self.emit(Opcode::WithSet);
+        self.emit_u32(atom.0);
+        self.emit_u16(value_reg);
+        self.emit(Opcode::Jump);
+        let end_jump = self.code.len();
+        self.emit_i32(0);
+        let fallback = self.code.len();
+        self.patch_jump(has_jump, fallback);
+        if self.is_eval {
+            self.emit(Opcode::SetGlobalVar);
+        } else {
+            self.emit(Opcode::SetGlobal);
+        }
+        self.emit_u32(idx);
+        self.emit_u16(value_reg);
+        let end = self.code.len();
+        self.patch_jump(end_jump, end);
+        self.free_register(cond);
+        Ok(())
+    }
+
+    fn gen_with_store(
+        &mut self,
+        name: &str,
+        value_reg: u16,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        match self.resolve_var(name, ctx) {
+            Some(VarLocation::Local(slot)) => {
+                if self.is_global_var(name) {
+                    let atom = ctx.intern(name);
+                    self.emit(Opcode::WithSetVar);
+                    self.emit_u32(atom.0);
+                    self.emit_u16(value_reg);
+                    self.emit_u8(0);
+                    self.emit_u16(0);
+                    self.emit_u8(0);
+                    Ok(())
+                } else {
+                    let atom = ctx.intern(name);
+                    self.emit(Opcode::WithSetVar);
+                    self.emit_u32(atom.0);
+                    self.emit_u16(value_reg);
+                    self.emit_u8(1);
+                    self.emit_u16(slot);
+                    self.emit_u8(0);
+                    Ok(())
+                }
+            }
+            Some(VarLocation::Upvalue(slot)) => {
+                let atom = ctx.intern(name);
+                self.emit(Opcode::WithSetVar);
+                self.emit_u32(atom.0);
+                self.emit_u16(value_reg);
+                self.emit_u8(2);
+                self.emit_u16(slot);
+                self.emit_u8(0);
+                Ok(())
+            }
+            None => {
+                let atom = ctx.intern(name);
+                self.emit(Opcode::WithSetVar);
+                self.emit_u32(atom.0);
+                self.emit_u16(value_reg);
+                self.emit_u8(0);
+                self.emit_u16(0);
+                self.emit_u8(0);
+                Ok(())
+            }
+        }
+    }
+
+    fn gen_with_delete(&mut self, name: &str, ctx: &mut JSContext) -> Result<u16, String> {
+        let atom = ctx.intern(name);
+        let dst = self.alloc_register();
+        self.emit(Opcode::WithHas);
+        self.emit_u16(dst);
+        self.emit_u32(atom.0);
+        self.emit(Opcode::JumpIfNot);
+        self.emit_u16(dst);
+        let has_jump = self.code.len();
+        self.emit_i32(0);
+        self.emit(Opcode::WithDelete);
+        self.emit_u16(dst);
+        self.emit_u32(atom.0);
+        self.emit(Opcode::Jump);
+        let end_jump = self.code.len();
+        self.emit_i32(0);
+        let fallback = self.code.len();
+        self.patch_jump(has_jump, fallback);
+        let resolved = self.resolve_var(name, ctx);
+        match resolved {
+            Some(VarLocation::Local(slot)) => {
+                if self.is_global_var(name) {
+                    let idx = self.add_constant(JSValue::new_string(atom));
+                    self.emit(Opcode::DeleteGlobal);
+                    self.emit_u16(dst);
+                    self.emit_u32(idx);
+                } else {
+                    let _ = slot;
+                    self.emit(Opcode::LoadFalse);
+                    self.emit_u16(dst);
+                }
+            }
+            Some(VarLocation::Upvalue(_)) => {
+                self.emit(Opcode::LoadFalse);
+                self.emit_u16(dst);
+            }
+            None => {
+                let idx = self.add_constant(JSValue::new_string(atom));
+                self.emit(Opcode::DeleteGlobal);
+                self.emit_u16(dst);
+                self.emit_u32(idx);
+            }
+        }
+        let end = self.code.len();
+        self.patch_jump(end_jump, end);
+        Ok(dst)
+    }
+
     fn gen_expression(&mut self, expr: &Expression, ctx: &mut JSContext) -> Result<u16, String> {
         match expr {
             Expression::Identifier(id) => {
@@ -4566,6 +4926,15 @@ impl CodeGenerator {
                     self.emit(Opcode::GetArguments);
                     self.emit_u16(r);
                     return Ok(r);
+                }
+                if !self.with_scopes.is_empty() {
+                    let applies = match self.lookup_var_scope_index(&id.name) {
+                        Some(index) => self.with_applies_to_local(&id.name, index),
+                        None => self.with_applies_to_outer(&id.name),
+                    };
+                    if applies {
+                        return self.gen_with_read(&id.name, ctx);
+                    }
                 }
                 match self.resolve_var(&id.name, ctx) {
                     Some(VarLocation::Local(slot)) => {
@@ -5423,6 +5792,15 @@ impl CodeGenerator {
         match arg_expr {
             Expression::Identifier(id) => {
                 self.free_register(arg_reg);
+                if !self.with_scopes.is_empty() {
+                    let applies = match self.lookup_var_scope_index(&id.name) {
+                        Some(index) => self.with_applies_to_local(&id.name, index),
+                        None => self.with_applies_to_outer(&id.name),
+                    };
+                    if applies {
+                        return self.gen_with_delete(&id.name, ctx);
+                    }
+                }
                 let dst = self.alloc_register();
                 if id.name == "arguments" && !self.is_script_level && !self.is_arrow {
                     self.emit(Opcode::LoadFalse);
@@ -5519,6 +5897,15 @@ impl CodeGenerator {
         update: &UpdateExpression,
         ctx: &mut JSContext,
     ) -> Result<u16, String> {
+        self.gen_update_expression_impl(update, ctx, false)
+    }
+
+    fn gen_update_expression_impl(
+        &mut self,
+        update: &UpdateExpression,
+        ctx: &mut JSContext,
+        bypass_with_target: bool,
+    ) -> Result<u16, String> {
         match &*update.argument {
             Expression::Identifier(id) => {
                 if let Some(entry) = self.lookup_var(&id.name) {
@@ -5528,6 +5915,63 @@ impl CodeGenerator {
                             id.name
                         ));
                     }
+                }
+                let with_target = if bypass_with_target || self.with_scopes.is_empty() {
+                    false
+                } else {
+                    match self.lookup_var_scope_index(&id.name) {
+                        Some(index) => self.with_applies_to_local(&id.name, index),
+                        None => self.with_applies_to_outer(&id.name),
+                    }
+                };
+                if with_target {
+                    let object = self.emit_with_resolve(&id.name, ctx);
+                    let fallback_jump = self.emit_jump_if_nullish(object);
+                    let current = self.alloc_register();
+                    self.emit_with_get_resolved(current, object, &id.name, ctx);
+                    let old_val = if update.prefix {
+                        current
+                    } else {
+                        let old = self.alloc_register();
+                        self.emit(Opcode::Move);
+                        self.emit_u16(old);
+                        self.emit_u16(current);
+                        self.emit(Opcode::Pos);
+                        self.emit_u16(old);
+                        self.emit_u16(old);
+                        old
+                    };
+                    let op = match update.op {
+                        UpdateOp::Increment => Opcode::IncLocal,
+                        UpdateOp::Decrement => Opcode::DecLocal,
+                    };
+                    self.emit(op);
+                    self.emit_u16(current);
+                    self.emit_with_set_resolved(object, current, &id.name, ctx);
+                    let result = self.alloc_register();
+                    self.emit(Opcode::Move);
+                    self.emit_u16(result);
+                    self.emit_u16(old_val);
+                    if !update.prefix {
+                        self.free_register(old_val);
+                    }
+                    self.free_register(current);
+                    self.emit(Opcode::Jump);
+                    let skip_fallback = self.code.len();
+                    self.emit_i32(0);
+                    let fallback_pos = self.code.len();
+                    self.patch_jump(fallback_jump, fallback_pos);
+                    let plain = self.gen_update_expression_impl(update, ctx, true)?;
+                    if plain != result {
+                        self.emit(Opcode::Move);
+                        self.emit_u16(result);
+                        self.emit_u16(plain);
+                        self.free_register(plain);
+                    }
+                    let end_pos = self.code.len();
+                    self.patch_jump(skip_fallback, end_pos);
+                    self.free_register(object);
+                    return Ok(result);
                 }
                 match self.resolve_var(&id.name, ctx) {
                     Some(VarLocation::Local(slot)) => {
@@ -5766,6 +6210,15 @@ impl CodeGenerator {
         assign: &AssignmentExpression,
         ctx: &mut JSContext,
     ) -> Result<u16, String> {
+        self.gen_assignment_expression_impl(assign, ctx, false)
+    }
+
+    fn gen_assignment_expression_impl(
+        &mut self,
+        assign: &AssignmentExpression,
+        ctx: &mut JSContext,
+        bypass_with_target: bool,
+    ) -> Result<u16, String> {
         let is_compound = Self::assign_op_to_reg_opcode(&assign.op);
 
         match &assign.left {
@@ -5783,6 +6236,173 @@ impl CodeGenerator {
                             name
                         ));
                     }
+                }
+
+                let with_target = if bypass_with_target || self.with_scopes.is_empty() {
+                    false
+                } else {
+                    match self.lookup_var_scope_index(name) {
+                        Some(index) => self.with_applies_to_local(name, index),
+                        None => self.with_applies_to_outer(name),
+                    }
+                };
+
+                if with_target
+                    && matches!(
+                        assign.op,
+                        AssignOp::LogicalAndAssign
+                            | AssignOp::LogicalOrAssign
+                            | AssignOp::NullishAssign
+                    )
+                {
+                    let object = self.emit_with_resolve(name, ctx);
+                    let fallback_jump = self.emit_jump_if_nullish(object);
+                    let current = self.alloc_register();
+                    self.emit_with_get_resolved(current, object, name, ctx);
+                    let jump_to_end = match assign.op {
+                        AssignOp::LogicalAndAssign => {
+                            self.emit(Opcode::JumpIfNot);
+                            self.emit_u16(current);
+                            let patch = self.code.len();
+                            self.emit_i32(0);
+                            patch
+                        }
+                        AssignOp::LogicalOrAssign => {
+                            self.emit(Opcode::JumpIf);
+                            self.emit_u16(current);
+                            let patch = self.code.len();
+                            self.emit_i32(0);
+                            patch
+                        }
+                        AssignOp::NullishAssign => {
+                            let null_reg = self.alloc_register();
+                            self.emit(Opcode::LoadNull);
+                            self.emit_u16(null_reg);
+                            let cmp_reg = self.alloc_register();
+                            self.emit(Opcode::StrictEq);
+                            self.emit_u16(cmp_reg);
+                            self.emit_u16(current);
+                            self.emit_u16(null_reg);
+                            self.emit(Opcode::JumpIf);
+                            self.emit_u16(cmp_reg);
+                            let jump_to_assign = self.code.len();
+                            self.emit_i32(0);
+
+                            let undef_reg = self.alloc_register();
+                            self.emit(Opcode::LoadUndefined);
+                            self.emit_u16(undef_reg);
+                            self.emit(Opcode::StrictEq);
+                            self.emit_u16(cmp_reg);
+                            self.emit_u16(current);
+                            self.emit_u16(undef_reg);
+                            self.emit(Opcode::JumpIfNot);
+                            self.emit_u16(cmp_reg);
+                            let jump_to_end = self.code.len();
+                            self.emit_i32(0);
+
+                            let assign_pos = self.code.len();
+                            self.patch_jump(jump_to_assign, assign_pos);
+
+                            self.free_register(undef_reg);
+                            self.free_register(cmp_reg);
+                            self.free_register(null_reg);
+                            jump_to_end
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let rhs = self.gen_expression(&assign.right, ctx)?;
+                    if current != rhs {
+                        self.emit(Opcode::Move);
+                        self.emit_u16(current);
+                        self.emit_u16(rhs);
+                        self.free_register(rhs);
+                    }
+                    self.emit_with_set_resolved(object, current, name, ctx);
+                    let result = self.alloc_register();
+                    self.emit(Opcode::Move);
+                    self.emit_u16(result);
+                    self.emit_u16(current);
+                    self.free_register(current);
+                    self.emit(Opcode::Jump);
+                    let skip_fallback = self.code.len();
+                    self.emit_i32(0);
+                    let fallback_pos = self.code.len();
+                    self.patch_jump(fallback_jump, fallback_pos);
+                    let plain = self.gen_assignment_expression_impl(assign, ctx, true)?;
+                    if plain != result {
+                        self.emit(Opcode::Move);
+                        self.emit_u16(result);
+                        self.emit_u16(plain);
+                        self.free_register(plain);
+                    }
+                    let end_pos = self.code.len();
+                    self.patch_jump(jump_to_end, end_pos);
+                    self.patch_jump(skip_fallback, end_pos);
+                    self.free_register(object);
+                    return Ok(result);
+                }
+
+                if with_target {
+                    if let Some(op) = is_compound {
+                        let object = self.emit_with_resolve(name, ctx);
+                        let fallback_jump = self.emit_jump_if_nullish(object);
+                        let current = self.alloc_register();
+                        self.emit_with_get_resolved(current, object, name, ctx);
+                        let rhs = self.gen_expression(&assign.right, ctx)?;
+                        self.emit(op);
+                        self.emit_u16(current);
+                        self.emit_u16(current);
+                        self.emit_u16(rhs);
+                        self.free_register(rhs);
+                        self.emit_with_set_resolved(object, current, name, ctx);
+                        let result = self.alloc_register();
+                        self.emit(Opcode::Move);
+                        self.emit_u16(result);
+                        self.emit_u16(current);
+                        self.free_register(current);
+                        self.emit(Opcode::Jump);
+                        let skip_fallback = self.code.len();
+                        self.emit_i32(0);
+                        let fallback_pos = self.code.len();
+                        self.patch_jump(fallback_jump, fallback_pos);
+                        let plain = self.gen_assignment_expression_impl(assign, ctx, true)?;
+                        if plain != result {
+                            self.emit(Opcode::Move);
+                            self.emit_u16(result);
+                            self.emit_u16(plain);
+                            self.free_register(plain);
+                        }
+                        let end_pos = self.code.len();
+                        self.patch_jump(skip_fallback, end_pos);
+                        self.free_register(object);
+                        return Ok(result);
+                    }
+                    let object = self.emit_with_resolve(name, ctx);
+                    let fallback_jump = self.emit_jump_if_nullish(object);
+                    let val = self.gen_expression_with_assign_name(&assign.right, name, ctx)?;
+                    self.emit_with_set_resolved(object, val, name, ctx);
+                    let result = self.alloc_register();
+                    self.emit(Opcode::Move);
+                    self.emit_u16(result);
+                    self.emit_u16(val);
+                    self.free_register(val);
+                    self.emit(Opcode::Jump);
+                    let skip_fallback = self.code.len();
+                    self.emit_i32(0);
+                    let fallback_pos = self.code.len();
+                    self.patch_jump(fallback_jump, fallback_pos);
+                    let plain = self.gen_assignment_expression_impl(assign, ctx, true)?;
+                    if plain != result {
+                        self.emit(Opcode::Move);
+                        self.emit_u16(result);
+                        self.emit_u16(plain);
+                        self.free_register(plain);
+                    }
+                    let end_pos = self.code.len();
+                    self.patch_jump(skip_fallback, end_pos);
+                    self.free_register(object);
+                    return Ok(result);
                 }
 
                 if matches!(
@@ -6709,7 +7329,8 @@ impl CodeGenerator {
         }
 
         let is_self_recursive_call = matches!(&*call.callee, Expression::Identifier(id)
-            if self.current_function_name.as_ref().map_or(false, |n| n == &id.name)
+            if self.with_scopes.is_empty()
+                && self.current_function_name.as_ref().map_or(false, |n| n == &id.name)
                 && self.lookup_var_slot(&id.name).is_none()
                 && !self.upvalue_slots.contains_key(&id.name));
 

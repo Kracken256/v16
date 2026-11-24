@@ -46,6 +46,7 @@ pub struct CallFrame {
     pub var_name_map: *const Vec<(u32, u16)>,
     pub eval_bindings: Option<Box<std::collections::HashMap<u32, JSValue>>>,
     pub cached_arguments: Option<usize>,
+    pub with_env: Option<JSValue>,
 }
 
 impl CallFrame {
@@ -77,6 +78,7 @@ impl CallFrame {
             var_name_map: std::ptr::null(),
             eval_bindings: None,
             cached_arguments: None,
+            with_env: None,
         }
     }
 }
@@ -597,6 +599,13 @@ impl VM {
         frame.constants_ptr = constants_ptr;
         frame.constants_len = constants_len;
         frame.function_ptr = function_ptr;
+        frame.with_env = function_ptr
+            .map(|ptr| unsafe {
+                (&*(ptr as *const crate::object::function::JSFunction))
+                    .with_env
+                    .clone()
+            })
+            .flatten();
         frame.ic_table_ptr = function_ptr
             .and_then(|fptr| {
                 let js_func = unsafe { JSValue::function_from_ptr(fptr) };
@@ -741,6 +750,9 @@ impl VM {
         frame.constants_ptr = constants_ptr;
         frame.constants_len = constants_len;
         frame.function_ptr = function_ptr;
+        frame.with_env = function_ptr.map(|ptr| unsafe {
+            (&*(ptr as *const crate::object::function::JSFunction)).with_env.clone()
+        }).flatten();
         frame.ic_table_ptr = ic_table_ptr;
         frame.this_value = this_value;
         frame.dst_reg = dst_reg;
@@ -2337,6 +2349,7 @@ impl VM {
         frame.constants_len = bytecode.effective_const_len();
         frame.return_pc = 0;
         frame.function_ptr = None;
+        frame.with_env = None;
         frame.this_value = this_value;
         frame.saved_args.clear();
         frame.upvalue_sync_map = None;
@@ -2644,6 +2657,9 @@ impl VM {
             frame.constants_len = bytecode.effective_const_len();
             frame.return_pc = 0;
             frame.function_ptr = self.pending_function_ptr.take();
+            frame.with_env = frame.function_ptr.map(|ptr| unsafe {
+                (&*(ptr as *const crate::object::function::JSFunction)).with_env.clone()
+            }).flatten();
             frame.this_value = frame_this;
             frame.saved_args.clear();
             if let Some(args) = saved_args {
@@ -6606,6 +6622,242 @@ impl VM {
                     self.set_reg(obj_reg, obj_val);
                 }
 
+                Opcode::WithEnter => {
+                    let src = self.read_u16_pc();
+                    let mut value = self.get_reg(src);
+                    if value.is_null() || value.is_undefined() {
+                        self.set_pending_type_error(ctx, "Cannot convert null or undefined to object");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
+                    if !value.is_object_like() {
+                        let boxed = crate::builtins::object::object_to_object(ctx, &value);
+                        if boxed.is_object_like() {
+                            value = boxed;
+                        } else {
+                            self.set_pending_type_error(
+                                ctx,
+                                "Cannot convert value to object",
+                            );
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    let parent = self.frames[self.frame_index]
+                        .with_env
+                        .clone()
+                        .unwrap_or_else(JSValue::undefined);
+                    let object_atom = ctx.intern("\u{1}with_object");
+                    let parent_atom = ctx.intern("\u{1}with_parent");
+                    let mut env = crate::object::object::JSObject::new();
+                    env.set(object_atom, value);
+                    env.set(parent_atom, parent);
+                    let ptr = Box::into_raw(Box::new(env)) as usize;
+                    ctx.runtime_mut().gc_heap_mut().track(ptr);
+                    self.frames[self.frame_index].with_env = Some(JSValue::new_object(ptr));
+                }
+                Opcode::WithExit => {
+                    let current = self.frames[self.frame_index].with_env.clone();
+                    if let Some(env_val) = current {
+                        let parent_atom = ctx.intern("\u{1}with_parent");
+                        let env_obj =
+                            unsafe { JSValue::object_from_ptr(env_val.get_ptr()) };
+                        let parent = env_obj.get_own(parent_atom);
+                        self.frames[self.frame_index].with_env =
+                            parent.filter(|p| p.is_object_like());
+                    }
+                }
+                Opcode::WithHas => {
+                    let dst = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let found = self.with_find_object(ctx, atom, instr_pc, dst).is_some();
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                        continue;
+                    }
+                    self.set_reg(dst, JSValue::bool(found));
+                }
+                Opcode::WithGet => {
+                    let dst = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    if let Some(object) = self.with_find_object(ctx, atom, instr_pc, dst) {
+                        if self.pending_throw.is_none() {
+                            self.get_named_prop_result(ctx, dst, object, atom, instr_pc);
+                        }
+                    }
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+                Opcode::WithSet => {
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let src = self.read_u16_pc();
+                    let value = self.get_reg(src);
+                    if let Some(object) = self.with_find_object(ctx, atom, instr_pc, u16::MAX) {
+                        if self.pending_throw.is_none() {
+                            self.set_named_prop(ctx, object, value, atom, usize::MAX);
+                        }
+                    }
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+                Opcode::WithGetVar => {
+                    let dst = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let kind = self.read_u8();
+                    let index = self.read_u16_pc();
+                    let flags = self.read_u8();
+                    self.with_get_var(ctx, dst, atom, kind, index, flags, instr_pc);
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+                Opcode::WithSetVar => {
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let src = self.read_u16_pc();
+                    let kind = self.read_u8();
+                    let index = self.read_u16_pc();
+                    let _flags = self.read_u8();
+                    let value = self.get_reg(src);
+                    self.with_set_var(ctx, atom, value, kind, index, instr_pc);
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+                Opcode::WithDelete => {
+                    let dst = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let mut result = true;
+                    if let Some(object) = self.with_find_object(ctx, atom, instr_pc, u16::MAX) {
+                        if self.pending_throw.is_none() {
+                            result = unsafe { JSValue::object_from_ptr_mut(object.get_ptr()) }
+                                .delete(atom);
+                        }
+                    }
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                    self.set_reg(dst, JSValue::bool(result));
+                }
+
+                Opcode::WithResolve => {
+                    let dst = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let found = self.with_find_object(ctx, atom, instr_pc, u16::MAX);
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                    self.set_reg(dst, found.unwrap_or_else(JSValue::undefined));
+                }
+                Opcode::WithGetResolved => {
+                    let dst = self.read_u16_pc();
+                    let obj_reg = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let object = self.get_reg(obj_reg);
+                    if object.is_object_like() {
+                        let exists = unsafe { JSValue::object_from_ptr(object.get_ptr()) }
+                            .has_property(atom);
+                        if exists {
+                            self.get_named_prop_result(ctx, dst, object, atom, instr_pc);
+                        } else if self.frames[self.frame_index].is_strict_frame {
+                            self.set_pending_reference_error(
+                                ctx,
+                                "Cannot access variable before initialization",
+                            );
+                        } else {
+                            self.set_reg(dst, JSValue::undefined());
+                        }
+                    } else {
+                        self.set_reg(dst, JSValue::undefined());
+                    }
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+                Opcode::WithSetResolved => {
+                    let obj_reg = self.read_u16_pc();
+                    let val_reg = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let object = self.get_reg(obj_reg);
+                    let value = self.get_reg(val_reg);
+                    if object.is_object_like() {
+                        let exists = unsafe { JSValue::object_from_ptr(object.get_ptr()) }
+                            .has_property(atom);
+                        if !exists && self.frames[self.frame_index].is_strict_frame {
+                            self.set_pending_reference_error(
+                                ctx,
+                                "Cannot assign to undeclared variable",
+                            );
+                        } else if !exists {
+                            if self.prototype_rejects_typed_array_set(ctx, object, atom) {
+                                if self.frames[self.frame_index].is_strict_frame {
+                                    self.set_pending_type_error(
+                                        ctx,
+                                        "Cannot create property on typed array prototype",
+                                    );
+                                }
+                            } else {
+                                unsafe { JSValue::object_from_ptr_mut(object.get_ptr()) }
+                                    .set(atom, value);
+                            }
+                        } else {
+                            self.set_named_prop(ctx, object, value, atom, usize::MAX);
+                        }
+                    }
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+
                 Opcode::CallCurrent1 => {
                     unsafe {
                         (*self.frames.as_mut_ptr().add(self.frame_index)).current_pc = instr_pc;
@@ -7522,6 +7774,7 @@ impl VM {
                     let has_prototype = function_kind & 1 != 0;
                     let is_class_constructor = function_kind & 2 != 0;
 
+                    func.with_env = self.frames[self.frame_index].with_env.clone();
                     let proto_atom = ctx.common_atoms.prototype;
                     let func_ptr = Box::into_raw(Box::new(func)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track_function(func_ptr);
@@ -8525,6 +8778,230 @@ impl VM {
     }
 
     #[inline(always)]
+    fn with_env_object(
+        &self,
+        env: &JSValue,
+        ctx: &mut JSContext,
+    ) -> Option<JSValue> {
+        if !env.is_object_like() {
+            return None;
+        }
+        let atom = ctx.intern("\u{1}with_object");
+        unsafe { JSValue::object_from_ptr(env.get_ptr()) }.get_own(atom)
+    }
+
+    fn with_env_parent(
+        &self,
+        env: &JSValue,
+        ctx: &mut JSContext,
+    ) -> Option<JSValue> {
+        if !env.is_object_like() {
+            return None;
+        }
+        let atom = ctx.intern("\u{1}with_parent");
+        unsafe { JSValue::object_from_ptr(env.get_ptr()) }.get_own(atom)
+    }
+
+    fn with_is_unscopable(
+        &mut self,
+        ctx: &mut JSContext,
+        object: JSValue,
+        atom: crate::runtime::atom::Atom,
+        instr_pc: usize,
+        scratch: u16,
+    ) -> bool {
+        let unscopables_atom = crate::builtins::symbol::get_symbol_unscopables_atom(ctx);
+        let unscopables =
+            self.get_named_prop_result(ctx, scratch, object, unscopables_atom, usize::MAX);
+        if self.pending_throw.is_some() {
+            return false;
+        }
+        if let Some(value) = unscopables {
+            if value.is_object_like() {
+                let blocked = self.get_named_prop_result(ctx, scratch, value, atom, usize::MAX);
+                if self.pending_throw.is_some() {
+                    return false;
+                }
+                return blocked.map_or(false, |v| v.is_truthy());
+            }
+        }
+        false
+    }
+
+    fn with_find_object(
+        &mut self,
+        ctx: &mut JSContext,
+        atom: crate::runtime::atom::Atom,
+        instr_pc: usize,
+        scratch: u16,
+    ) -> Option<JSValue> {
+        let saved_scratch = if scratch == u16::MAX {
+            Some((0u16, self.get_reg(0)))
+        } else {
+            None
+        };
+        let scratch = if scratch == u16::MAX { 0 } else { scratch };
+        let object_atom = ctx.intern("\u{1}with_object");
+        let parent_atom = ctx.intern("\u{1}with_parent");
+        let mut env = self.frames[self.frame_index].with_env.clone();
+        let mut result = None;
+        while let Some(env_val) = env {
+            if !env_val.is_object_like() {
+                break;
+            }
+            let env_obj = unsafe { JSValue::object_from_ptr(env_val.get_ptr()) };
+            let object = env_obj.get_own(object_atom);
+            let parent = env_obj.get_own(parent_atom);
+            if let Some(object_val) = object {
+                if object_val.is_object_like() {
+                    let has = unsafe { JSValue::object_from_ptr(object_val.get_ptr()) }
+                        .has_property(atom);
+                    if has
+                        && !self.with_is_unscopable(ctx, object_val, atom, instr_pc, scratch)
+                    {
+                        if self.pending_throw.is_none() {
+                            result = Some(object_val);
+                        }
+                        break;
+                    }
+                    if self.pending_throw.is_some() {
+                        break;
+                    }
+                }
+            }
+            env = match parent {
+                Some(p) if p.is_object_like() => Some(p),
+                _ => None,
+            };
+        }
+        if let Some((slot, value)) = saved_scratch {
+            self.set_reg(slot, value);
+        }
+        result
+    }
+
+    fn with_upvalue_get(&self, slot: usize) -> JSValue {
+        if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
+            let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
+            unsafe { *(*std::rc::Rc::as_ptr(rc)).as_ptr() }
+        } else {
+            JSValue::undefined()
+        }
+    }
+
+    fn with_upvalue_set(&mut self, slot: usize, val: JSValue) {
+        if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
+            let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
+            unsafe { (*std::rc::Rc::as_ptr(rc)).as_ptr().write(val) };
+        }
+    }
+
+    fn with_get_var(
+        &mut self,
+        ctx: &mut JSContext,
+        dst: u16,
+        atom: crate::runtime::atom::Atom,
+        kind: u8,
+        index: u16,
+        flags: u8,
+        instr_pc: usize,
+    ) {
+        if let Some(object) = self.with_find_object(ctx, atom, instr_pc, dst) {
+            if self.pending_throw.is_some() {
+                return;
+            }
+            let exists = unsafe { JSValue::object_from_ptr(object.get_ptr()) }
+                .has_property(atom);
+            if !exists && self.frames[self.frame_index].is_strict_frame {
+                self.set_pending_reference_error(ctx, "Cannot access variable before initialization");
+                return;
+            }
+            if exists {
+                self.get_named_prop_result(ctx, dst, object, atom, instr_pc);
+            } else {
+                self.set_reg(dst, JSValue::undefined());
+            }
+            return;
+        }
+        if self.pending_throw.is_some() {
+            return;
+        }
+        if kind == 0 {
+            let global = ctx.global();
+            let mut found = false;
+            if global.is_object_like() {
+                let global_obj = unsafe { JSValue::object_from_ptr(global.get_ptr()) };
+                if global_obj.has_property(atom) {
+                    self.get_named_prop_result(ctx, dst, global, atom, instr_pc);
+                    found = true;
+                }
+            }
+            if !found {
+                if flags & 2 != 0 {
+                    self.set_pending_reference_error(
+                        ctx,
+                        "Cannot access variable before initialization",
+                    );
+                } else {
+                    self.set_reg(dst, JSValue::undefined());
+                }
+            }
+            return;
+        }
+        let value = if kind == 2 {
+            self.with_upvalue_get(index as usize)
+        } else {
+            self.get_reg(index)
+        };
+        if flags & 1 != 0 && value.is_tdz() {
+            self.set_pending_reference_error(
+                ctx,
+                "Cannot access variable before initialization",
+            );
+            return;
+        }
+        self.set_reg(dst, value);
+    }
+
+    fn with_set_var(
+        &mut self,
+        ctx: &mut JSContext,
+        atom: crate::runtime::atom::Atom,
+        value: JSValue,
+        kind: u8,
+        index: u16,
+        instr_pc: usize,
+    ) {
+        if let Some(object) = self.with_find_object(ctx, atom, instr_pc, u16::MAX) {
+            if self.pending_throw.is_none() {
+                self.set_named_prop(ctx, object, value, atom, usize::MAX);
+            }
+            return;
+        }
+        if self.pending_throw.is_some() {
+            return;
+        }
+        if kind == 0 {
+            let global = ctx.global();
+            if global.is_object_like() {
+                let global_obj = unsafe { JSValue::object_from_ptr(global.get_ptr()) };
+                if self.frames[self.frame_index].is_strict_frame && !global_obj.has_property(atom)
+                {
+                    self.set_pending_reference_error(
+                        ctx,
+                        "Cannot assign to undeclared variable",
+                    );
+                    return;
+                }
+                self.set_named_prop(ctx, global, value, atom, usize::MAX);
+            }
+        } else if kind == 2 {
+            self.with_upvalue_set(index as usize, value);
+        } else {
+            self.set_reg(index, value);
+        }
+    }
+
     fn get_named_prop_result(
         &mut self,
         ctx: &mut JSContext,
@@ -8610,9 +9087,13 @@ impl VM {
                 if let Some(val) = pobj.get_own(atom) {
                     self.set_reg(dst, val);
 
-                    let ic_table_ptr = self.cached_ic_table_ptr;
+                    let ic_table_ptr = if ic_pc == usize::MAX {
+                std::ptr::null_mut()
+            } else {
+                self.cached_ic_table_ptr
+            };
                     if !ic_table_ptr.is_null() {
-                        let pc = ic_pc;
+                        let pc = if ic_pc == usize::MAX { 0 } else { ic_pc };
                         let pseudo_id = if obj_val.is_string() {
                             PRIM_STRING_SHAPE_ID
                         } else {
@@ -8641,9 +9122,13 @@ impl VM {
         if obj_val.is_object_like() {
             let ptr = obj_val.get_ptr();
             let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
-            let ic_table_ptr = self.cached_ic_table_ptr;
+            let ic_table_ptr = if ic_pc == usize::MAX {
+                std::ptr::null_mut()
+            } else {
+                self.cached_ic_table_ptr
+            };
 
-            let pc = ic_pc;
+            let pc = if ic_pc == usize::MAX { 0 } else { ic_pc };
             let mut ic_hit = false;
             if let Some(shape_id) = js_obj.get_shape_id() {
                 if !ic_table_ptr.is_null() {
@@ -8958,7 +9443,7 @@ impl VM {
                 }
             }
 
-            None
+            Some(self.get_reg(dst))
         } else if obj_val.is_string() {
             if atom == ctx.common_atoms.length {
                 Some(JSValue::new_int(

@@ -141,6 +141,17 @@ pub enum Opcode {
     SetMethodProp = 192,
     DefineClassPrototype = 208,
     DefineClassAccessor = 209,
+    WithEnter = 210,
+    WithExit = 211,
+    WithHas = 212,
+    WithGet = 213,
+    WithSet = 214,
+    WithGetVar = 215,
+    WithSetVar = 216,
+    WithDelete = 217,
+    WithResolve = 218,
+    WithGetResolved = 219,
+    WithSetResolved = 220,
 
     Pos = 193,
     DefineGlobal = 194,
@@ -311,6 +322,17 @@ impl Opcode {
             192 => Some(Opcode::SetMethodProp),
             208 => Some(Opcode::DefineClassPrototype),
             209 => Some(Opcode::DefineClassAccessor),
+            210 => Some(Opcode::WithEnter),
+            211 => Some(Opcode::WithExit),
+            212 => Some(Opcode::WithHas),
+            213 => Some(Opcode::WithGet),
+            214 => Some(Opcode::WithSet),
+            215 => Some(Opcode::WithGetVar),
+            216 => Some(Opcode::WithSetVar),
+            217 => Some(Opcode::WithDelete),
+            218 => Some(Opcode::WithResolve),
+            219 => Some(Opcode::WithGetResolved),
+            220 => Some(Opcode::WithSetResolved),
             193 => Some(Opcode::Pos),
             194 => Some(Opcode::DefineGlobal),
             195 => Some(Opcode::DeleteGlobal),
@@ -447,6 +469,13 @@ impl Opcode {
             Opcode::SetMethodProp => 7,
             Opcode::DefineClassPrototype => 5,
             Opcode::DefineClassAccessor => 9,
+            Opcode::WithEnter => 3,
+            Opcode::WithExit => 1,
+            Opcode::WithHas | Opcode::WithGet | Opcode::WithDelete => 7,
+            Opcode::WithSet => 7,
+            Opcode::WithGetVar | Opcode::WithSetVar => 11,
+            Opcode::WithResolve => 7,
+            Opcode::WithGetResolved | Opcode::WithSetResolved => 9,
             Opcode::Pos => 5,
             Opcode::DefineGlobal => 7,
             Opcode::DeleteGlobal => 7,
@@ -1025,6 +1054,66 @@ impl Bytecode {
                     let getter = read_u16(5);
                     let setter = read_u16(7);
                     write!(operands, " r{}, r{}, r{}, r{}", obj, key, getter, setter).unwrap();
+                }
+                Opcode::WithEnter => {
+                    let src = read_u16(1);
+                    write!(operands, " r{}", src).unwrap();
+                }
+                Opcode::WithExit => {
+                    write!(operands, "").unwrap();
+                }
+                Opcode::WithHas | Opcode::WithGet | Opcode::WithDelete => {
+                    let dst = read_u16(1);
+                    let atom = read_u32(3);
+                    write!(operands, " r{}, atom({})", dst, atom).unwrap();
+                }
+                Opcode::WithSet => {
+                    let atom = read_u32(1);
+                    let val = read_u16(5);
+                    write!(operands, " atom({}), r{}", atom, val).unwrap();
+                }
+                Opcode::WithResolve => {
+                    let dst = read_u16(1);
+                    let atom = read_u32(3);
+                    write!(operands, " r{}, atom({})", dst, atom).unwrap();
+                }
+                Opcode::WithGetResolved => {
+                    let dst = read_u16(1);
+                    let obj = read_u16(3);
+                    let atom = read_u32(5);
+                    write!(operands, " r{}, r{}, atom({})", dst, obj, atom).unwrap();
+                }
+                Opcode::WithSetResolved => {
+                    let obj = read_u16(1);
+                    let val = read_u16(3);
+                    let atom = read_u32(5);
+                    write!(operands, " r{}, r{}, atom({})", obj, val, atom).unwrap();
+                }
+                Opcode::WithGetVar => {
+                    let dst = read_u16(1);
+                    let atom = read_u32(3);
+                    let kind = read_u8(7);
+                    let index = read_u16(8);
+                    let flags = read_u8(10);
+                    write!(
+                        operands,
+                        " r{}, atom({}), kind={}, idx={}, flags={}",
+                        dst, atom, kind, index, flags
+                    )
+                    .unwrap();
+                }
+                Opcode::WithSetVar => {
+                    let atom = read_u32(1);
+                    let val = read_u16(5);
+                    let kind = read_u8(7);
+                    let index = read_u16(8);
+                    let flags = read_u8(10);
+                    write!(
+                        operands,
+                        " atom({}), r{}, kind={}, idx={}, flags={}",
+                        atom, val, kind, index, flags
+                    )
+                    .unwrap();
                 }
                 Opcode::Pos => {
                     let dst = read_u16(1);

@@ -56,6 +56,7 @@ pub struct JSFunction {
     pub source_filename: String,
     pub line_number_table: Option<std::sync::Arc<LineNumberTable>>,
     pub source_text: Option<String>,
+    pub with_env: Option<JSValue>,
 }
 
 impl JSFunction {
@@ -76,6 +77,7 @@ impl JSFunction {
             source_filename: String::new(),
             line_number_table: None,
             source_text: None,
+            with_env: None,
         }
     }
 

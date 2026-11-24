@@ -1135,12 +1135,56 @@ impl Parser {
         }))
     }
 
+    fn is_lexical_declaration_start(&self) -> bool {
+        if self.at_keyword("const") || self.at_keyword("class") {
+            return true;
+        }
+        if self.at_keyword("let") {
+            if self.peek_at("[") {
+                return true;
+            }
+            if self
+                .peek_token
+                .as_ref()
+                .map_or(false, |t| t.line_terminator_before)
+            {
+                return false;
+            }
+            return self.peek_at("{")
+                || self.peek_token.as_ref().map_or(false, |t| {
+                    matches!(t.token_type, TokenType::Identifier)
+                        || (matches!(t.token_type, TokenType::Keyword) && t.value != "in")
+                });
+        }
+        false
+    }
+
+    fn is_labelled_function(node: &ASTNode) -> bool {
+        match node {
+            ASTNode::LabelledStatement(labelled) => Self::is_labelled_function(&labelled.body),
+            ASTNode::FunctionDeclaration(_) => true,
+            _ => false,
+        }
+    }
+
     fn parse_with_statement(&mut self) -> Result<ASTNode, String> {
         self.expect("with")?;
         self.expect("(")?;
         let object = self.parse_expression()?;
         self.expect(")")?;
+        if self.is_lexical_declaration_start() {
+            return Err(
+                "SyntaxError: Lexical declaration cannot appear in a single-statement context"
+                    .to_string(),
+            );
+        }
         let body = self.parse_statement()?;
+        if Self::is_labelled_function(&body) {
+            return Err(
+                "SyntaxError: Labelled function declaration not allowed in with statement"
+                    .to_string(),
+            );
+        }
         Ok(ASTNode::WithStatement(WithStatement {
             object,
             body: Box::new(body),
@@ -1219,6 +1263,12 @@ impl Parser {
             let label = self.cur_value().to_string();
             self.advance();
             self.advance();
+            if self.is_lexical_declaration_start() {
+                return Err(
+                    "SyntaxError: Lexical declaration cannot appear in a single-statement context"
+                        .to_string(),
+                );
+            }
             let body = self.parse_statement()?;
             return Ok(ASTNode::LabelledStatement(LabelledStatement {
                 label,
