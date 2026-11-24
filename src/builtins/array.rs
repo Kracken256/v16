@@ -2669,18 +2669,20 @@ fn array_from_async(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
 
         let len_atom = ctx.common_atoms.length;
-        if let Some(len_val) = obj.get(len_atom) {
-            let len = len_val.get_int() as usize;
-            let mut elements: Vec<JSValue> = Vec::with_capacity(len);
-            for i in 0..len {
-                if let Some(val) = array_get(obj, i, ctx) {
-                    elements.push(val);
-                } else {
-                    elements.push(JSValue::undefined());
-                }
+        let len_val = match get_property_with_getter(ctx, *items, len_atom) {
+            Ok(v) => v,
+            Err(_) => return create_thenable_result(ctx, Vec::new()),
+        };
+        let len = js_to_length(&len_val) as usize;
+        let mut elements: Vec<JSValue> = Vec::with_capacity(len.min(1 << 20));
+        for i in 0..len.min(1 << 24) {
+            if let Some(val) = array_get(obj, i, ctx) {
+                elements.push(val);
+            } else {
+                elements.push(JSValue::undefined());
             }
-            return create_thenable_result(ctx, elements);
         }
+        return create_thenable_result(ctx, elements);
     }
 
     create_thenable_result(ctx, Vec::new())
