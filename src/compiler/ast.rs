@@ -378,6 +378,7 @@ pub struct AwaitExpression {
 pub struct YieldExpression {
     pub argument: Option<Box<Expression>>,
     pub delegate: bool,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]

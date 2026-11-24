@@ -1024,6 +1024,10 @@ fn is_import_call(expr: &Expression) -> bool {
     )
 }
 
+fn unparenthesized_yield(expr: &Expression) -> bool {
+    matches!(expr, Expression::YieldExpression(y) if !y.parenthesized)
+}
+
 fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
     match expr {
         Expression::Identifier(id) => check_identifier_reference(&id.name, ctx),
@@ -1139,7 +1143,9 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             // inside a generator). Our parser is context-free and always produces a
             // YieldExpression, so reject it here when the enclosing context is a
             // generator.
-            if ctx.in_generator && matches!(*u.argument, Expression::YieldExpression(_)) {
+            if ctx.in_generator
+                && matches!(*u.argument, Expression::YieldExpression(ref y) if !y.parenthesized)
+            {
                 return Err(
                     "SyntaxError: 'yield' is not allowed as a unary operand in generator functions"
                         .to_string(),
@@ -1158,14 +1164,39 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             validate_expression(&u.argument, ctx)
         }
         Expression::BinaryExpression(b) => {
+            if ctx.in_generator
+                && (unparenthesized_yield(&b.left)
+                    || unparenthesized_yield(&b.right))
+            {
+                return Err(
+                    "SyntaxError: yield expression may not be a binary operand".to_string()
+                );
+            }
             validate_expression(&b.left, ctx)?;
             validate_expression(&b.right, ctx)
         }
         Expression::LogicalExpression(l) => {
+            if ctx.in_generator
+                && (unparenthesized_yield(&l.left)
+                    || unparenthesized_yield(&l.right))
+            {
+                return Err(
+                    "SyntaxError: yield expression may not be a logical operand".to_string()
+                );
+            }
             validate_expression(&l.left, ctx)?;
             validate_expression(&l.right, ctx)
         }
         Expression::ConditionalExpression(c) => {
+            if ctx.in_generator
+                && (unparenthesized_yield(&c.test)
+                    || unparenthesized_yield(&c.consequent)
+                    || unparenthesized_yield(&c.alternate))
+            {
+                return Err(
+                    "SyntaxError: yield expression may not be a conditional operand".to_string()
+                );
+            }
             validate_expression(&c.test, ctx)?;
             validate_expression(&c.consequent, ctx)?;
             validate_expression(&c.alternate, ctx)

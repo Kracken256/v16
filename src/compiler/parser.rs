@@ -2255,8 +2255,11 @@ impl Parser {
     fn parse_primary(&mut self) -> Result<Expression, String> {
         if self.at_punct("(") {
             self.advance();
-            let expr = self.parse_expression()?;
+            let mut expr = self.parse_expression()?;
             self.expect(")")?;
+            if let Expression::YieldExpression(y) = &mut expr {
+                y.parenthesized = true;
+            }
             return Ok(expr);
         }
 
@@ -2430,7 +2433,7 @@ impl Parser {
 
         if self.at_keyword("yield") {
             self.advance();
-            let delegate = if self.at_punct("*") {
+            let delegate = if self.at_punct("*") && !self.has_line_terminator() {
                 self.advance();
                 true
             } else {
