@@ -324,6 +324,11 @@ pub fn init_array(ctx: &mut JSContext) {
     );
     set_ne(
         &mut proto_obj,
+        ctx.intern("copyWithin"),
+        create_builtin_function(ctx, "array_copyWithin"),
+    );
+    set_ne(
+        &mut proto_obj,
         ctx.intern("splice"),
         create_builtin_function(ctx, "array_splice"),
     );
@@ -565,6 +570,10 @@ pub fn register_builtins(ctx: &mut JSContext) {
         HostFunction::method("reverse", 0, array_reverse),
     );
     ctx.register_builtin("array_fill", HostFunction::method("fill", 1, array_fill));
+    ctx.register_builtin(
+        "array_copyWithin",
+        HostFunction::method("copyWithin", 2, array_copy_within),
+    );
     ctx.register_builtin(
         "array_splice",
         HostFunction::method("splice", 2, array_splice),
@@ -1022,7 +1031,7 @@ fn array_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             for i in start..dense_len.min(len) {
                 if let Some(val) = dense_arr.elements.get(i as usize) {
                     if val.strict_eq(search) {
-                        return JSValue::new_int(i as i64);
+                        return JSValue::new_float(i as f64);
                     }
                 }
             }
@@ -1031,7 +1040,7 @@ fn array_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 let s = ctx.get_atom_str(slot.atom);
                 if let Ok(idx) = s.parse::<u64>() {
                     if idx >= start && idx < len && slot.value.strict_eq(search) {
-                        return JSValue::new_int(idx as i64);
+                        return JSValue::new_float(idx as f64);
                     }
                 }
             }
@@ -1040,7 +1049,7 @@ fn array_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         for i in start..len {
             if let Some(val) = array_get(obj, i as usize, ctx) {
                 if val.strict_eq(search) {
-                    return JSValue::new_int(i as i64);
+                    return JSValue::new_float(i as f64);
                 }
             }
         }
@@ -1706,9 +1715,10 @@ fn array_reduce(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     for i in start_index..len {
         if let Some(value) = array_get(obj, i as usize, ctx) {
-            let callback_args = vec![accumulator, value, JSValue::new_int(i as i64), this_obj];
-            if let Ok(result) = call_callback(ctx, callback, &callback_args) {
-                accumulator = result;
+            let callback_args = vec![accumulator, value, JSValue::new_float(i as f64), this_obj];
+            match call_callback(ctx, callback, &callback_args) {
+                Ok(result) => accumulator = result,
+                Err(_) => return JSValue::undefined(),
             }
         }
     }
@@ -1844,10 +1854,10 @@ fn array_find_index(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     for i in 0..len {
         if let Some(value) = array_get(obj, i as usize, ctx) {
-            let callback_args = vec![value, JSValue::new_int(i as i64), this_obj];
+            let callback_args = vec![value, JSValue::new_float(i as f64), this_obj];
             if let Ok(result) = call_callback_with_this(ctx, callback, this_arg, &callback_args) {
                 if result.is_truthy() {
-                    return JSValue::new_int(i as i64);
+                    return JSValue::new_float(i as f64);
                 }
             }
         }
@@ -1895,9 +1905,11 @@ fn array_reduce_right(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     while end_index >= 0 {
         if let Some(value) = array_get(obj, end_index as usize, ctx) {
-            let callback_args = vec![accumulator, value, JSValue::new_int(end_index), this_obj];
-            if let Ok(result) = call_callback(ctx, callback, &callback_args) {
-                accumulator = result;
+            let callback_args =
+                vec![accumulator, value, JSValue::new_float(end_index as f64), this_obj];
+            match call_callback(ctx, callback, &callback_args) {
+                Ok(result) => accumulator = result,
+                Err(_) => return JSValue::undefined(),
             }
         }
         end_index -= 1;
@@ -2027,6 +2039,39 @@ fn array_reverse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     this
 }
 
+fn to_integer_or_infinity(ctx: &mut JSContext, v: &JSValue) -> f64 {
+    match crate::builtins::global::js_to_number_value(ctx, v) {
+        Ok(n) => {
+            if n.is_nan() {
+                0.0
+            } else {
+                n.trunc()
+            }
+        }
+        Err(()) => f64::NAN,
+    }
+}
+
+fn relative_index(ctx: &mut JSContext, v: &JSValue, len: u64) -> u64 {
+    let n = to_integer_or_infinity(ctx, v);
+    if n.is_nan() || n == f64::NEG_INFINITY || n <= -1.0e300 {
+        0
+    } else if n < 0.0 {
+        let r = len as f64 + n;
+        if r <= 0.0 {
+            0
+        } else if r >= len as f64 {
+            len
+        } else {
+            r as u64
+        }
+    } else if n >= len as f64 {
+        len
+    } else {
+        n as u64
+    }
+}
+
 fn array_fill(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
         return JSValue::undefined();
@@ -2040,37 +2085,68 @@ fn array_fill(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len_atom = ctx.common_atoms.length;
     let len = {
         let arr = this.as_object();
-        safe_array_len_with_ctx(&arr, len_atom, ctx) as usize
+        safe_array_len_with_ctx(&arr, len_atom, ctx)
     };
-    let start = args
-        .get(2)
-        .map(|v| {
-            let i = v.get_int() as isize;
-            if i < 0 {
-                (len as isize + i).max(0) as usize
-            } else {
-                (i as usize).min(len)
-            }
-        })
-        .unwrap_or(0);
-    let end = args
-        .get(3)
-        .map(|v| {
-            let i = v.get_int() as isize;
-            if i < 0 {
-                (len as isize + i).max(0) as usize
-            } else {
-                (i as usize).min(len)
-            }
-        })
-        .unwrap_or(len);
+    let start = args.get(2).map(|v| relative_index(ctx, v, len)).unwrap_or(0);
+    let end = args.get(3).map(|v| relative_index(ctx, v, len)).unwrap_or(len);
     let arr = this.as_object_mut();
     for i in start..end {
-        let key = ctx.int_atom_mut(i);
+        let key = ctx.int_atom_mut(i as usize);
         arr.set(key, value);
     }
     this
 }
+
+fn array_copy_within(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = if args.is_empty() { JSValue::undefined() } else { args[0] };
+    if !require_object_coercible(ctx, &this) {
+        return JSValue::undefined();
+    }
+    let obj_val = to_object_or_return_undefined(this, ctx);
+    let len = {
+        let arr = obj_val.as_object();
+        safe_array_len_with_ctx(&arr, ctx.common_atoms.length, ctx)
+    };
+
+    let mut to = args.get(1).map(|v| relative_index(ctx, v, len)).unwrap_or(0);
+    let mut from = args.get(2).map(|v| relative_index(ctx, v, len)).unwrap_or(0);
+    let final_idx = match args.get(3) {
+        Some(v) if !v.is_undefined() => relative_index(ctx, v, len),
+        _ => len,
+    };
+
+    let mut count = final_idx.saturating_sub(from).min(len.saturating_sub(to));
+    let direction: i64 = if from < to && to < from + count {
+        from = from + count - 1;
+        to = to + count - 1;
+        -1
+    } else {
+        1
+    };
+
+    while count > 0 {
+        let from_key = ctx.int_atom_mut(from as usize);
+        let to_key = ctx.int_atom_mut(to as usize);
+        let obj = obj_val.as_object_mut();
+        if obj.has_property(from_key) {
+            let val = obj.get(from_key).unwrap_or(JSValue::undefined());
+            obj.set(to_key, val);
+        } else {
+            obj.delete(to_key);
+        }
+        if direction < 0 {
+            from -= 1;
+            to -= 1;
+        } else {
+            from += 1;
+            to += 1;
+        }
+        count -= 1;
+    }
+
+    obj_val
+}
+
 
 fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
@@ -2633,7 +2709,7 @@ fn array_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             for i in (0..=end_u.min(dense_len.saturating_sub(1))).rev() {
                 if let Some(val) = dense_arr.elements.get(i as usize) {
                     if val.strict_eq(&search) {
-                        return JSValue::new_int(i as i64);
+                        return JSValue::new_float(i as f64);
                     }
                 }
             }
@@ -2648,7 +2724,7 @@ fn array_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 }
             }
             if let Some(&max) = candidates.iter().max() {
-                return JSValue::new_int(max as i64);
+                return JSValue::new_float(max as f64);
             }
         }
     } else {
