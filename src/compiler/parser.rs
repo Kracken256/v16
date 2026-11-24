@@ -300,6 +300,10 @@ impl Parser {
     }
 
     fn parse_binding_pattern(&mut self) -> Result<BindingPattern, String> {
+        self.with_allow_in(Self::parse_binding_pattern_inner)
+    }
+
+    fn parse_binding_pattern_inner(&mut self) -> Result<BindingPattern, String> {
         if self.at_punct("[") {
             self.advance();
             let mut elements = Vec::new();
@@ -583,6 +587,17 @@ impl Parser {
         result
     }
 
+    fn with_allow_in<T>(
+        &mut self,
+        parse: fn(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let saved = self.allow_in;
+        self.allow_in = true;
+        let result = parse(self);
+        self.allow_in = saved;
+        result
+    }
+
     fn parse_block_body(&mut self) -> Result<BlockStatement, String> {
         self.expect("{")?;
         let (body, lines) = self.parse_statement_list_with_lines()?;
@@ -592,8 +607,11 @@ impl Parser {
 
     fn parse_function_body(&mut self, generator: bool) -> Result<BlockStatement, String> {
         let saved = self.in_generator;
+        let saved_allow_in = self.allow_in;
         self.in_generator = generator;
+        self.allow_in = true;
         let result = self.parse_block_body();
+        self.allow_in = saved_allow_in;
         self.in_generator = saved;
         result
     }
@@ -652,6 +670,10 @@ impl Parser {
     }
 
     fn parse_class_body(&mut self) -> Result<ClassBody, String> {
+        self.with_allow_in(Self::parse_class_body_inner)
+    }
+
+    fn parse_class_body_inner(&mut self) -> Result<ClassBody, String> {
         let mut elements = Vec::new();
         while !self.at_punct("}") && !self.is_eof() {
             if self.at_punct(";") {
@@ -2203,7 +2225,7 @@ impl Parser {
                 }
             } else if self.at_punct("[") {
                 self.advance();
-                let prop = self.parse_expression()?;
+                let prop = self.with_allow_in(Self::parse_expression)?;
                 self.expect("]")?;
                 expr = Expression::MemberExpression(MemberExpression {
                     object: Box::new(expr),
@@ -2235,6 +2257,10 @@ impl Parser {
     }
 
     fn parse_arguments(&mut self) -> Result<Vec<Argument>, String> {
+        self.with_allow_in(Self::parse_arguments_inner)
+    }
+
+    fn parse_arguments_inner(&mut self) -> Result<Vec<Argument>, String> {
         self.expect("(")?;
         let mut args = Vec::new();
         while !self.at_punct(")") && !self.is_eof() {
@@ -2255,7 +2281,7 @@ impl Parser {
     fn parse_primary(&mut self) -> Result<Expression, String> {
         if self.at_punct("(") {
             self.advance();
-            let mut expr = self.parse_expression()?;
+            let mut expr = self.with_allow_in(Self::parse_expression)?;
             self.expect(")")?;
             if let Expression::YieldExpression(y) = &mut expr {
                 y.parenthesized = true;
@@ -2518,7 +2544,7 @@ impl Parser {
                 }));
             } else if self.at_punct("[") {
                 self.advance();
-                let prop = self.parse_expression()?;
+                let prop = self.with_allow_in(Self::parse_expression)?;
                 self.expect("]")?;
                 callee = Box::new(Expression::MemberExpression(MemberExpression {
                     object: callee,
@@ -2553,6 +2579,10 @@ impl Parser {
     }
 
     fn parse_array_expression(&mut self) -> Result<Expression, String> {
+        self.with_allow_in(Self::parse_array_expression_inner)
+    }
+
+    fn parse_array_expression_inner(&mut self) -> Result<Expression, String> {
         self.expect("[")?;
         let mut elements = Vec::new();
         while !self.at_punct("]") && !self.is_eof() {
@@ -2580,6 +2610,10 @@ impl Parser {
     }
 
     fn parse_object_expression(&mut self) -> Result<Expression, String> {
+        self.with_allow_in(Self::parse_object_expression_inner)
+    }
+
+    fn parse_object_expression_inner(&mut self) -> Result<Expression, String> {
         self.expect("{")?;
         let mut properties = Vec::new();
         while !self.at_punct("}") && !self.is_eof() {
@@ -2853,7 +2887,7 @@ impl Parser {
         }
 
         loop {
-            let expr = self.parse_expression()?;
+            let expr = self.with_allow_in(Self::parse_expression)?;
             expressions.push(expr);
 
             if !self.at("}") {
