@@ -639,6 +639,39 @@ fn validate_class_declaration(cd: &ClassDeclaration, ctx: Ctx) -> Result<(), Str
     validate_class_body(&cd.body, ctx)
 }
 
+fn collect_parameter_names(params: &[Parameter], out: &mut Vec<(String, bool)>) {
+    for p in params {
+        match p {
+            Parameter::Identifier(name) => out.push((name.clone(), false)),
+            Parameter::Pattern(bp) => collect_binding_pattern_names(bp, out),
+            Parameter::AssignmentPattern(ap) => collect_assignment_target_names(&ap.left, out),
+            Parameter::RestElement(rest) => collect_assignment_target_names(&rest.argument, out),
+        }
+    }
+}
+
+fn validate_parameters_unique(params: &[Parameter], require_unique: bool) -> Result<(), String> {
+    let mut names = Vec::new();
+    collect_parameter_names(params, &mut names);
+    let mut seen = HashSet::new();
+    let mut duplicate = false;
+    for (name, _) in &names {
+        if !seen.insert(name.clone()) {
+            duplicate = true;
+        }
+    }
+    if !duplicate {
+        return Ok(());
+    }
+    let simple = params
+        .iter()
+        .all(|p| matches!(p, Parameter::Identifier(_)));
+    if require_unique || !simple {
+        return Err(redeclaration_error("duplicate parameter name"));
+    }
+    Ok(())
+}
+
 fn validate_function_body(
     params: &[Parameter],
     body: &BlockStatement,
@@ -648,6 +681,8 @@ fn validate_function_body(
     is_class_method: bool,
 ) -> Result<(), String> {
     let ctx = function_ctx(outer, is_async, generator, &body.body, is_class_method);
+    let require_unique = ctx.strict || has_use_strict_directive(&body.body);
+    validate_parameters_unique(params, require_unique)?;
     for p in params {
         validate_parameter(p, ctx)?;
     }
@@ -842,9 +877,33 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
         Expression::ObjectExpression(obj) => {
             for prop in &obj.properties {
                 match prop {
-                    Property::Property { key, value, .. } => {
+                    Property::Property {
+                        key,
+                        value,
+                        method,
+                        getter,
+                        setter,
+                        ..
+                    } => {
                         if let PropertyKey::Computed(k) = key {
                             validate_expression(k, ctx)?;
+                        }
+                        if let Expression::FunctionExpression(f) = value.as_ref() {
+                            if *method || *getter || *setter {
+                                validate_parameters_unique(&f.params, true)?;
+                                if *getter && !f.params.is_empty() {
+                                    return Err(
+                                        "SyntaxError: Getter must have no formal parameters"
+                                            .to_string(),
+                                    );
+                                }
+                                if *setter && f.params.len() != 1 {
+                                    return Err(
+                                        "SyntaxError: Setter must have exactly one formal parameter"
+                                            .to_string(),
+                                    );
+                                }
+                            }
                         }
                         validate_expression(value, ctx)?;
                     }
@@ -969,6 +1028,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                 in_generator: false,
                 in_static_block: false,
             };
+            validate_parameters_unique(&arrow.params, true)?;
             for p in &arrow.params {
                 validate_parameter(p, inner)?;
             }
