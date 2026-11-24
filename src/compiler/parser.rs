@@ -361,7 +361,14 @@ impl Parser {
                     || (self.at_punct("=") && matches!(key, PropertyKey::Identifier(_)))
                 {
                     match &key {
-                        PropertyKey::Identifier(name) => AssignmentTarget::Identifier(name.clone()),
+                        PropertyKey::Identifier(name) => {
+                            if is_reserved_word(name) {
+                                return Err(
+                                    self.error(&format!("Unexpected reserved word '{}'", name))
+                                );
+                            }
+                            AssignmentTarget::Identifier(name.clone())
+                        }
                         _ => return Err(self.error("invalid shorthand pattern")),
                     }
                 } else {
@@ -396,6 +403,9 @@ impl Parser {
         if !self.is_identifier_name() {
             return Err(self.error("expected identifier"));
         }
+        if is_reserved_word(&name) {
+            return Err(self.error(&format!("Unexpected reserved word '{}'", name)));
+        }
         self.advance();
         Ok(BindingPattern::Identifier(name))
     }
@@ -415,6 +425,9 @@ impl Parser {
         let name = match self.cur_type() {
             Some(TokenType::Identifier) | Some(TokenType::Keyword) => {
                 let n = self.cur_value().to_string();
+                if is_reserved_word(&n) {
+                    return Err(self.error(&format!("Unexpected reserved word '{}'", n)));
+                }
                 self.advance();
                 n
             }
@@ -444,6 +457,9 @@ impl Parser {
         ) && !self.at_punct("(")
         {
             let n = self.cur_value().to_string();
+            if is_reserved_word(&n) {
+                return Err(self.error(&format!("Unexpected reserved word '{}'", n)));
+            }
             self.advance();
             Some(n)
         } else {
@@ -520,6 +536,9 @@ impl Parser {
     fn parse_class_declaration(&mut self) -> Result<ASTNode, String> {
         self.expect("class")?;
         let name = self.cur_value().to_string();
+        if !self.is_identifier_name() || is_reserved_word(&name) {
+            return Err(self.error(&format!("Unexpected token '{}'", name)));
+        }
         self.advance();
         let super_class = if self.at_keyword("extends") {
             self.advance();
@@ -542,6 +561,9 @@ impl Parser {
         self.expect("class")?;
         let name = if self.is_identifier_name() && !self.at_keyword("extends") {
             let n = self.cur_value().to_string();
+            if is_reserved_word(&n) {
+                return Err(self.error(&format!("Unexpected reserved word '{}'", n)));
+            }
             self.advance();
             Some(n)
         } else {
@@ -2281,6 +2303,9 @@ impl Parser {
                     return Err(self.error("Unexpected reserved word 'import'"));
                 }
                 _ => {
+                    if self.cur_type() == Some(TokenType::Keyword) && is_reserved_word(&name) {
+                        return Err(self.error(&format!("Unexpected reserved word '{}'", name)));
+                    }
                     self.advance();
                     return Ok(Expression::Identifier(Identifier { name }));
                 }
@@ -2685,6 +2710,48 @@ impl Parser {
             expressions,
         }))
     }
+}
+
+fn is_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+    )
 }
 
 fn binding_to_target(bp: BindingPattern) -> AssignmentTarget {
