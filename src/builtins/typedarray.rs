@@ -120,8 +120,11 @@ fn typed_array_from_args(
             let src_len = obj
                 .get(ctx.intern("length"))
                 .map(|v| crate::builtins::string::js_to_length(&v) as usize)
-                .unwrap_or(0)
-                .min((1usize << 29) / kind.bytes_per_element());
+                .unwrap_or(0);
+            if src_len > (1usize << 29) / kind.bytes_per_element() {
+                array_buffer_range_error(ctx, "Invalid typed array length");
+                return Ok(JSValue::undefined());
+            }
 
             let bytes_per_element = kind.bytes_per_element();
             let buffer = create_array_buffer(ctx, src_len * bytes_per_element);
@@ -132,8 +135,11 @@ fn typed_array_from_args(
 
         let len = obj.get(ctx.common_atoms.length)
             .map(|v| crate::builtins::string::js_to_length(&v) as usize)
-            .unwrap_or(0)
-            .min((1usize << 29) / kind.bytes_per_element());
+            .unwrap_or(0);
+        if len > (1usize << 29) / kind.bytes_per_element() {
+            array_buffer_range_error(ctx, "Invalid typed array length");
+            return Ok(JSValue::undefined());
+        }
 
         let bytes_per_element = kind.bytes_per_element();
         let buffer = create_array_buffer(ctx, len * bytes_per_element);
