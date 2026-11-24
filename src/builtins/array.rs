@@ -250,6 +250,16 @@ pub fn init_array(ctx: &mut JSContext) {
         ctx.intern("join"),
         create_builtin_function(ctx, "array_join"),
     );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("toString"),
+        create_builtin_function(ctx, "array_toString"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("toLocaleString"),
+        create_builtin_function(ctx, "array_toLocaleString"),
+    );
     init_array_length(&mut proto_obj, 0, ctx);
 
     set_ne(
@@ -499,6 +509,11 @@ pub fn register_builtins(ctx: &mut JSContext) {
         HostFunction::method("includes", 1, array_includes),
     );
     ctx.register_builtin("array_join", HostFunction::method("join", 1, array_join));
+    ctx.register_builtin("array_toString", HostFunction::method("toString", 0, array_to_string));
+    ctx.register_builtin(
+        "array_toLocaleString",
+        HostFunction::method("toLocaleString", 0, array_to_locale_string),
+    );
     ctx.register_builtin(
         "array_isArray",
         HostFunction::new("isArray", 1, array_is_array),
@@ -1116,6 +1131,31 @@ fn val_same_value_zero(a: &JSValue, b: &JSValue) -> bool {
     } else {
         a.strict_eq(b)
     }
+}
+
+fn array_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = args.first().copied().unwrap_or(JSValue::undefined());
+    let join_fn = if this.is_object_like() {
+        this.as_object().get(ctx.intern("join"))
+    } else {
+        None
+    };
+    if let Some(f) = join_fn {
+        if f.is_function() {
+            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+                if let Ok(v) = vm.call_function_with_this(ctx, f, this, &[]) {
+                    return v;
+                }
+                return JSValue::undefined();
+            }
+        }
+    }
+    ctx.call_builtin("object_toString", &[this])
+}
+
+fn array_to_locale_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    array_to_string(ctx, args)
 }
 
 fn array_join(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {

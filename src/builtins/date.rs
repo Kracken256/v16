@@ -1583,16 +1583,10 @@ pub fn date_set_utc_full_year(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     date_set_full_year(ctx, args)
 }
 
-pub fn date_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = &args.get(0).cloned().unwrap_or_else(JSValue::undefined);
-    if let Some(_) = require_date_this(ctx, this) {
-        return JSValue::undefined();
-    }
-    let timestamp = get_date_timestamp_with_ctx(this, ctx);
+pub fn format_date_to_string(timestamp: f64) -> String {
     if timestamp.is_nan() {
-        return JSValue::new_string(ctx.intern("Invalid Date"));
+        return "Invalid Date".to_string();
     }
-
     let (year, month, day, hour, minute, second, weekday, _) = timestamp_to_date(timestamp);
     let weekday_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     let month_names = [
@@ -1611,7 +1605,7 @@ pub fn date_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         format!("{:+}", year)
     };
 
-    let result = format!(
+    format!(
         "{} {} {:02} {} {:02}:{:02}:{:02} GMT+0000 (UTC)",
         weekday_names[weekday as usize],
         month_names[(month - 1) as usize],
@@ -1620,8 +1614,16 @@ pub fn date_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         hour,
         minute,
         second
-    );
+    )
+}
 
+pub fn date_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = &args.get(0).cloned().unwrap_or_else(JSValue::undefined);
+    if let Some(_) = require_date_this(ctx, this) {
+        return JSValue::undefined();
+    }
+    let timestamp = get_date_timestamp_with_ctx(this, ctx);
+    let result = format_date_to_string(timestamp);
     JSValue::new_string(ctx.intern(&result))
 }
 
@@ -1792,7 +1794,7 @@ pub fn date_value_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 pub fn date_to_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_val = args.get(0).cloned().unwrap_or_else(JSValue::undefined);
-    if !this_val.is_object() {
+    if this_val.is_null() || this_val.is_undefined() {
         let mut err = JSObject::new();
         err.set(
             ctx.common_atoms.name,
@@ -1810,47 +1812,47 @@ pub fn date_to_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    let obj = this_val.as_object();
-    let mut tv = JSValue::undefined();
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        for method_name in &["valueOf", "toString"] {
-            let method_key = ctx.intern(method_name);
-            if let Some(method) = obj.get(method_key) {
-                if method.is_function() {
-                    match vm.call_function_with_this(ctx, method, this_val, &[]) {
-                        Ok(result) => {
-                            if !result.is_object() {
-                                tv = result;
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            if let Some(exc) = vm.last_caught_exception.take() {
-                                ctx.pending_exception = Some(exc);
-                            }
-                            return JSValue::undefined();
-                        }
-                    }
-                }
-            }
+    let o = if this_val.is_object_like() {
+        this_val
+    } else {
+        let wrapped = ctx.call_builtin("object_constructor", &[this_val]);
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
         }
+        wrapped
+    };
+
+    let tv = if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+        vm.ordinary_to_primitive(&o, "number", ctx)
+    } else {
+        JSValue::undefined()
+    };
+    if ctx.pending_exception.is_some() {
+        return JSValue::undefined();
     }
-    if tv.is_float() {
-        let f = tv.get_float();
-        if f.is_nan() || f.is_infinite() {
+
+    if tv.is_int() || tv.is_float() {
+        let f = if tv.is_int() {
+            tv.get_int() as f64
+        } else {
+            tv.get_float()
+        };
+        if !f.is_finite() {
             return JSValue::null();
         }
     }
-    if tv.is_int() {
-    } else if tv.is_string() {
-    }
-    let to_iso = obj.get(ctx.intern("toISOString"));
+
+    let to_iso = if o.is_object_like() {
+        o.as_object().get(ctx.intern("toISOString"))
+    } else {
+        None
+    };
     if let Some(fn_val) = to_iso {
         if fn_val.is_function() {
             if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
                 let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                match vm.call_function_with_this(ctx, fn_val, this_val, &[]) {
+                match vm.call_function_with_this(ctx, fn_val, o, &[]) {
                     Ok(val) => return val,
                     Err(_) => {
                         if let Some(exc) = vm.last_caught_exception.take() {
@@ -2094,10 +2096,16 @@ fn time_clip(t: f64) -> f64 {
     if t.is_nan() || t.abs() > 8.64e15 {
         return f64::NAN;
     }
+    let t = t.trunc();
     t + 0.0
 }
 
 pub fn date_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if !ctx.is_call_with_new() {
+        let ts = current_timestamp_ms();
+        let s = format_date_to_string(ts);
+        return JSValue::new_string(ctx.intern(&s));
+    }
     let timestamp = if args.is_empty() {
         current_timestamp_ms()
     } else if args.len() == 1 {

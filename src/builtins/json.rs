@@ -239,58 +239,69 @@ pub fn json_raw_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     } else if text.is_int() {
         text.get_int().to_string()
     } else if text.is_float() {
-        text.get_float().to_string()
+        crate::builtins::string::js_float_to_string(text.get_float())
     } else if text.is_bool() {
         text.get_bool().to_string()
     } else if text.is_null() {
         "null".to_string()
-    } else {
-        let mut err = crate::object::object::JSObject::new_typed(
-            crate::object::object::ObjectType::Error,
-        );
-        if let Some(proto) = ctx.get_syntax_error_prototype() {
-            err.prototype = Some(proto);
-        }
-        err.set(
-            ctx.common_atoms.message,
-            JSValue::new_string(ctx.intern("Cannot convert to JSON text")),
-        );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
-        ctx.runtime_mut().gc_heap_mut().track(ptr);
-        ctx.pending_exception = Some(JSValue::new_object(ptr));
+    } else if text.is_undefined() {
+        "undefined".to_string()
+    } else if text.is_symbol() {
+        throw_syntax_error(ctx, "Cannot convert a Symbol value to a string");
         return JSValue::undefined();
+    } else {
+        super::global::to_property_key_string(ctx, &text)
     };
+
+    if ctx.pending_exception.is_some() {
+        return JSValue::undefined();
+    }
+
+    if s.is_empty() || s.trim() != s {
+        throw_syntax_error(ctx, "Invalid JSON text");
+        return JSValue::undefined();
+    }
 
     match super::json_parser::JsonParser::new(&s).parse_root(ctx) {
         Ok(_) => {}
         Err(_) => {
-            let mut err = crate::object::object::JSObject::new_typed(
-                crate::object::object::ObjectType::Error,
-            );
-            if let Some(proto) = ctx.get_syntax_error_prototype() {
-                err.prototype = Some(proto);
-            }
-            err.set(
-                ctx.common_atoms.message,
-                JSValue::new_string(ctx.intern("Invalid JSON text")),
-            );
-            let ptr = Box::into_raw(Box::new(err)) as usize;
-            ctx.runtime_mut().gc_heap_mut().track(ptr);
-            ctx.pending_exception = Some(JSValue::new_object(ptr));
+            throw_syntax_error(ctx, "Invalid JSON text");
             return JSValue::undefined();
         }
     }
 
     let mut obj = crate::object::object::JSObject::new();
-    obj.prototype = ctx.get_object_prototype();
+    obj.prototype = None;
     obj.set_raw_json();
-    obj.set(
+    obj.define_property(
         ctx.intern("rawJSON"),
-        JSValue::new_string(ctx.intern(&s)),
+        crate::object::object::PropertyDescriptor {
+            value: Some(JSValue::new_string(ctx.intern(&s))),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
     );
     let ptr = Box::into_raw(Box::new(obj)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
+}
+
+fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
+    let mut err =
+        crate::object::object::JSObject::new_typed(crate::object::object::ObjectType::Error);
+    if let Some(proto) = ctx.get_syntax_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    err.set(
+        ctx.common_atoms.message,
+        JSValue::new_string(ctx.intern(msg)),
+    );
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
 
 pub fn json_is_raw_json(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -648,7 +659,7 @@ fn jsvalue_to_json_internal(
         if f == 0.0 {
             return Some("0".to_string());
         }
-        return Some(f.to_string());
+        return Some(crate::builtins::string::js_float_to_string(f));
     }
     if value.is_string() {
         let atom = value.get_atom();

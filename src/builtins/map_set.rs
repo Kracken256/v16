@@ -16,6 +16,109 @@ fn create_builtin_fn(ctx: &mut JSContext, name: &str, arity: u32) -> JSValue {
     JSValue::new_function(ptr)
 }
 
+fn set_ne(obj: &mut JSObject, key: crate::runtime::atom::Atom, val: JSValue) {
+    obj.define_property(
+        key,
+        crate::object::object::PropertyDescriptor {
+            value: Some(val),
+            writable: true,
+            enumerable: false,
+            configurable: true,
+            get: None,
+            set: None,
+        },
+    );
+}
+
+fn set_ne_readonly(obj: &mut JSObject, key: crate::runtime::atom::Atom, val: JSValue) {
+    obj.define_property(
+        key,
+        crate::object::object::PropertyDescriptor {
+            value: Some(val),
+            writable: false,
+            enumerable: false,
+            configurable: true,
+            get: None,
+            set: None,
+        },
+    );
+}
+
+fn define_ctor_prototype(
+    obj: &mut JSObject,
+    key: crate::runtime::atom::Atom,
+    val: JSValue,
+) {
+    obj.define_property(
+        key,
+        crate::object::object::PropertyDescriptor {
+            value: Some(val),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
+    );
+}
+
+fn make_accessor_getter(ctx: &mut JSContext, display_name: &str, builtin_name: &str) -> JSValue {
+    let name_atom = ctx.intern(display_name);
+    let mut f = JSFunction::new_builtin(name_atom, 0);
+    f.builtin_atom = Some(ctx.intern(builtin_name));
+    f.builtin_func = ctx.get_builtin_func(builtin_name);
+    let name_desc = crate::object::object::PropertyDescriptor {
+        value: Some(JSValue::new_string(name_atom)),
+        writable: false,
+        enumerable: false,
+        configurable: true,
+        get: None,
+        set: None,
+    };
+    f.base.define_property(ctx.common_atoms.name, name_desc);
+    let length_desc = crate::object::object::PropertyDescriptor {
+        value: Some(JSValue::new_int(0)),
+        writable: false,
+        enumerable: false,
+        configurable: true,
+        get: None,
+        set: None,
+    };
+    f.base.define_property(ctx.common_atoms.length, length_desc);
+    let ptr = Box::into_raw(Box::new(f)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track_function(ptr);
+    JSValue::new_function(ptr)
+}
+
+fn define_accessor(
+    obj: &mut JSObject,
+    key: crate::runtime::atom::Atom,
+    getter: JSValue,
+    enumerable: bool,
+) {
+    obj.define_property(
+        key,
+        crate::object::object::PropertyDescriptor {
+            value: None,
+            writable: false,
+            enumerable,
+            configurable: true,
+            get: Some(getter),
+            set: None,
+        },
+    );
+}
+
+fn is_callable(ctx: &mut JSContext, v: &JSValue) -> bool {
+    if v.is_function() {
+        return true;
+    }
+    if v.is_object() {
+        return v.as_object().get(ctx.common_atoms.__boundFn).is_some();
+    }
+    false
+}
+
 fn throw_type_error(ctx: &mut JSContext, msg: &str) {
     let mut err = JSObject::new();
     if let Some(proto_ptr) = ctx.get_type_error_prototype() {
@@ -68,7 +171,7 @@ fn map_find(ctx: &mut JSContext, obj: &JSObject, search_key: &JSValue) -> Option
     for i in 0..size {
         let k_atom = map_key_atom(ctx, i);
         if let Some(k) = obj.get(k_atom) {
-            if k.strict_eq(search_key) {
+            if key_same_value_zero(&k, search_key) {
                 return Some(i);
             }
         }
@@ -92,7 +195,7 @@ fn set_find(ctx: &mut JSContext, obj: &JSObject, search: &JSValue) -> Option<usi
     for i in 0..size {
         let v_atom = set_val_atom(ctx, i);
         if let Some(v) = obj.get(v_atom) {
-            if v.strict_eq(search) {
+            if key_same_value_zero(&v, search) {
                 return Some(i);
             }
         }
@@ -289,9 +392,17 @@ pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
             };
 
             let (done, value) = if next_val.is_object() {
-                let robj = next_val.as_object();
-                let done = robj.get(done_atom).map(|v| v.is_truthy()).unwrap_or(false);
-                let value = robj.get(value_atom).unwrap_or(JSValue::undefined());
+                let done_val =
+                    crate::builtins::object::object_get_property(ctx, &next_val, done_atom);
+                if ctx.pending_exception.is_some() {
+                    break;
+                }
+                let done = done_val.is_truthy();
+                let value =
+                    crate::builtins::object::object_get_property(ctx, &next_val, value_atom);
+                if ctx.pending_exception.is_some() {
+                    break;
+                }
                 (done, value)
             } else {
                 (true, JSValue::undefined())
@@ -431,9 +542,15 @@ pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue,
     let value_atom = ctx.intern("value");
 
     if next_val.is_object() {
-        let robj = next_val.as_object();
-        let done = robj.get(done_atom).map(|v| v.is_truthy()).unwrap_or(false);
-        let value = robj.get(value_atom).unwrap_or(JSValue::undefined());
+        let done_val = crate::builtins::object::object_get_property(ctx, &next_val, done_atom);
+        if ctx.pending_exception.is_some() {
+            return None;
+        }
+        let done = done_val.is_truthy();
+        let value = crate::builtins::object::object_get_property(ctx, &next_val, value_atom);
+        if ctx.pending_exception.is_some() {
+            return None;
+        }
         Some((value, done))
     } else {
         Some((JSValue::undefined(), true))
@@ -682,6 +799,36 @@ fn map_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 }
 
+fn map_size_getter(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = args.first().copied().unwrap_or(JSValue::undefined());
+    if !this.is_object() {
+        throw_type_error(ctx, "Method get Map.prototype.size called on incompatible receiver");
+        return JSValue::undefined();
+    }
+    let obj = this.as_object();
+    if !has_mapdata_slot(ctx, obj) {
+        throw_type_error(ctx, "Method get Map.prototype.size called on incompatible receiver");
+        return JSValue::undefined();
+    }
+    let size_atom = ctx.intern("__map_size__");
+    obj.get(size_atom).unwrap_or(JSValue::new_int(0))
+}
+
+fn set_size_getter(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = args.first().copied().unwrap_or(JSValue::undefined());
+    if !this.is_object() {
+        throw_type_error(ctx, "Method get Set.prototype.size called on incompatible receiver");
+        return JSValue::undefined();
+    }
+    let obj = this.as_object();
+    if !has_setdata_slot(ctx, obj) {
+        throw_type_error(ctx, "Method get Set.prototype.size called on incompatible receiver");
+        return JSValue::undefined();
+    }
+    let size_atom = ctx.intern("__set_size__");
+    obj.get(size_atom).unwrap_or(JSValue::new_int(0))
+}
+
 fn map_get_or_insert(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 3 {
         return JSValue::undefined();
@@ -731,7 +878,7 @@ fn map_get_or_insert_computed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     }
     let key = normalize_key(&args[1]);
     let callback = args[2];
-    if !callback.is_function() {
+    if !is_callable(ctx, &callback) {
         throw_type_error(ctx, "callback is not a function");
         return JSValue::undefined();
     }
@@ -752,6 +899,11 @@ fn map_get_or_insert_computed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
         }
     };
     let obj_mut = this.as_object_mut();
+    if let Some(idx) = map_find(ctx, obj_mut, &key) {
+        let mv_atom = map_val_atom(ctx, idx);
+        obj_mut.set(mv_atom, value);
+        return value;
+    }
     let cur_size = map_size(ctx, obj_mut);
     let mk_atom = map_key_atom(ctx, cur_size);
     let mv_atom = map_val_atom(ctx, cur_size);
@@ -768,6 +920,26 @@ fn normalize_key(v: &JSValue) -> JSValue {
         return JSValue::new_int(0);
     }
     v.clone()
+}
+
+fn key_same_value_zero(a: &JSValue, b: &JSValue) -> bool {
+    if a.is_float() && b.is_float() {
+        let af = a.get_float();
+        let bf = b.get_float();
+        if af.is_nan() && bf.is_nan() {
+            return true;
+        }
+        return af == bf;
+    }
+    if a.is_float() && b.is_int() {
+        let af = a.get_float();
+        return !af.is_nan() && af == (b.get_int() as f64);
+    }
+    if a.is_int() && b.is_float() {
+        let bf = b.get_float();
+        return !bf.is_nan() && (a.get_int() as f64) == bf;
+    }
+    a.strict_eq(b)
 }
 
 fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1702,39 +1874,429 @@ fn set_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     JSValue::undefined()
 }
 
+fn throw_range_error(ctx: &mut JSContext, msg: &str) {
+    let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
+    if let Some(proto) = ctx.get_range_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    err.set(
+        ctx.common_atoms.message,
+        JSValue::new_string(ctx.intern(msg)),
+    );
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.pending_exception = Some(JSValue::new_object(ptr));
+}
+
+fn create_empty_set(ctx: &mut JSContext) -> (JSValue, usize) {
+    let mut obj = JSObject::new();
+    if let Some(proto_ptr) = ctx.get_set_prototype() {
+        obj.prototype = Some(proto_ptr);
+    }
+    obj.set(ctx.intern("__set_size__"), JSValue::new_int(0));
+    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    (JSValue::new_object(ptr), ptr)
+}
+
+fn set_elements(ctx: &mut JSContext, obj: &JSObject) -> Vec<JSValue> {
+    let size = set_size(ctx, obj);
+    let mut out = Vec::with_capacity(size);
+    for i in 0..size {
+        let atom = set_val_atom(ctx, i);
+        if let Some(v) = obj.get(atom) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn set_add_value(ctx: &mut JSContext, obj_ptr: usize, value: JSValue) {
+    let obj = unsafe { &mut *(obj_ptr as *mut JSObject) };
+    if set_find(ctx, obj, &value).is_none() {
+        let cur = set_size(ctx, obj);
+        obj.set(set_val_atom(ctx, cur), value);
+        obj.set(ctx.intern("__set_size__"), JSValue::new_int((cur + 1) as i64));
+    }
+}
+
+fn set_remove_value(ctx: &mut JSContext, obj_ptr: usize, value: JSValue) {
+    let obj = unsafe { &mut *(obj_ptr as *mut JSObject) };
+    let size = set_size(ctx, obj);
+    let elems = set_elements(ctx, obj);
+    let filtered: Vec<JSValue> = elems
+        .into_iter()
+        .filter(|v| !key_same_value_zero(v, &value))
+        .collect();
+    for i in 0..size {
+        let atom = set_val_atom(ctx, i);
+        obj.delete(atom);
+    }
+    for (i, v) in filtered.iter().enumerate() {
+        obj.set(set_val_atom(ctx, i), *v);
+    }
+    obj.set(
+        ctx.intern("__set_size__"),
+        JSValue::new_int(filtered.len() as i64),
+    );
+}
+
+struct SetRecord {
+    is_set: bool,
+    set_ptr: usize,
+    has_fn: JSValue,
+    keys_fn: JSValue,
+}
+
+fn get_set_record(ctx: &mut JSContext, other: JSValue) -> Option<SetRecord> {
+    if !other.is_object() {
+        throw_type_error(ctx, "Argument is not an Object");
+        return None;
+    }
+    {
+        let obj = other.as_object();
+        if has_setdata_slot(ctx, obj) {
+            return Some(SetRecord {
+                is_set: true,
+                set_ptr: other.get_ptr(),
+                has_fn: JSValue::undefined(),
+                keys_fn: JSValue::undefined(),
+            });
+        }
+    }
+    let size_atom = ctx.intern("size");
+    let size_val = crate::builtins::object::object_get_property(ctx, &other, size_atom);
+    if ctx.pending_exception.is_some() {
+        return None;
+    }
+    let size_num = match crate::builtins::global::js_to_number_value(ctx, &size_val) {
+        Ok(n) => n,
+        Err(()) => return None,
+    };
+    if size_num.is_nan() {
+        throw_type_error(ctx, "size must be a number");
+        return None;
+    }
+    if size_num < 0.0 {
+        throw_range_error(ctx, "size must not be negative");
+        return None;
+    }
+    let has_atom = ctx.intern("has");
+    let has_fn = crate::builtins::object::object_get_property(ctx, &other, has_atom);
+    if ctx.pending_exception.is_some() {
+        return None;
+    }
+    if !is_callable(ctx, &has_fn) {
+        throw_type_error(ctx, "has must be callable");
+        return None;
+    }
+    let keys_atom = ctx.intern("keys");
+    let keys_fn = crate::builtins::object::object_get_property(ctx, &other, keys_atom);
+    if ctx.pending_exception.is_some() {
+        return None;
+    }
+    if !is_callable(ctx, &keys_fn) {
+        throw_type_error(ctx, "keys must be callable");
+        return None;
+    }
+    Some(SetRecord {
+        is_set: false,
+        set_ptr: 0,
+        has_fn,
+        keys_fn,
+    })
+}
+
+fn record_has(
+    ctx: &mut JSContext,
+    record: &SetRecord,
+    other: JSValue,
+    value: JSValue,
+) -> Option<bool> {
+    if record.is_set {
+        let obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        Some(set_find(ctx, obj, &value).is_some())
+    } else {
+        match call_callback_with_this(ctx, record.has_fn, other, &[value]) {
+            Ok(v) => Some(v.is_truthy()),
+            Err(_) => None,
+        }
+    }
+}
+
+fn iterate_set_like_keys(
+    ctx: &mut JSContext,
+    record: &SetRecord,
+    other: JSValue,
+) -> Option<Vec<JSValue>> {
+    let iterator = match call_callback_with_this(ctx, record.keys_fn, other, &[]) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    if !iterator.is_object() {
+        throw_type_error(ctx, "keys() must return an Object");
+        return None;
+    }
+    let mut out = Vec::new();
+    loop {
+        match iterator_next(ctx, iterator) {
+            Some((_v, true)) => break,
+            Some((v, false)) => out.push(v),
+            None => return None,
+        }
+    }
+    Some(out)
+}
+
+fn require_set_receiver(ctx: &mut JSContext, args: &[JSValue], method: &str) -> Option<usize> {
+    let this = args.first().copied().unwrap_or(JSValue::undefined());
+    if !this.is_object() {
+        throw_type_error(
+            ctx,
+            &format!("Method Set.prototype.{} called on incompatible receiver", method),
+        );
+        return None;
+    }
+    if !has_setdata_slot(ctx, this.as_object()) {
+        throw_type_error(
+            ctx,
+            &format!("Method Set.prototype.{} called on incompatible receiver", method),
+        );
+        return None;
+    }
+    Some(this.get_ptr())
+}
+
+fn set_union(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(this_ptr) = require_set_receiver(ctx, args, "union") else {
+        return JSValue::undefined();
+    };
+    let other = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let Some(record) = get_set_record(ctx, other) else {
+        return JSValue::undefined();
+    };
+    let (result, result_ptr) = create_empty_set(ctx);
+    {
+        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        for e in set_elements(ctx, this_obj) {
+            set_add_value(ctx, result_ptr, e);
+        }
+    }
+    if record.is_set {
+        let other_obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        for e in set_elements(ctx, other_obj) {
+            set_add_value(ctx, result_ptr, e);
+        }
+    } else {
+        let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
+            return JSValue::undefined();
+        };
+        for k in keys {
+            set_add_value(ctx, result_ptr, k);
+        }
+    }
+    result
+}
+
+fn set_intersection(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(this_ptr) = require_set_receiver(ctx, args, "intersection") else {
+        return JSValue::undefined();
+    };
+    let other = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let Some(record) = get_set_record(ctx, other) else {
+        return JSValue::undefined();
+    };
+    let (result, result_ptr) = create_empty_set(ctx);
+    let this_elems = {
+        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        set_elements(ctx, this_obj)
+    };
+    for e in this_elems {
+        match record_has(ctx, &record, other, e) {
+            Some(true) => set_add_value(ctx, result_ptr, e),
+            Some(false) => {}
+            None => return JSValue::undefined(),
+        }
+    }
+    result
+}
+
+fn set_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(this_ptr) = require_set_receiver(ctx, args, "difference") else {
+        return JSValue::undefined();
+    };
+    let other = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let Some(record) = get_set_record(ctx, other) else {
+        return JSValue::undefined();
+    };
+    let (result, result_ptr) = create_empty_set(ctx);
+    let this_elems = {
+        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        set_elements(ctx, this_obj)
+    };
+    for e in this_elems {
+        match record_has(ctx, &record, other, e) {
+            Some(true) => {}
+            Some(false) => set_add_value(ctx, result_ptr, e),
+            None => return JSValue::undefined(),
+        }
+    }
+    result
+}
+
+fn set_symmetric_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(this_ptr) = require_set_receiver(ctx, args, "symmetricDifference") else {
+        return JSValue::undefined();
+    };
+    let other = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let Some(record) = get_set_record(ctx, other) else {
+        return JSValue::undefined();
+    };
+    let (result, result_ptr) = create_empty_set(ctx);
+    let this_elems = {
+        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        set_elements(ctx, this_obj)
+    };
+    for e in &this_elems {
+        set_add_value(ctx, result_ptr, *e);
+    }
+    let other_elems: Vec<JSValue> = if record.is_set {
+        let other_obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        set_elements(ctx, other_obj)
+    } else {
+        let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
+            return JSValue::undefined();
+        };
+        keys
+    };
+    for e in other_elems {
+        let in_this = this_elems.iter().any(|x| key_same_value_zero(x, &e));
+        if in_this {
+            set_remove_value(ctx, result_ptr, e);
+        } else {
+            set_add_value(ctx, result_ptr, e);
+        }
+    }
+    result
+}
+
+fn set_is_subset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(this_ptr) = require_set_receiver(ctx, args, "isSubsetOf") else {
+        return JSValue::undefined();
+    };
+    let other = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let Some(record) = get_set_record(ctx, other) else {
+        return JSValue::undefined();
+    };
+    let this_elems = {
+        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        set_elements(ctx, this_obj)
+    };
+    for e in this_elems {
+        match record_has(ctx, &record, other, e) {
+            Some(true) => {}
+            Some(false) => return JSValue::bool(false),
+            None => return JSValue::undefined(),
+        }
+    }
+    JSValue::bool(true)
+}
+
+fn set_is_superset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(this_ptr) = require_set_receiver(ctx, args, "isSupersetOf") else {
+        return JSValue::undefined();
+    };
+    let other = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let Some(record) = get_set_record(ctx, other) else {
+        return JSValue::undefined();
+    };
+    let other_elems: Vec<JSValue> = if record.is_set {
+        let other_obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        set_elements(ctx, other_obj)
+    } else {
+        let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
+            return JSValue::undefined();
+        };
+        keys
+    };
+    let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+    for e in other_elems {
+        if set_find(ctx, this_obj, &e).is_none() {
+            return JSValue::bool(false);
+        }
+    }
+    JSValue::bool(true)
+}
+
+fn set_is_disjoint_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let Some(this_ptr) = require_set_receiver(ctx, args, "isDisjointFrom") else {
+        return JSValue::undefined();
+    };
+    let other = args.get(1).copied().unwrap_or(JSValue::undefined());
+    let Some(record) = get_set_record(ctx, other) else {
+        return JSValue::undefined();
+    };
+    let this_elems = {
+        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        set_elements(ctx, this_obj)
+    };
+    for e in this_elems {
+        match record_has(ctx, &record, other, e) {
+            Some(true) => return JSValue::bool(false),
+            Some(false) => {}
+            None => return JSValue::undefined(),
+        }
+    }
+    JSValue::bool(true)
+}
+
 pub fn init_map_set(ctx: &mut JSContext) {
     let mut map_proto = JSObject::new();
-    map_proto.set(ctx.intern("set"), create_builtin_fn(ctx, "map_set", 2));
-    map_proto.set(ctx.intern("get"), create_builtin_fn(ctx, "map_get", 1));
-    map_proto.set(ctx.intern("getOrInsert"), create_builtin_fn(ctx, "map_get_or_insert", 2));
-    map_proto.set(ctx.intern("getOrInsertComputed"), create_builtin_fn(ctx, "map_get_or_insert_computed", 2));
-    map_proto.set(ctx.intern("has"), create_builtin_fn(ctx, "map_has", 1));
-    map_proto.set(
+    set_ne(&mut map_proto, ctx.intern("set"), create_builtin_fn(ctx, "map_set", 2));
+    set_ne(&mut map_proto, ctx.intern("get"), create_builtin_fn(ctx, "map_get", 1));
+    set_ne(&mut map_proto, ctx.intern("getOrInsert"), create_builtin_fn(ctx, "map_get_or_insert", 2));
+    set_ne(&mut map_proto, ctx.intern("getOrInsertComputed"), create_builtin_fn(ctx, "map_get_or_insert_computed", 2));
+    set_ne(&mut map_proto, ctx.intern("has"), create_builtin_fn(ctx, "map_has", 1));
+    set_ne(
+        &mut map_proto,
         ctx.intern("delete"),
         create_builtin_fn(ctx, "map_delete", 1),
     );
-    map_proto.set(
+    set_ne(
+        &mut map_proto,
         ctx.intern("clear"),
         create_builtin_fn(ctx, "map_clear", 0),
     );
-    map_proto.set(
+    set_ne(
+        &mut map_proto,
         ctx.intern("forEach"),
         create_builtin_fn(ctx, "map_forEach", 1),
     );
-    map_proto.set(ctx.intern("keys"), create_builtin_fn(ctx, "map_keys", 0));
-    map_proto.set(
+    set_ne(&mut map_proto, ctx.intern("keys"), create_builtin_fn(ctx, "map_keys", 0));
+    set_ne(
+        &mut map_proto,
         ctx.intern("values"),
         create_builtin_fn(ctx, "map_values", 0),
     );
-    map_proto.set(
+    let map_entries_fn = create_builtin_fn(ctx, "map_entries", 0);
+    set_ne(
+        &mut map_proto,
         ctx.intern("entries"),
-        create_builtin_fn(ctx, "map_entries", 0),
+        map_entries_fn.clone(),
     );
 
+    let map_size_getter_fn = make_accessor_getter(ctx, "get size", "map_size_getter");
+    define_accessor(&mut map_proto, ctx.intern("size"), map_size_getter_fn, false);
+    {
+        let tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+        set_ne_readonly(&mut map_proto, tag_key, JSValue::new_string(ctx.intern("Map")));
+    }
+
     let sym_iter_atom = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
-    map_proto.set(
+    set_ne(
+        &mut map_proto,
         sym_iter_atom,
-        create_builtin_fn(ctx, "map_symbol_iterator", 0),
+        map_entries_fn,
     );
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
@@ -1750,14 +2312,14 @@ pub fn init_map_set(ctx: &mut JSContext) {
     let map_ctor = create_builtin_fn(ctx, "map_constructor", 0);
     if map_ctor.is_function() {
         let map_func_ref = map_ctor.as_function_mut();
-        map_func_ref.base.set(ctx.common_atoms.prototype, map_proto_value);
+        define_ctor_prototype(&mut map_func_ref.base, ctx.common_atoms.prototype, map_proto_value);
         let group_by_fn = create_builtin_fn(ctx, "map_group_by", 2);
         map_func_ref.base.set(ctx.intern("groupBy"), group_by_fn);
     }
     crate::builtins::symbol::install_species_accessor(ctx, &map_ctor);
     unsafe {
         let proto_ref = &mut *(map_proto_ptr as *mut crate::object::object::JSObject);
-        proto_ref.set(ctx.common_atoms.constructor, map_ctor);
+        set_ne(proto_ref, ctx.common_atoms.constructor, map_ctor);
     }
 
     let map_atom = ctx.intern("Map");
@@ -1768,9 +2330,13 @@ pub fn init_map_set(ctx: &mut JSContext) {
     }
 
     let mut map_iter_proto = JSObject::new();
-    map_iter_proto.set(ctx.intern("next"), create_builtin_fn(ctx, "map_set_iterator_next", 0));
+    set_ne(&mut map_iter_proto, ctx.intern("next"), create_builtin_fn(ctx, "map_set_iterator_next", 0));
+    {
+        let tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+        set_ne_readonly(&mut map_iter_proto, tag_key, JSValue::new_string(ctx.intern("Map Iterator")));
+    }
     let map_sym_iter = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
-    map_iter_proto.set(map_sym_iter, create_builtin_fn(ctx, "iterator_symbol_iterator", 0));
+    set_ne(&mut map_iter_proto, map_sym_iter, create_builtin_fn(ctx, "iterator_symbol_iterator", 0));
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         map_iter_proto.prototype = Some(obj_proto_ptr);
     }
@@ -1779,34 +2345,79 @@ pub fn init_map_set(ctx: &mut JSContext) {
     ctx.set_map_iterator_prototype(map_iter_proto_ptr);
 
     let mut set_proto = JSObject::new();
-    set_proto.set(ctx.intern("add"), create_builtin_fn(ctx, "set_add", 1));
-    set_proto.set(ctx.intern("has"), create_builtin_fn(ctx, "set_has", 1));
-    set_proto.set(
+    set_ne(&mut set_proto, ctx.intern("add"), create_builtin_fn(ctx, "set_add", 1));
+    set_ne(&mut set_proto, ctx.intern("has"), create_builtin_fn(ctx, "set_has", 1));
+    set_ne(
+        &mut set_proto,
         ctx.intern("delete"),
         create_builtin_fn(ctx, "set_delete", 1),
     );
-    set_proto.set(
+    set_ne(
+        &mut set_proto,
         ctx.intern("clear"),
         create_builtin_fn(ctx, "set_clear", 0),
     );
-    set_proto.set(
+    set_ne(
+        &mut set_proto,
         ctx.intern("forEach"),
         create_builtin_fn(ctx, "set_forEach", 1),
     );
-    set_proto.set(
+    let set_values_fn = create_builtin_fn(ctx, "set_values", 0);
+    set_ne(
+        &mut set_proto,
         ctx.intern("values"),
-        create_builtin_fn(ctx, "set_values", 0),
+        set_values_fn.clone(),
     );
-    set_proto.set(ctx.intern("keys"), create_builtin_fn(ctx, "set_keys", 0));
-    set_proto.set(
+    set_ne(&mut set_proto, ctx.intern("keys"), set_values_fn.clone());
+    set_ne(
+        &mut set_proto,
         ctx.intern("entries"),
         create_builtin_fn(ctx, "set_entries", 0),
     );
+    set_ne(&mut set_proto, ctx.intern("union"), create_builtin_fn(ctx, "set_union", 1));
+    set_ne(
+        &mut set_proto,
+        ctx.intern("intersection"),
+        create_builtin_fn(ctx, "set_intersection", 1),
+    );
+    set_ne(
+        &mut set_proto,
+        ctx.intern("difference"),
+        create_builtin_fn(ctx, "set_difference", 1),
+    );
+    set_ne(
+        &mut set_proto,
+        ctx.intern("symmetricDifference"),
+        create_builtin_fn(ctx, "set_symmetricDifference", 1),
+    );
+    set_ne(
+        &mut set_proto,
+        ctx.intern("isSubsetOf"),
+        create_builtin_fn(ctx, "set_isSubsetOf", 1),
+    );
+    set_ne(
+        &mut set_proto,
+        ctx.intern("isSupersetOf"),
+        create_builtin_fn(ctx, "set_isSupersetOf", 1),
+    );
+    set_ne(
+        &mut set_proto,
+        ctx.intern("isDisjointFrom"),
+        create_builtin_fn(ctx, "set_isDisjointFrom", 1),
+    );
+
+    let set_size_getter_fn = make_accessor_getter(ctx, "get size", "set_size_getter");
+    define_accessor(&mut set_proto, ctx.intern("size"), set_size_getter_fn, false);
+    {
+        let tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+        set_ne_readonly(&mut set_proto, tag_key, JSValue::new_string(ctx.intern("Set")));
+    }
 
     let sym_iter_atom = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
-    set_proto.set(
+    set_ne(
+        &mut set_proto,
         sym_iter_atom,
-        create_builtin_fn(ctx, "set_symbol_iterator", 0),
+        set_values_fn,
     );
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
@@ -1822,12 +2433,12 @@ pub fn init_map_set(ctx: &mut JSContext) {
     let set_ctor = create_builtin_fn(ctx, "set_constructor", 0);
     if set_ctor.is_function() {
         let set_func_ref = set_ctor.as_function_mut();
-        set_func_ref.base.set(ctx.common_atoms.prototype, set_proto_value);
+        define_ctor_prototype(&mut set_func_ref.base, ctx.common_atoms.prototype, set_proto_value);
     }
     crate::builtins::symbol::install_species_accessor(ctx, &set_ctor);
     unsafe {
         let proto_ref = &mut *(set_proto_ptr as *mut crate::object::object::JSObject);
-        proto_ref.set(ctx.common_atoms.constructor, set_ctor);
+        set_ne(proto_ref, ctx.common_atoms.constructor, set_ctor);
     }
 
     let set_atom = ctx.intern("Set");
@@ -1838,9 +2449,13 @@ pub fn init_map_set(ctx: &mut JSContext) {
     }
 
     let mut set_iter_proto = JSObject::new();
-    set_iter_proto.set(ctx.intern("next"), create_builtin_fn(ctx, "map_set_iterator_next", 0));
+    set_ne(&mut set_iter_proto, ctx.intern("next"), create_builtin_fn(ctx, "map_set_iterator_next", 0));
+    {
+        let tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+        set_ne_readonly(&mut set_iter_proto, tag_key, JSValue::new_string(ctx.intern("Set Iterator")));
+    }
     let set_sym_iter = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
-    set_iter_proto.set(set_sym_iter, create_builtin_fn(ctx, "iterator_symbol_iterator", 0));
+    set_ne(&mut set_iter_proto, set_sym_iter, create_builtin_fn(ctx, "iterator_symbol_iterator", 0));
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         set_iter_proto.prototype = Some(obj_proto_ptr);
     }
@@ -1849,22 +2464,30 @@ pub fn init_map_set(ctx: &mut JSContext) {
     ctx.set_set_iterator_prototype(set_iter_proto_ptr);
 
     let mut weakmap_proto = JSObject::new();
-    weakmap_proto.set(
+    set_ne(
+        &mut weakmap_proto,
         ctx.intern("set"),
         create_builtin_fn(ctx, "weakmap_set", 2),
     );
-    weakmap_proto.set(
+    set_ne(
+        &mut weakmap_proto,
         ctx.intern("get"),
         create_builtin_fn(ctx, "weakmap_get", 1),
     );
-    weakmap_proto.set(
+    set_ne(
+        &mut weakmap_proto,
         ctx.intern("has"),
         create_builtin_fn(ctx, "weakmap_has", 1),
     );
-    weakmap_proto.set(
+    set_ne(
+        &mut weakmap_proto,
         ctx.intern("delete"),
         create_builtin_fn(ctx, "weakmap_delete", 1),
     );
+    {
+        let tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+        set_ne_readonly(&mut weakmap_proto, tag_key, JSValue::new_string(ctx.intern("WeakMap")));
+    }
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         weakmap_proto.prototype = Some(obj_proto_ptr);
@@ -1879,11 +2502,11 @@ pub fn init_map_set(ctx: &mut JSContext) {
     let weakmap_ctor = create_builtin_fn(ctx, "weakmap_constructor", 0);
     if weakmap_ctor.is_function() {
         let wm_func_ref = weakmap_ctor.as_function_mut();
-        wm_func_ref.base.set(ctx.common_atoms.prototype, weakmap_proto_value);
+        define_ctor_prototype(&mut wm_func_ref.base, ctx.common_atoms.prototype, weakmap_proto_value);
     }
     unsafe {
         let proto_ref = &mut *(weakmap_proto_ptr as *mut crate::object::object::JSObject);
-        proto_ref.set(ctx.common_atoms.constructor, weakmap_ctor);
+        set_ne(proto_ref, ctx.common_atoms.constructor, weakmap_ctor);
     }
 
     let weakmap_atom = ctx.intern("WeakMap");
@@ -1893,18 +2516,25 @@ pub fn init_map_set(ctx: &mut JSContext) {
     }
 
     let mut weakset_proto = JSObject::new();
-    weakset_proto.set(
+    set_ne(
+        &mut weakset_proto,
         ctx.intern("add"),
         create_builtin_fn(ctx, "weakset_add", 1),
     );
-    weakset_proto.set(
+    set_ne(
+        &mut weakset_proto,
         ctx.intern("has"),
         create_builtin_fn(ctx, "weakset_has", 1),
     );
-    weakset_proto.set(
+    set_ne(
+        &mut weakset_proto,
         ctx.intern("delete"),
         create_builtin_fn(ctx, "weakset_delete", 1),
     );
+    {
+        let tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+        set_ne_readonly(&mut weakset_proto, tag_key, JSValue::new_string(ctx.intern("WeakSet")));
+    }
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         weakset_proto.prototype = Some(obj_proto_ptr);
@@ -1919,11 +2549,11 @@ pub fn init_map_set(ctx: &mut JSContext) {
     let weakset_ctor = create_builtin_fn(ctx, "weakset_constructor", 0);
     if weakset_ctor.is_function() {
         let ws_func_ref = weakset_ctor.as_function_mut();
-        ws_func_ref.base.set(ctx.common_atoms.prototype, weakset_proto_value);
+        define_ctor_prototype(&mut ws_func_ref.base, ctx.common_atoms.prototype, weakset_proto_value);
     }
     unsafe {
         let proto_ref = &mut *(weakset_proto_ptr as *mut crate::object::object::JSObject);
-        proto_ref.set(ctx.common_atoms.constructor, weakset_ctor);
+        set_ne(proto_ref, ctx.common_atoms.constructor, weakset_ctor);
     }
 
     let weakset_atom = ctx.intern("WeakSet");
@@ -1944,6 +2574,7 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin("map_get_or_insert_computed", HostFunction::method("getOrInsertComputed", 2, map_get_or_insert_computed));
     ctx.register_builtin("map_group_by", HostFunction::new("groupBy", 2, map_group_by));
     ctx.register_builtin("map_has", HostFunction::method("has", 1, map_has));
+    ctx.register_builtin("map_size_getter", HostFunction::method("get size", 0, map_size_getter));
     ctx.register_builtin("map_delete", HostFunction::method("delete", 1, map_delete));
     ctx.register_builtin("map_clear", HostFunction::method("clear", 0, map_clear));
     ctx.register_builtin(
@@ -1967,6 +2598,7 @@ pub fn register_builtins(ctx: &mut JSContext) {
     );
     ctx.register_builtin("set_add", HostFunction::method("add", 1, set_add));
     ctx.register_builtin("set_has", HostFunction::method("has", 1, set_has));
+    ctx.register_builtin("set_size_getter", HostFunction::method("get size", 0, set_size_getter));
     ctx.register_builtin("set_delete", HostFunction::method("delete", 1, set_delete));
     ctx.register_builtin("set_clear", HostFunction::method("clear", 0, set_clear));
     ctx.register_builtin(
@@ -1978,6 +2610,31 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "set_entries",
         HostFunction::method("entries", 0, set_entries),
+    );
+    ctx.register_builtin("set_union", HostFunction::method("union", 1, set_union));
+    ctx.register_builtin(
+        "set_intersection",
+        HostFunction::method("intersection", 1, set_intersection),
+    );
+    ctx.register_builtin(
+        "set_difference",
+        HostFunction::method("difference", 1, set_difference),
+    );
+    ctx.register_builtin(
+        "set_symmetricDifference",
+        HostFunction::method("symmetricDifference", 1, set_symmetric_difference),
+    );
+    ctx.register_builtin(
+        "set_isSubsetOf",
+        HostFunction::method("isSubsetOf", 1, set_is_subset_of),
+    );
+    ctx.register_builtin(
+        "set_isSupersetOf",
+        HostFunction::method("isSupersetOf", 1, set_is_superset_of),
+    );
+    ctx.register_builtin(
+        "set_isDisjointFrom",
+        HostFunction::method("isDisjointFrom", 1, set_is_disjoint_from),
     );
     ctx.register_builtin(
         "set_symbol_iterator",

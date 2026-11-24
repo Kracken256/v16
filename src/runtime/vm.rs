@@ -1081,6 +1081,8 @@ impl VM {
                     }
                     &args_vec
                 };
+                let prev_call_with_new = ctx.is_call_with_new();
+                ctx.set_call_with_new(is_call_new);
                 let result = if let Some(bf) = js_func.builtin_func {
                     ctx.call_builtin_direct(bf, args)
                 } else if let Some(ba) = js_func.builtin_atom {
@@ -1089,6 +1091,7 @@ impl VM {
                 } else {
                     JSValue::undefined()
                 };
+                ctx.set_call_with_new(prev_call_with_new);
                 if let Some(exc) = ctx.pending_exception.take() {
                     match self.dispatch_throw_value(ctx, exc) {
                         ThrowDispatch::Caught => return Ok(false),
@@ -4564,6 +4567,25 @@ impl VM {
                         } else {
                             JSValue::undefined()
                         }
+                    } else if obj_val.is_bigint() && key_val.is_string() {
+                        if let Some(proto_ptr) = ctx.get_bigint_prototype() {
+                            let proto_obj = unsafe { &*proto_ptr };
+                            let atom = key_val.get_atom();
+                            if let Some(getter) = proto_obj.get_own_accessor_value(atom) {
+                                if getter.is_function() {
+                                    match self.call_function_with_this(ctx, getter, obj_val, &[]) {
+                                        Ok(v) => v,
+                                        Err(_) => JSValue::undefined(),
+                                    }
+                                } else {
+                                    JSValue::undefined()
+                                }
+                            } else {
+                                proto_obj.get(atom).unwrap_or(JSValue::undefined())
+                            }
+                        } else {
+                            JSValue::undefined()
+                        }
                     } else {
                         JSValue::undefined()
                     };
@@ -4781,7 +4803,8 @@ impl VM {
                             || obj_val.is_float()
                             || obj_val.is_string()
                             || obj_val.is_bool()
-                            || obj_val.is_symbol())
+                            || obj_val.is_symbol()
+                            || obj_val.is_bigint())
                         && key_val.is_string()
                     {
                         let atom = key_val.get_atom();
@@ -4791,6 +4814,8 @@ impl VM {
                             ctx.get_number_prototype()
                         } else if obj_val.is_symbol() {
                             ctx.get_symbol_prototype()
+                        } else if obj_val.is_bigint() {
+                            ctx.get_bigint_prototype()
                         } else {
                             ctx.get_object_prototype()
                         };
@@ -7553,7 +7578,8 @@ impl VM {
                 || obj_val.is_float()
                 || obj_val.is_string()
                 || obj_val.is_bool()
-                || obj_val.is_symbol())
+                || obj_val.is_symbol()
+                || obj_val.is_bigint())
         {
             if obj_val.is_string() && atom == ctx.common_atoms.length {
                 let len = ctx.string_char_count(obj_val.get_atom()) as i64;
@@ -7567,6 +7593,8 @@ impl VM {
                 ctx.get_number_prototype()
             } else if obj_val.is_symbol() {
                 ctx.get_symbol_prototype()
+            } else if obj_val.is_bigint() {
+                ctx.get_bigint_prototype()
             } else {
                 ctx.get_object_prototype()
             };
@@ -9013,7 +9041,7 @@ impl VM {
                 let s = if f.fract() == 0.0 && f.abs() < 1e15 {
                     format!("{}", f as i64)
                 } else {
-                    format!("{}", f)
+                    crate::builtins::string::js_float_to_string(f)
                 };
                 let bytes = s.as_bytes();
                 let len = bytes.len();

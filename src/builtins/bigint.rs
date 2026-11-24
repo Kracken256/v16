@@ -301,13 +301,54 @@ pub fn init_bigint(ctx: &mut JSContext) {
 
     let proto_atom = ctx.intern("BigIntPrototype");
     let mut proto_obj = JSObject::new();
-    set_ne(&mut proto_obj, ctx.intern("toString"), create_builtin_function(ctx, "bigint_to_string"));
+    proto_obj.prototype = ctx.get_object_prototype();
+    let to_string_fn = create_builtin_function(ctx, "bigint_to_string");
+    let to_locale_fn = create_builtin_function(ctx, "bigint_to_locale_string");
+    let value_of_fn = create_builtin_function(ctx, "bigint_value_of");
+    for f in [&to_string_fn, &to_locale_fn, &value_of_fn] {
+        if f.is_function() {
+            f.as_function_mut().base.define_property(
+                ctx.common_atoms.length,
+                PropertyDescriptor {
+                    value: Some(JSValue::new_int(0)),
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                    get: None,
+                    set: None,
+                },
+            );
+        }
+    }
+    set_ne(&mut proto_obj, ctx.intern("toString"), to_string_fn);
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("toLocaleString"),
+        to_locale_fn,
+    );
+    set_ne(&mut proto_obj, ctx.intern("valueOf"), value_of_fn);
+    set_ne(&mut proto_obj, ctx.common_atoms.constructor, bigint_value);
+    {
+        let tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+        set_ne(&mut proto_obj, tag_key, JSValue::new_string(ctx.intern("BigInt")));
+    }
     let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_bigint_prototype(proto_ptr);
 
     let bigint_func = bigint_value.as_object_mut();
-    bigint_func.set(ctx.intern("prototype"), proto_value);
+    bigint_func.define_property(
+        ctx.intern("prototype"),
+        PropertyDescriptor {
+            value: Some(proto_value),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
+    );
 
     let global = ctx.global();
     if global.is_object() {
@@ -321,7 +362,9 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin("bigint_constructor", HostFunction::ctor("BigInt", 1, bigint_constructor));
     ctx.register_builtin("bigint_as_int_n", HostFunction::new("asIntN", 2, bigint_as_int_n));
     ctx.register_builtin("bigint_as_uint_n", HostFunction::new("asUintN", 2, bigint_as_uint_n));
-    ctx.register_builtin("bigint_to_string", HostFunction::method("toString", 1, bigint_to_string));
+    ctx.register_builtin("bigint_to_string", HostFunction::method("toString", 0, bigint_to_string));
+    ctx.register_builtin("bigint_to_locale_string", HostFunction::method("toLocaleString", 0, bigint_to_locale_string));
+    ctx.register_builtin("bigint_value_of", HostFunction::method("valueOf", 0, bigint_value_of));
 }
 
 fn bigint_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -404,27 +447,116 @@ fn bigint_as_uint_n(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     JSValue::new_bigint(Box::into_raw(Box::new(result)) as usize)
 }
 
+fn this_bigint_value(ctx: &mut JSContext, this_val: &JSValue) -> Option<i128> {
+    if this_val.is_bigint() {
+        return Some(this_val.as_object().get_bigint_value());
+    }
+    if this_val.is_object() {
+        if let Some(inner) = this_val.as_object().get(ctx.common_atoms.__value__) {
+            if inner.is_bigint() {
+                return Some(inner.as_object().get_bigint_value());
+            }
+        }
+    }
+    None
+}
+
+fn bigint_to_radix_string(value: i128, radix: u32) -> String {
+    if radix == 10 {
+        return value.to_string();
+    }
+    if value == 0 {
+        return "0".to_string();
+    }
+    let negative = value < 0;
+    let mut n = (value as i128).unsigned_abs();
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut buf = Vec::new();
+    while n > 0 {
+        buf.push(digits[(n % radix as u128) as usize]);
+        n /= radix as u128;
+    }
+    if negative {
+        buf.push(b'-');
+    }
+    buf.reverse();
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+fn throw_bigint_type_error(ctx: &mut JSContext) {
+    let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
+    if let Some(proto) = ctx.get_type_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    err.set(
+        ctx.common_atoms.message,
+        JSValue::new_string(ctx.intern("BigInt.prototype method called on incompatible receiver")),
+    );
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.pending_exception = Some(JSValue::new_object(ptr));
+}
+
+fn throw_bigint_range_error(ctx: &mut JSContext, msg: &str) {
+    let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
+    if let Some(proto) = ctx.get_range_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    err.set(
+        ctx.common_atoms.message,
+        JSValue::new_string(ctx.intern(msg)),
+    );
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.pending_exception = Some(JSValue::new_object(ptr));
+}
+
 fn bigint_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this_val = args.first().copied().unwrap_or(JSValue::new_int(0));
-    let radix = args.get(1).map(|v| v.get_int() as u32).unwrap_or(10);
-
-    let value: i128 = if this_val.is_bigint() {
-        this_val.as_object().get_bigint_value()
-    } else if this_val.is_int() {
-        this_val.get_int() as i128
-    } else {
-        0i128
+    let this_val = args.first().copied().unwrap_or(JSValue::undefined());
+    let Some(value) = this_bigint_value(ctx, &this_val) else {
+        throw_bigint_type_error(ctx);
+        return JSValue::undefined();
     };
 
-    let result = if radix == 16 {
-        format!("{:x}", value)
-    } else if radix == 8 {
-        format!("{:o}", value)
-    } else if radix == 2 {
-        format!("{:b}", value)
+    let radix = if args.len() >= 2 && !args[1].is_undefined() {
+        match crate::builtins::global::js_to_number_value(ctx, &args[1]) {
+            Ok(n) => {
+                if n.is_nan() {
+                    0.0
+                } else {
+                    n.trunc()
+                }
+            }
+            Err(()) => return JSValue::undefined(),
+        }
     } else {
-        value.to_string()
+        10.0
     };
 
+    if radix.is_nan() || radix < 2.0 || radix > 36.0 {
+        throw_bigint_range_error(ctx, "toString() radix must be between 2 and 36");
+        return JSValue::undefined();
+    }
+
+    let result = bigint_to_radix_string(value, radix as u32);
     JSValue::new_string(ctx.intern(&result))
+}
+
+fn bigint_to_locale_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    bigint_to_string(ctx, args)
+}
+
+fn bigint_value_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this_val = args.first().copied().unwrap_or(JSValue::undefined());
+    match this_bigint_value(ctx, &this_val) {
+        Some(value) => {
+            let mut result = JSObject::new_bigint();
+            result.set_bigint_value(value);
+            JSValue::new_bigint(Box::into_raw(Box::new(result)) as usize)
+        }
+        None => {
+            throw_bigint_type_error(ctx);
+            JSValue::undefined()
+        }
+    }
 }

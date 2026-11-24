@@ -148,7 +148,6 @@ pub fn init_globals(ctx: &mut JSContext) {
 
     init_console(ctx);
     symbol::init_symbol(ctx);
-    init_reflect(ctx);
     init_json(ctx);
     init_global_funcs(ctx);
 
@@ -157,6 +156,8 @@ pub fn init_globals(ctx: &mut JSContext) {
     if let Some(obj_proto) = ctx.get_object_prototype() {
         ctx.global().as_object_mut().prototype = Some(obj_proto);
     }
+
+    init_reflect(ctx);
 
     init_math(ctx);
     array::init_array(ctx);
@@ -745,7 +746,81 @@ fn reflect_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if ctx.pending_exception.is_some() { return JSValue::undefined(); }
         ctx.intern(&s)
     };
-    target.as_object_mut().set(key, value);
+    let receiver = if args.len() >= 4 { args[3] } else { target };
+    if !receiver.is_object_like() {
+        return JSValue::bool(false);
+    }
+
+    let mut found_accessor: Option<Option<JSValue>> = None;
+    let mut found_data_writable: Option<bool> = None;
+    {
+        let mut current = Some(target.get_ptr() as *mut JSObject);
+        let mut depth = 0;
+        while let Some(ptr) = current {
+            let obj = unsafe { &*ptr };
+            if let Some(desc) = obj.get_own_descriptor(key) {
+                if desc.get.is_some() || desc.set.is_some() {
+                    found_accessor = Some(desc.set);
+                } else {
+                    found_data_writable = Some(desc.writable);
+                }
+                break;
+            }
+            current = obj.prototype;
+            depth += 1;
+            if depth > 1000 {
+                break;
+            }
+        }
+    }
+
+    if let Some(setter) = found_accessor {
+        if let Some(s) = setter {
+            if s.is_function() {
+                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+                    if vm.call_function_with_this(ctx, s, receiver, &[value]).is_err() {
+                        return JSValue::undefined();
+                    }
+                    return JSValue::bool(true);
+                }
+            }
+        }
+        return JSValue::bool(false);
+    }
+
+    if let Some(writable) = found_data_writable {
+        if !writable {
+            return JSValue::bool(false);
+        }
+    }
+
+    let mut receiver_setter: Option<Option<JSValue>> = None;
+    {
+        let receiver_obj = receiver.as_object();
+        if let Some(desc) = receiver_obj.get_own_descriptor(key) {
+            if desc.get.is_some() || desc.set.is_some() {
+                receiver_setter = Some(desc.set);
+            } else if !desc.writable {
+                return JSValue::bool(false);
+            }
+        }
+    }
+
+    if let Some(setter) = receiver_setter {
+        if let Some(s) = setter {
+            if s.is_function() {
+                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+                    let _ = vm.call_function_with_this(ctx, s, receiver, &[value]);
+                    return JSValue::bool(true);
+                }
+            }
+        }
+        return JSValue::bool(false);
+    }
+
+    receiver.as_object_mut().set(key, value);
     JSValue::bool(true)
 }
 
@@ -881,24 +956,25 @@ fn reflect_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) ->
     };
     if let Some(desc) = args[0].as_object().get_own_descriptor(key) {
         let mut result = JSObject::new();
-        if let Some(v) = desc.value {
-            result.set(ctx.intern("value"), v);
+        result.prototype = ctx.get_object_prototype();
+        if desc.get.is_some() || desc.set.is_some() {
+            result.set(
+                ctx.intern("get"),
+                desc.get.unwrap_or(JSValue::undefined()),
+            );
+            result.set(
+                ctx.intern("set"),
+                desc.set.unwrap_or(JSValue::undefined()),
+            );
         } else {
-            result.set(ctx.intern("value"), JSValue::undefined());
+            result.set(
+                ctx.intern("value"),
+                desc.value.unwrap_or(JSValue::undefined()),
+            );
+            result.set(ctx.intern("writable"), JSValue::bool(desc.writable));
         }
-        result.set(ctx.intern("writable"), JSValue::bool(desc.writable));
         result.set(ctx.intern("enumerable"), JSValue::bool(desc.enumerable));
         result.set(ctx.intern("configurable"), JSValue::bool(desc.configurable));
-        if let Some(g) = desc.get {
-            result.set(ctx.intern("get"), g);
-        } else {
-            result.set(ctx.intern("get"), JSValue::undefined());
-        }
-        if let Some(s) = desc.set {
-            result.set(ctx.intern("set"), s);
-        } else {
-            result.set(ctx.intern("set"), JSValue::undefined());
-        }
         let ptr = Box::into_raw(Box::new(result)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
@@ -964,12 +1040,23 @@ fn reflect_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 return JSValue::bool(false);
             }
         }
-        // Check for cycles
         let new_proto = proto_val.get_ptr() as *mut JSObject;
+        let obj_ptr = obj as *const JSObject as *mut JSObject;
+        if new_proto == obj_ptr {
+            return JSValue::bool(false);
+        }
+        let current_proto = obj.prototype;
+        if current_proto == Some(new_proto) {
+            return JSValue::bool(true);
+        }
+        if !obj.extensible() {
+            return JSValue::bool(false);
+        }
+        // Check for cycles
         let mut current = new_proto;
         let mut depth = 0u32;
         while let Some(ptr) = unsafe { current.as_ref() }.and_then(|o| o.prototype) {
-            if ptr == obj as *const JSObject as *mut JSObject || depth > 1000 {
+            if ptr == obj_ptr || depth > 1000 {
                 return JSValue::bool(false);
             }
             current = ptr;
@@ -1118,6 +1205,7 @@ fn init_reflect(ctx: &mut JSContext) {
 
     let reflect_atom = ctx.intern("Reflect");
     let mut reflect_obj = JSObject::new();
+    reflect_obj.prototype = ctx.get_object_prototype();
     let methods = [
         ("construct", "reflect_construct"),
         ("apply", "reflect_apply"),
@@ -1665,6 +1753,28 @@ fn init_json(ctx: &mut JSContext) {
             set: None,
         },
     );
+    json_mut.define_property(
+        ctx.intern("rawJSON"),
+        PropertyDescriptor {
+            value: Some(raw_json_fn),
+            writable: true,
+            enumerable: false,
+            configurable: true,
+            get: None,
+            set: None,
+        },
+    );
+    json_mut.define_property(
+        ctx.intern("isRawJSON"),
+        PropertyDescriptor {
+            value: Some(is_raw_json_fn),
+            writable: true,
+            enumerable: false,
+            configurable: true,
+            get: None,
+            set: None,
+        },
+    );
     let global = ctx.global();
     if global.is_object() {
         let global_obj = global.as_object_mut();
@@ -1690,6 +1800,9 @@ pub fn to_property_key_string(ctx: &mut JSContext, v: &JSValue) -> String {
     }
     if v.is_bool() {
         return v.get_bool().to_string();
+    }
+    if v.is_bigint() {
+        return v.as_object().get_bigint_value().to_string();
     }
     if v.is_symbol() {
         throw_type_error(ctx, "Cannot convert a Symbol value to a property key");
@@ -2595,7 +2708,7 @@ fn number_to_fixed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }));
     }
     if val.abs() >= 1e21 {
-        let s = format!("{}", val);
+        let s = crate::builtins::string::js_float_to_string(val);
         return JSValue::new_string(ctx.intern(&s));
     }
     let result = format!("{:.1$}", val, digits);

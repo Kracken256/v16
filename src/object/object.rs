@@ -635,6 +635,16 @@ impl JSObject {
             self.flags &= !FLAG_FROZEN;
         }
     }
+
+    pub fn seal_accessors(&mut self) {
+        if let Some(extra) = self.extra.as_mut() {
+            if let Some(accs) = extra.accessors.as_mut() {
+                for entry in accs.values_mut() {
+                    entry.configurable = false;
+                }
+            }
+        }
+    }
     #[inline(always)]
     pub fn is_mapped_arguments(&self) -> bool {
         self.obj_type == ObjectType::MappedArguments

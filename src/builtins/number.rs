@@ -188,7 +188,7 @@ pub fn number_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         } else if f == f.floor() && f.is_finite() && f.abs() < 1e15 {
             format!("{}", f as i64)
         } else {
-            format!("{}", f)
+            crate::builtins::string::js_float_to_string(f)
         }
     } else if this.is_object() {
         let obj = this.as_object();
@@ -253,7 +253,7 @@ pub fn number_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 } else if f == f.floor() && f.is_finite() && f.abs() < 1e15 {
                     format!("{}", f as i64)
                 } else {
-                    format!("{}", f)
+                    crate::builtins::string::js_float_to_string(f)
                 }
             } else {
                 return throw_type_error_if_no_exception(

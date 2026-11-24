@@ -100,26 +100,11 @@ fn to_property_atom(ctx: &mut JSContext, value: &JSValue) -> Option<Atom> {
         let sym_id = value.get_symbol_id();
         return Some(crate::runtime::atom::Atom(0x40000000 | sym_id));
     }
-    if value.is_int() {
-        return Some(ctx.intern(&value.get_int().to_string()));
+    let s = crate::builtins::global::to_property_key_string(ctx, value);
+    if ctx.pending_exception.is_some() {
+        return None;
     }
-    if value.is_float() {
-        let n = value.get_float();
-        if n.fract() == 0.0 {
-            return Some(ctx.intern(&(n as i64).to_string()));
-        }
-        return Some(ctx.intern(&n.to_string()));
-    }
-    if value.is_bool() {
-        return Some(ctx.intern(if value.get_bool() { "true" } else { "false" }));
-    }
-    if value.is_null() {
-        return Some(ctx.intern("null"));
-    }
-    if value.is_undefined() {
-        return Some(ctx.intern("undefined"));
-    }
-    None
+    Some(ctx.intern(&s))
 }
 
 fn get_symbol_to_string_tag_atom(ctx: &mut JSContext) -> Option<Atom> {
@@ -232,19 +217,19 @@ pub fn init_object(ctx: &mut JSContext) {
     let mut object_obj = JSFunction::new_builtin(object_atom, 1);
     object_obj.set_builtin_marker(ctx, "object_constructor");
     object_obj.base.prototype = Some(proto_ptr as *mut JSObject);
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.common_atoms.keys,
         create_builtin_function(ctx, "object_keys"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.common_atoms.values,
         create_builtin_function(ctx, "object_values"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.common_atoms.entries,
         create_builtin_function(ctx, "object_entries"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("assign"),
         create_builtin_function(ctx, "object_assign"),
     );
@@ -258,19 +243,19 @@ pub fn init_object(ctx: &mut JSContext) {
             .base
             .set(ctx.intern("create"), JSValue::new_function(ptr));
     }
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("getPrototypeOf"),
         create_builtin_function(ctx, "object_getPrototypeOf"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("setPrototypeOf"),
         create_builtin_function(ctx, "object_setPrototypeOf"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("fromEntries"),
         create_builtin_function(ctx, "object_fromEntries"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("hasOwn"),
         create_builtin_function(ctx, "object_hasOwn"),
     );
@@ -279,55 +264,65 @@ pub fn init_object(ctx: &mut JSContext) {
         ctx.intern("is"),
         create_builtin_function(ctx, "object_is"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("getOwnPropertySymbols"),
         create_builtin_function(ctx, "object_get_own_property_symbols"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("preventExtensions"),
         create_builtin_function(ctx, "object_prevent_extensions"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("isExtensible"),
         create_builtin_function(ctx, "object_is_extensible"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("seal"),
         create_builtin_function(ctx, "object_seal"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("isSealed"),
         create_builtin_function(ctx, "object_is_sealed"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("freeze"),
         create_builtin_function(ctx, "object_freeze"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("isFrozen"),
         create_builtin_function(ctx, "object_is_frozen"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("defineProperty"),
         create_builtin_function(ctx, "object_define_property"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("defineProperties"),
         create_builtin_function(ctx, "object_define_properties"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("getOwnPropertyDescriptor"),
         create_builtin_function(ctx, "object_get_own_property_descriptor"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("getOwnPropertyDescriptors"),
         create_builtin_function(ctx, "object_get_own_property_descriptors"),
     );
-    object_obj.base.set(
+    crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.intern("getOwnPropertyNames"),
         create_builtin_function(ctx, "object_get_own_property_names"),
     );
-    object_obj.base.set(ctx.common_atoms.prototype, proto_value);
+    object_obj.base.define_property(
+        ctx.common_atoms.prototype,
+        crate::object::object::PropertyDescriptor {
+            value: Some(proto_value),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
+    );
 
     let object_ptr = Box::into_raw(Box::new(object_obj)) as usize;
     ctx.runtime_mut().gc_heap_mut().track_function(object_ptr);
@@ -716,6 +711,166 @@ fn object_assign(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     to
 }
 
+fn object_has_property(obj_val: &JSValue, prop: Atom) -> bool {
+    if !obj_val.is_object_like() {
+        return false;
+    }
+    let mut current = Some(obj_val.get_ptr() as *mut JSObject);
+    let mut depth = 0;
+    while let Some(ptr) = current {
+        let obj = unsafe { &*ptr };
+        if obj.get_own(prop).is_some() {
+            return true;
+        }
+        current = obj.prototype;
+        depth += 1;
+        if depth > 1000 {
+            break;
+        }
+    }
+    false
+}
+
+pub fn object_get_property(ctx: &mut JSContext, obj_val: &JSValue, prop: Atom) -> JSValue {
+    if !obj_val.is_object_like() {
+        return JSValue::undefined();
+    }
+    let mut current = Some(obj_val.get_ptr() as *mut JSObject);
+    let mut depth = 0;
+    while let Some(ptr) = current {
+        let obj = unsafe { &*ptr };
+        if let Some(entry) = obj.get_own_accessor_entry(prop) {
+            if let Some(getter) = entry.get {
+                if getter.is_function() {
+                    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+                        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+                        let this = *obj_val;
+                        return vm
+                            .call_function_with_this(ctx, getter, this, &[])
+                            .unwrap_or(JSValue::undefined());
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+        if let Some(v) = obj.get_own(prop) {
+            return v;
+        }
+        current = obj.prototype;
+        depth += 1;
+        if depth > 1000 {
+            break;
+        }
+    }
+    JSValue::undefined()
+}
+
+fn throw_desc_type_error(ctx: &mut JSContext, msg: &str) {
+    let mut err = crate::object::object::JSObject::new_typed(
+        crate::object::object::ObjectType::Error,
+    );
+    if let Some(proto) = ctx.get_type_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
+    err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.pending_exception = Some(JSValue::new_object(ptr));
+}
+
+pub fn to_property_descriptor(
+    ctx: &mut JSContext,
+    desc_val: &JSValue,
+) -> Option<crate::object::object::PropertyDescriptor> {
+    if !desc_val.is_object_like() {
+        throw_desc_type_error(ctx, "Property description must be an object");
+        return None;
+    }
+    let value_atom = ctx.intern("value");
+    let writable_atom = ctx.intern("writable");
+    let get_atom = ctx.intern("get");
+    let set_atom = ctx.intern("set");
+    let enumerable_atom = ctx.intern("enumerable");
+    let configurable_atom = ctx.intern("configurable");
+
+    let has_value = object_has_property(desc_val, value_atom);
+    let has_writable = object_has_property(desc_val, writable_atom);
+    let has_get = object_has_property(desc_val, get_atom);
+    let has_set = object_has_property(desc_val, set_atom);
+
+    let value = if has_value {
+        Some(object_get_property(ctx, desc_val, value_atom))
+    } else {
+        None
+    };
+    let get = if has_get {
+        Some(object_get_property(ctx, desc_val, get_atom))
+    } else {
+        None
+    };
+    let set = if has_set {
+        Some(object_get_property(ctx, desc_val, set_atom))
+    } else {
+        None
+    };
+
+    if let Some(g) = get {
+        if !g.is_undefined() && !g.is_function() {
+            throw_desc_type_error(ctx, "Getter must be a function");
+            return None;
+        }
+    }
+    if let Some(s) = set {
+        if !s.is_undefined() && !s.is_function() {
+            throw_desc_type_error(ctx, "Setter must be a function");
+            return None;
+        }
+    }
+
+    let is_accessor = has_get || has_set;
+    if is_accessor && (has_value || has_writable) {
+        throw_desc_type_error(ctx, "Invalid property descriptor");
+        return None;
+    }
+
+    let enumerable = if object_has_property(desc_val, enumerable_atom) {
+        object_get_property(ctx, desc_val, enumerable_atom).is_truthy()
+    } else {
+        false
+    };
+    let configurable = if object_has_property(desc_val, configurable_atom) {
+        object_get_property(ctx, desc_val, configurable_atom).is_truthy()
+    } else {
+        false
+    };
+    let writable = if has_writable {
+        object_get_property(ctx, desc_val, writable_atom).is_truthy()
+    } else {
+        false
+    };
+
+    if is_accessor {
+        Some(crate::object::object::PropertyDescriptor {
+            value: None,
+            writable: false,
+            enumerable,
+            configurable,
+            get: get.filter(|g| !g.is_undefined()),
+            set: set.filter(|s| !s.is_undefined()),
+        })
+    } else {
+        Some(crate::object::object::PropertyDescriptor {
+            value,
+            writable,
+            enumerable,
+            configurable,
+            get: None,
+            set: None,
+        })
+    }
+}
+
 fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut new_obj = JSObject::new();
 
@@ -757,47 +912,18 @@ fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             }
         }
     }
-    if args.len() > 1 && args[1].is_object() {
-        let props_obj = args[1].as_object();
-        for (atom, desc_val) in props_obj.own_properties() {
-            if !desc_val.is_object() {
-                continue;
+    if args.len() > 1 && args[1].is_object_like() {
+        let props_list: Vec<(Atom, JSValue)> = args[1].as_object().own_properties();
+        for (atom, _) in props_list {
+            let desc_val = object_get_property(ctx, &args[1], atom);
+            if ctx.pending_exception.is_some() {
+                return JSValue::undefined();
             }
-            let desc_obj = desc_val.as_object();
-            let value = desc_obj.get(ctx.intern("value"));
-            let getter = desc_obj.get(ctx.intern("get"));
-            let setter = desc_obj.get(ctx.intern("set"));
-            let writable = desc_obj
-                .get(ctx.intern("writable"))
-                .map(|v| v.is_truthy())
-                .unwrap_or(false);
-            let enumerable = desc_obj
-                .get(ctx.intern("enumerable"))
-                .map(|v| v.is_truthy())
-                .unwrap_or(false);
-            let configurable = desc_obj
-                .get(ctx.intern("configurable"))
-                .map(|v| v.is_truthy())
-                .unwrap_or(false);
-
-            let desc = if getter.is_some() || setter.is_some() {
-                crate::object::object::PropertyDescriptor {
-                    value: None,
-                    writable,
-                    enumerable,
-                    configurable,
-                    get: getter,
-                    set: setter,
+            let Some(desc) = to_property_descriptor(ctx, &desc_val) else {
+                if ctx.pending_exception.is_some() {
+                    return JSValue::undefined();
                 }
-            } else {
-                crate::object::object::PropertyDescriptor {
-                    value,
-                    writable,
-                    enumerable,
-                    configurable,
-                    get: None,
-                    set: None,
-                }
+                continue;
             };
             new_obj.define_property_ext(atom, desc, true, true, true);
         }
@@ -860,6 +986,22 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             }
         }
         // Check for prototype chain cycles
+        if !obj.extensible() && obj.prototype != Some(new_proto) {
+            let mut err = crate::object::object::JSObject::new_typed(
+                crate::object::object::ObjectType::Error,
+            );
+            if let Some(proto) = ctx.get_type_error_prototype() {
+                err.prototype = Some(proto);
+            }
+            err.set(
+                ctx.common_atoms.message,
+                JSValue::new_string(ctx.intern("Cannot set prototype of a non-extensible object")),
+            );
+            let eptr = Box::into_raw(Box::new(err)) as usize;
+            ctx.runtime_mut().gc_heap_mut().track(eptr);
+            ctx.pending_exception = Some(JSValue::new_object(eptr));
+            return JSValue::undefined();
+        }
         let mut current = new_proto;
         let mut depth = 0u32;
         while let Some(ptr) = unsafe { current.as_ref() }.and_then(|o| o.prototype) {
@@ -954,6 +1096,8 @@ fn object_to_string(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                             tag = "Number";
                         } else if v.is_bool() {
                             tag = "Boolean";
+                        } else if v.is_string() {
+                            tag = "String";
                         }
                     }
                     if tag == "Number" || tag == "Boolean" {
@@ -1322,6 +1466,7 @@ fn object_seal(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let obj = args[0].as_object_mut();
     obj.set_extensible(false);
     obj.set_sealed(true);
+    obj.seal_accessors();
 
     obj.for_each_property_attrs_mut(|_atom, _val, attrs| {
         *attrs &= !crate::object::object::ATTR_CONFIGURABLE;
@@ -1355,6 +1500,7 @@ fn object_freeze(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     obj.set_extensible(false);
     obj.set_sealed(true);
     obj.set_frozen(true);
+    obj.seal_accessors();
 
     obj.for_each_property_attrs_mut(|_atom, _val, attrs| {
         *attrs &=
@@ -1384,17 +1530,27 @@ fn object_is_frozen(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if args.len() < 3 {
-        return args.get(0).cloned().unwrap_or(JSValue::undefined());
+    let obj_val = args.first().cloned().unwrap_or(JSValue::undefined());
+    if !is_object_like(&obj_val) {
+        let mut err = crate::object::object::JSObject::new_typed(
+            crate::object::object::ObjectType::Error,
+        );
+        if let Some(proto) = _ctx.get_type_error_prototype() { err.prototype = Some(proto); }
+        err.set(_ctx.common_atoms.name, JSValue::new_string(_ctx.intern("TypeError")));
+        err.set(_ctx.common_atoms.message, JSValue::new_string(_ctx.intern("Object.defineProperty called on non-object")));
+        let ptr = Box::into_raw(Box::new(err)) as usize;
+        _ctx.runtime_mut().gc_heap_mut().track(ptr);
+        _ctx.pending_exception = Some(JSValue::new_object(ptr));
+        return JSValue::undefined();
     }
-    let obj = &args[0];
+    if args.len() < 3 {
+        return obj_val;
+    }
+    let obj = &obj_val;
     let prop = &args[1];
     let descriptor = &args[2];
 
-    if !is_object_like(obj) {
-        return obj.clone();
-    }
-    if !descriptor.is_object() {
+    if !descriptor.is_object_like() {
         let mut err = crate::object::object::JSObject::new_typed(
             crate::object::object::ObjectType::Error,
         );
@@ -1410,66 +1566,18 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return obj.clone();
     };
 
+    let has_enumerable = object_has_property(descriptor, _ctx.intern("enumerable"));
+    let has_writable = object_has_property(descriptor, _ctx.intern("writable"));
+    let has_configurable = object_has_property(descriptor, _ctx.intern("configurable"));
+
+    let Some(pd) = to_property_descriptor(_ctx, descriptor) else {
+        if _ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+        return obj.clone();
+    };
+
     let obj_ref = obj.as_object_mut();
-
-    let desc_obj = descriptor.as_object();
-
-    let value = desc_obj.get(_ctx.intern("value"));
-    let getter = desc_obj.get(_ctx.intern("get"));
-    let setter = desc_obj.get(_ctx.intern("set"));
-
-    // Only set attributes that are explicitly provided in the descriptor
-    // Per spec: missing fields in the descriptor should leave existing attributes unchanged
-    let has_enumerable = desc_obj.find_offset(_ctx.intern("enumerable")).is_some();
-    let has_writable = desc_obj.find_offset(_ctx.intern("writable")).is_some();
-    let has_configurable = desc_obj.find_offset(_ctx.intern("configurable")).is_some();
-
-    let enumerable = if has_enumerable {
-        desc_obj
-            .get(_ctx.intern("enumerable"))
-            .map(|v| v.is_truthy())
-            .unwrap_or(false)
-    } else {
-        // Need to get the existing value - we handle this below
-        // by checking has_enumerable in the define_property flow
-        false // placeholder, handled by has_enumerable flag
-    };
-    let writable = if has_writable {
-        desc_obj
-            .get(_ctx.intern("writable"))
-            .map(|v| v.is_truthy())
-            .unwrap_or(false)
-    } else {
-        false
-    };
-    let configurable = if has_configurable {
-        desc_obj
-            .get(_ctx.intern("configurable"))
-            .map(|v| v.is_truthy())
-            .unwrap_or(false)
-    } else {
-        false
-    };
-
-    let pd = if getter.is_some() || setter.is_some() {
-        crate::object::object::PropertyDescriptor {
-            value: None,
-            writable,
-            enumerable,
-            configurable,
-            get: getter,
-            set: setter,
-        }
-    } else {
-        crate::object::object::PropertyDescriptor {
-            value,
-            writable,
-            enumerable,
-            configurable,
-            get: None,
-            set: None,
-        }
-    };
 
     // Array exotic object: length is always non-configurable
     if obj_ref.is_array() {
@@ -1575,64 +1683,45 @@ fn object_define_properties(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let obj = &args[0];
     let props = &args[1];
 
-    if !obj.is_object() || !props.is_object() {
+    if !obj.is_object_like() || !props.is_object_like() {
         return obj.clone();
     }
 
-    let obj_ref = obj.as_object_mut();
-    let props_obj = props.as_object();
+    let props_list: Vec<(Atom, JSValue)> = props.as_object().own_properties();
 
-    for (key_atom, desc_val) in props_obj.own_properties() {
-        if desc_val.is_object() {
-            let desc_obj = desc_val.as_object();
-
-            let value = desc_obj.get(_ctx.intern("value"));
-            let writable = desc_obj
-                .get(_ctx.intern("writable"))
-                .map(|v| v.is_truthy())
-                .unwrap_or(true);
-            let enumerable = desc_obj
-                .get(_ctx.intern("enumerable"))
-                .map(|v| v.is_truthy())
-                .unwrap_or(true);
-            let configurable = desc_obj
-                .get(_ctx.intern("configurable"))
-                .map(|v| v.is_truthy())
-                .unwrap_or(true);
-
-            let get = desc_obj.get(_ctx.intern("get"));
-            let set = desc_obj.get(_ctx.intern("set"));
-
-            let pd = crate::object::object::PropertyDescriptor {
-                value,
-                writable,
-                enumerable,
-                configurable,
-                get,
-                set,
-            };
-
-            let ok = obj_ref.define_property(key_atom, pd);
-            if !ok {
-                let mut err = crate::object::object::JSObject::new_typed(
-                    crate::object::object::ObjectType::Error,
-                );
-                if let Some(proto) = _ctx.get_type_error_prototype() {
-                    err.prototype = Some(proto);
-                }
-                err.set(
-                    _ctx.common_atoms.name,
-                    JSValue::new_string(_ctx.intern("TypeError")),
-                );
-                err.set(
-                    _ctx.common_atoms.message,
-                    JSValue::new_string(_ctx.intern("Cannot redefine property")),
-                );
-                let ptr = Box::into_raw(Box::new(err)) as usize;
-                _ctx.runtime_mut().gc_heap_mut().track(ptr);
-                _ctx.pending_exception = Some(JSValue::new_object(ptr));
+    for (key_atom, _) in props_list {
+        let desc_val = object_get_property(_ctx, props, key_atom);
+        if _ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+        let Some(pd) = to_property_descriptor(_ctx, &desc_val) else {
+            if _ctx.pending_exception.is_some() {
                 return JSValue::undefined();
             }
+            continue;
+        };
+
+        let obj_ref = obj.as_object_mut();
+        let ok = obj_ref.define_property(key_atom, pd);
+        if !ok {
+            let mut err = crate::object::object::JSObject::new_typed(
+                crate::object::object::ObjectType::Error,
+            );
+            if let Some(proto) = _ctx.get_type_error_prototype() {
+                err.prototype = Some(proto);
+            }
+            err.set(
+                _ctx.common_atoms.name,
+                JSValue::new_string(_ctx.intern("TypeError")),
+            );
+            err.set(
+                _ctx.common_atoms.message,
+                JSValue::new_string(_ctx.intern("Cannot redefine property")),
+            );
+            let ptr = Box::into_raw(Box::new(err)) as usize;
+            _ctx.runtime_mut().gc_heap_mut().track(ptr);
+            _ctx.pending_exception = Some(JSValue::new_object(ptr));
+            return JSValue::undefined();
         }
     }
 

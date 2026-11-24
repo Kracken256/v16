@@ -294,6 +294,8 @@ pub struct JSContext {
 
     pub pending_exception: Option<JSValue>,
 
+    call_with_new: bool,
+
     pending_callback: Option<PendingCallback>,
 
     microtask_queue: MicrotaskQueue,
@@ -372,6 +374,7 @@ impl JSContext {
             register_vm_ptr: None,
             compiler_opt_level: OptLevel::default(),
             pending_exception: None,
+            call_with_new: false,
             pending_callback: None,
             microtask_queue: MicrotaskQueue::new(),
             current_module_specifier: None,
@@ -393,6 +396,16 @@ impl JSContext {
         builtins::init_globals(&mut ctx);
 
         ctx
+    }
+
+    #[inline]
+    pub fn is_call_with_new(&self) -> bool {
+        self.call_with_new
+    }
+
+    #[inline]
+    pub fn set_call_with_new(&mut self, value: bool) {
+        self.call_with_new = value;
     }
 
     #[inline(always)]

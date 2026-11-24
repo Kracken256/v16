@@ -364,14 +364,22 @@ fn function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let body_str = if args[body_idx].is_string() {
         ctx.get_atom_str(args[body_idx].get_atom()).to_string()
     } else {
-        String::new()
+        let s = crate::builtins::global::to_property_key_string(ctx, &args[body_idx]);
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+        s
     };
     let mut params = Vec::new();
     for i in 0..body_idx {
         let p = if args[i].is_string() {
             ctx.get_atom_str(args[i].get_atom()).to_string()
         } else {
-            String::new()
+            let s = crate::builtins::global::to_property_key_string(ctx, &args[i]);
+            if ctx.pending_exception.is_some() {
+                return JSValue::undefined();
+            }
+            s
         };
         for part in p.trim().split(',') {
             let part = part.trim();

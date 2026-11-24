@@ -28,15 +28,8 @@ pub fn init_regexp(ctx: &mut JSContext) {
         HostFunction::ctor("RegExp", 2, regexp_constructor),
     );
 
-    let global = ctx.global();
-    if global.is_object() {
-        let global_obj = global.as_object_mut();
-        let regexp_atom = ctx.common_atoms.regexp;
-
-        let regexp_func = create_builtin_function(ctx, "regexp_constructor");
-        crate::builtins::global::set_non_enumerable(global_obj, regexp_atom, regexp_func.clone());
-        crate::builtins::symbol::install_species_accessor(ctx, &regexp_func);
-    }
+    let regexp_func = create_builtin_function(ctx, "regexp_constructor");
+    crate::builtins::symbol::install_species_accessor(ctx, &regexp_func);
 
     let proto_atom = ctx.intern("RegExpPrototype");
     let mut proto_obj = JSObject::new();
@@ -98,6 +91,7 @@ pub fn init_regexp(ctx: &mut JSContext) {
     );
     set_ne(&mut proto_obj, ctx.intern("dotAll"), JSValue::bool(false));
     set_ne(&mut proto_obj, ctx.intern("lastIndex"), JSValue::new_int(0));
+    set_ne(&mut proto_obj, ctx.common_atoms.constructor, regexp_func.clone());
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         proto_obj.prototype = Some(obj_proto_ptr);
@@ -109,9 +103,29 @@ pub fn init_regexp(ctx: &mut JSContext) {
     ctx.set_regexp_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
 
+    if regexp_func.is_function() {
+        regexp_func.as_function_mut().base.define_property(
+            ctx.common_atoms.prototype,
+            crate::object::object::PropertyDescriptor {
+                value: Some(proto_value),
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                get: None,
+                set: None,
+            },
+        );
+    }
+
+    let global = ctx.global();
     if global.is_object() {
         let global_obj = global.as_object_mut();
         global_obj.set(proto_atom, proto_value);
+        crate::builtins::global::set_non_enumerable(
+            global_obj,
+            ctx.common_atoms.regexp,
+            regexp_func.clone(),
+        );
     }
 }
 
@@ -141,6 +155,40 @@ pub fn regexp_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     create_regexp_object(ctx, &pattern, &flags)
+}
+
+fn hide_regexp_internal_props(obj: &mut JSObject, ctx: &mut JSContext) {
+    let keys = [
+        ctx.common_atoms.source,
+        ctx.common_atoms.global,
+        ctx.common_atoms.ignore_case,
+        ctx.common_atoms.multiline,
+        ctx.common_atoms.sticky,
+        ctx.common_atoms.unicode,
+        ctx.common_atoms.__pattern__,
+        ctx.common_atoms.__flags__,
+        ctx.intern("unicodeSets"),
+        ctx.intern("dotAll"),
+    ];
+    for key in keys {
+        if let Some(v) = obj.get(key) {
+            crate::builtins::global::set_non_enumerable(obj, key, v);
+        }
+    }
+    let last_index_atom = ctx.intern("lastIndex");
+    if let Some(v) = obj.get(last_index_atom) {
+        obj.define_property(
+            last_index_atom,
+            crate::object::object::PropertyDescriptor {
+                value: Some(v),
+                writable: true,
+                enumerable: false,
+                configurable: false,
+                get: None,
+                set: None,
+            },
+        );
+    }
 }
 
 fn create_regexp_object(ctx: &mut JSContext, pattern: &str, flags: &str) -> JSValue {
@@ -192,6 +240,8 @@ fn create_regexp_object(ctx: &mut JSContext, pattern: &str, flags: &str) -> JSVa
         regexp_obj.set_compiled_regex(re);
     }
 
+    hide_regexp_internal_props(&mut regexp_obj, ctx);
+
     let ptr = Box::into_raw(Box::new(regexp_obj)) as usize;
     JSValue::new_object(ptr)
 }
@@ -241,6 +291,8 @@ pub fn create_regexp_object_precompiled(
     );
 
     regexp_obj.set_compiled_regex(compiled_re);
+
+    hide_regexp_internal_props(&mut regexp_obj, ctx);
 
     let ptr = Box::into_raw(Box::new(regexp_obj)) as usize;
     JSValue::new_object(ptr)

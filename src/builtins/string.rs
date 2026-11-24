@@ -7,7 +7,12 @@ fn to_integer_index(val: &JSValue, ctx: &mut JSContext) -> i64 {
     if val.is_int() {
         val.get_int()
     } else if val.is_float() {
-        val.get_float().trunc() as i64
+        let f = val.get_float();
+        if f.is_nan() {
+            0
+        } else {
+            f.trunc() as i64
+        }
     } else if val.is_undefined() || val.is_null() {
         0
     } else if val.is_bool() {
@@ -17,6 +22,16 @@ fn to_integer_index(val: &JSValue, ctx: &mut JSContext) -> i64 {
         match s.trim().parse::<f64>() {
             Ok(v) if !v.is_nan() => v.trunc() as i64,
             _ => 0,
+        }
+    } else if val.is_object() {
+        let n = match crate::builtins::global::js_to_number_value(ctx, val) {
+            Ok(n) => n,
+            Err(()) => return 0,
+        };
+        if n.is_nan() {
+            0
+        } else {
+            n.trunc() as i64
         }
     } else {
         0
@@ -43,7 +58,72 @@ pub fn js_float_to_string(f: f64) -> String {
     if f.is_nan() {
         return "NaN".to_string();
     }
-    format!("{}", f)
+    if f == 0.0 {
+        return "0".to_string();
+    }
+    let neg = f < 0.0;
+    let abs = f.abs();
+    let s = format!("{}", abs);
+    let (digits, n) = parse_decimal_digits(&s);
+    let k = digits.len() as i32;
+    let body = if k <= n && n <= 21 {
+        let mut out = digits.clone();
+        for _ in 0..(n - k) {
+            out.push('0');
+        }
+        out
+    } else if 0 < n && n <= 21 {
+        let mut out = digits[..n as usize].to_string();
+        out.push('.');
+        out.push_str(&digits[n as usize..]);
+        out
+    } else if -6 < n && n <= 0 {
+        let mut out = String::from("0.");
+        for _ in 0..(-n) {
+            out.push('0');
+        }
+        out.push_str(&digits);
+        out
+    } else {
+        let e = n - 1;
+        let sign = if e >= 0 { '+' } else { '-' };
+        let e_abs = e.abs();
+        if k == 1 {
+            format!("{}e{}{}", digits, sign, e_abs)
+        } else {
+            format!("{}.{}e{}{}", &digits[..1], &digits[1..], sign, e_abs)
+        }
+    };
+    if neg {
+        format!("-{}", body)
+    } else {
+        body
+    }
+}
+
+fn parse_decimal_digits(s: &str) -> (String, i32) {
+    let (int_part, frac_part) = match s.find('.') {
+        Some(i) => (&s[..i], &s[i + 1..]),
+        None => (s, ""),
+    };
+    let mut all: Vec<u8> = Vec::with_capacity(int_part.len() + frac_part.len());
+    all.extend(int_part.bytes());
+    all.extend(frac_part.bytes());
+    let mut n = int_part.len() as i32;
+    let mut start = 0;
+    while start < all.len() && all[start] == b'0' {
+        start += 1;
+    }
+    if start == all.len() {
+        return ("0".to_string(), 1);
+    }
+    n -= start as i32;
+    let mut end = all.len();
+    while end > start && all[end - 1] == b'0' {
+        end -= 1;
+    }
+    let digits = String::from_utf8(all[start..end].to_vec()).unwrap_or_default();
+    (digits, n)
 }
 
 fn this_to_string(ctx: &mut JSContext, this: &JSValue) -> Option<String> {
@@ -251,6 +331,10 @@ pub fn init_string(ctx: &mut JSContext) {
 
     let proto_atom = ctx.intern("StringPrototype");
     let mut proto_obj = JSObject::new();
+    proto_obj.set(
+        ctx.common_atoms.__value__,
+        JSValue::new_string(ctx.intern("")),
+    );
     set_ne(&mut proto_obj, ctx.intern("constructor"), string_value);
     set_ne(
         &mut proto_obj,
@@ -465,9 +549,17 @@ pub fn init_string(ctx: &mut JSContext) {
 
     let string_func_ptr = string_ptr as *mut crate::object::function::JSFunction;
     unsafe {
-        (*string_func_ptr)
-            .base
-            .set(ctx.common_atoms.prototype, proto_value);
+        (*string_func_ptr).base.define_property(
+            ctx.common_atoms.prototype,
+            crate::object::object::PropertyDescriptor {
+                value: Some(proto_value),
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                get: None,
+                set: None,
+            },
+        );
     }
 
     if global.is_object() {
@@ -644,7 +736,7 @@ fn string_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         } else if val.is_int() {
             JSValue::new_string(ctx.intern(&val.get_int().to_string()))
         } else if val.is_float() {
-            JSValue::new_string(ctx.intern(&val.get_float().to_string()))
+            JSValue::new_string(ctx.intern(&js_float_to_string(val.get_float())))
         } else if val.is_bigint() {
             let obj = unsafe { crate::value::JSValue::object_from_ptr(val.get_ptr()) };
             let n = obj.get_bigint_value();
@@ -664,7 +756,11 @@ fn string_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 JSValue::new_string(ctx.intern(&format!("Symbol({})", desc)))
             }
         } else if val.is_object() {
-            JSValue::new_string(ctx.intern("[object Object]"))
+            let s = crate::builtins::global::to_property_key_string(ctx, val);
+            if ctx.pending_exception.is_some() {
+                return JSValue::undefined();
+            }
+            JSValue::new_string(ctx.intern(&s))
         } else {
             JSValue::new_string(ctx.intern(""))
         }
@@ -698,7 +794,10 @@ fn string_char_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let index = if args.len() > 1 {
         let idx = to_integer_index(&args[1], ctx);
-        if idx < 0 { 0usize } else { idx as usize }
+        if idx < 0 {
+            return JSValue::new_string(ctx.intern(""));
+        }
+        idx as usize
     } else {
         0usize
     };
@@ -729,22 +828,11 @@ fn string_char_code_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let atom = ctx.intern(&s);
 
     let index = if args.len() > 1 {
-        let v = args[1];
-        if v.is_int() {
-            let i = v.get_int();
-            if i < 0 {
-                return JSValue::new_float(f64::NAN);
-            }
-            i as usize
-        } else if v.is_float() {
-            let f = v.get_float();
-            if f < 0.0 || f.is_nan() || f.is_infinite() {
-                return JSValue::new_float(f64::NAN);
-            }
-            f as usize
-        } else {
-            0
+        let i = to_integer_index(&args[1], ctx);
+        if i < 0 {
+            return JSValue::new_float(f64::NAN);
         }
+        i as usize
     } else {
         0
     };
@@ -765,15 +853,11 @@ fn string_concat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     for arg in args.iter().skip(1) {
-        if arg.is_string() {
-            result.push_str(ctx.get_atom_str(arg.get_atom()));
-        } else if arg.is_int() {
-            result.push_str(&arg.get_int().to_string());
-        } else if arg.is_float() {
-            result.push_str(&arg.get_float().to_string());
-        } else if arg.is_bool() {
-            result.push_str(&arg.get_bool().to_string());
+        let s = crate::builtins::global::to_property_key_string(ctx, arg);
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
         }
+        result.push_str(&s);
     }
 
     JSValue::new_string(ctx.intern(&result))
@@ -788,31 +872,16 @@ fn string_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         None => return JSValue::undefined(),
     };
 
-    let search = if args[1].is_string() {
-        ctx.get_atom_str(args[1].get_atom()).to_string()
-    } else {
-        return JSValue::new_int(-1);
+    let search = {
+        let s = crate::builtins::global::to_property_key_string(ctx, &args[1]);
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+        s
     };
 
     let from_index = if args.len() > 2 {
-        let p = &args[2];
-        let idx = if p.is_int() {
-            p.get_int()
-        } else if p.is_float() {
-            p.get_float().trunc() as i64
-        } else if p.is_undefined() || p.is_null() {
-            0
-        } else if p.is_bool() {
-            if p.get_bool() { 1 } else { 0 }
-        } else if p.is_string() {
-            let ps = ctx.get_atom_str(p.get_atom());
-            match ps.trim().parse::<f64>() {
-                Ok(v) if !v.is_nan() => v.trunc() as i64,
-                _ => 0,
-            }
-        } else {
-            0
-        };
+        let idx = to_integer_index(&args[2], ctx);
         if idx < 0 { 0usize } else { idx as usize }
     } else {
         0usize
@@ -844,19 +913,56 @@ fn string_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         None => return JSValue::undefined(),
     };
 
-    let search = if args[1].is_string() {
-        ctx.get_atom_str(args[1].get_atom()).to_string()
-    } else {
-        return JSValue::new_int(-1);
+    let search = {
+        let s = crate::builtins::global::to_property_key_string(ctx, &args[1]);
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+        s
     };
 
-    match s.rfind(&search) {
-        Some(byte_pos) => {
-            let char_idx = s[..byte_pos].chars().count();
-            JSValue::new_int(char_idx as i64)
+    let len = char_count(&s);
+    let search_len = char_count(&search);
+
+    let pos = if args.len() > 2 && !args[2].is_undefined() {
+        let n = match crate::builtins::global::js_to_number_value(ctx, &args[2]) {
+            Ok(n) => n,
+            Err(()) => return JSValue::undefined(),
+        };
+        if n.is_nan() {
+            len as f64
+        } else {
+            n.trunc()
         }
-        None => JSValue::new_int(-1),
+    } else {
+        len as f64
+    };
+
+    let mut i = if pos < 0.0 {
+        -1i64
+    } else if pos > len as f64 {
+        len as i64
+    } else {
+        pos as i64
+    };
+
+    if search_len == 0 {
+        return JSValue::new_int(std::cmp::min(i, len as i64));
     }
+
+    let max_start = len as i64 - search_len as i64;
+    if i > max_start {
+        i = max_start;
+    }
+    while i >= 0 {
+        let start_byte = byte_index_for_char_pos(&s, i as usize);
+        let end_byte = byte_index_for_char_pos(&s, (i as usize) + search_len);
+        if &s[start_byte..end_byte] == search.as_str() {
+            return JSValue::new_int(i);
+        }
+        i -= 1;
+    }
+    JSValue::new_int(-1)
 }
 
 fn string_locale_compare(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -990,13 +1096,33 @@ fn string_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn string_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if args.is_empty() {
-        return JSValue::new_string(ctx.intern(""));
+    let this = args.first().copied().unwrap_or(JSValue::undefined());
+    if this.is_string() {
+        return this;
     }
-    match require_string_coercible(ctx, &args[0]) {
-        Some(s) => JSValue::new_string(ctx.intern(&s)),
-        None => JSValue::undefined(),
+    if this.is_object() {
+        if let Some(v) = this.as_object().get(ctx.common_atoms.__value__) {
+            if v.is_string() {
+                return v;
+            }
+        }
     }
+    let mut err = JSObject::new();
+    err.set(
+        ctx.common_atoms.name,
+        JSValue::new_string(ctx.intern("TypeError")),
+    );
+    err.set(
+        ctx.common_atoms.message,
+        JSValue::new_string(ctx.intern("String.prototype.toString requires that 'this' be a String")),
+    );
+    if let Some(proto) = ctx.get_type_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.pending_exception = Some(JSValue::new_object(ptr));
+    JSValue::undefined()
 }
 
 fn string_to_lower_case(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -2378,13 +2504,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let raw_obj = raw_val.as_object();
     let length_atom = ctx.common_atoms.length;
     let len_val = raw_obj.get(length_atom).unwrap_or(JSValue::new_int(0));
-    let len = if len_val.is_int() {
-        len_val.get_int() as usize
-    } else if len_val.is_float() {
-        len_val.get_float() as usize
-    } else {
-        0
-    };
+    let len = js_to_length(&len_val).min(u32::MAX as u64) as usize;
     if len == 0 {
         return JSValue::new_string(ctx.intern(""));
     }
