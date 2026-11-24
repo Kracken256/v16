@@ -1109,7 +1109,7 @@ impl Lexer {
         }
     }
 
-    fn is_identifier_start(c: char) -> bool {
+    pub(crate) fn is_identifier_start(c: char) -> bool {
         if c == '$' || c == '_' {
             return true;
         }
@@ -1120,7 +1120,7 @@ impl Lexer {
             || matches!(c, '\u{2118}' | '\u{212E}' | '\u{309B}' | '\u{309C}')
     }
 
-    fn is_identifier_part(c: char) -> bool {
+    pub(crate) fn is_identifier_part(c: char) -> bool {
         if c == '$' || c == '_' {
             return true;
         }

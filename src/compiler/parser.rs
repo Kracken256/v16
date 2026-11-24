@@ -365,7 +365,7 @@ impl Parser {
                     }
                     continue;
                 }
-            let (key, computed, shorthand) = self.parse_property_key()?;
+                let (key, computed, shorthand) = self.parse_property_key()?;
                 let value = if self.at_punct(":") {
                     self.advance();
                     binding_to_target(self.parse_binding_pattern()?)
@@ -427,6 +427,23 @@ impl Parser {
             self.cur_type(),
             Some(TokenType::Identifier) | Some(TokenType::Keyword)
         ) && !matches!(self.cur_value(), "true" | "false" | "null")
+    }
+
+    fn has_invalid_identifier_escape(&self) -> bool {
+        let Some(token) = self.current.as_ref() else {
+            return false;
+        };
+        if !token.had_escape {
+            return false;
+        }
+        let mut chars = token.value.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !crate::compiler::lexer::Lexer::is_identifier_start(first) {
+            return true;
+        }
+        chars.any(|c| !crate::compiler::lexer::Lexer::is_identifier_part(c))
     }
 
     fn parse_function_declaration(
@@ -664,6 +681,10 @@ impl Parser {
                 }));
                 if self.at_punct(";") {
                     self.advance();
+                } else if !self.at_punct("}")
+                    && !self.has_line_terminator()
+                {
+                    return Err(self.error("Missing semicolon after class field initializer"));
                 }
                 continue;
             }
@@ -680,6 +701,12 @@ impl Parser {
             }
 
             if !self.at_punct("(") {
+                if !self.at_punct(";")
+                    && !self.at_punct("}")
+                    && !self.has_line_terminator()
+                {
+                    return Err(self.error("Missing semicolon after class field"));
+                }
                 elements.push(ClassElement::Property(ClassProperty {
                     name,
                     value: None,
@@ -696,7 +723,10 @@ impl Parser {
 
             let is_constructor_name =
                 matches!(&name, PropertyKey::Identifier(n) if n == "constructor");
-            let actual_kind = if !is_static && is_constructor_name {
+            let actual_kind = if !is_static
+                && is_constructor_name
+                && method_kind == MethodKind::Method
+            {
                 MethodKind::Constructor
             } else {
                 method_kind
@@ -730,15 +760,16 @@ impl Parser {
                 ClassElement::Method(m) => {
                     let name_str = match &m.name {
                         PropertyKey::Identifier(n) => Some(n.clone()),
-                        PropertyKey::PrivateIdentifier(n) => Some(n.clone()),
+                        PropertyKey::PrivateIdentifier(n) => {
+                            Some(n.trim_start_matches('#').to_string())
+                        }
                         _ => None,
                     };
                     if m.is_private {
                         let name = name_str.unwrap_or_default();
                         if name == "constructor" {
-                            return Err(self.error(
-                                "class may not have a private element named constructor",
-                            ));
+                            return Err(self
+                                .error("class may not have a private element named constructor"));
                         }
                         let kind = match m.kind {
                             MethodKind::Get => 1u8,
@@ -771,13 +802,14 @@ impl Parser {
                 ClassElement::Property(p) => {
                     if p.is_private {
                         let name = match &p.name {
-                            PropertyKey::PrivateIdentifier(n) => n.clone(),
+                            PropertyKey::PrivateIdentifier(n) => {
+                                n.trim_start_matches('#').to_string()
+                            }
                             _ => String::new(),
                         };
                         if name == "constructor" {
-                            return Err(self.error(
-                                "class may not have a private element named constructor",
-                            ));
+                            return Err(self
+                                .error("class may not have a private element named constructor"));
                         }
                         private.push((name, p.is_static, 0u8));
                     } else if p.is_static {
@@ -827,10 +859,10 @@ impl Parser {
         self.expect("(")?;
         let test = self.parse_expression()?;
         self.expect(")")?;
-        let consequent = self.parse_statement()?;
+        let consequent = self.parse_statement_body(true)?;
         let alternate = if self.at_keyword("else") {
             self.advance();
-            Some(Box::new(self.parse_statement()?))
+            Some(Box::new(self.parse_statement_body(true)?))
         } else {
             None
         };
@@ -880,7 +912,7 @@ impl Parser {
                             self.advance();
                             let right = self.parse_expression()?;
                             self.expect(")")?;
-                            let body = self.parse_statement()?;
+                            let body = self.parse_statement_body(false)?;
                             return Ok(ASTNode::ForInStatement(ForInStatement {
                                 left: ForInOfLeft::AssignmentTarget(expr_to_target(expr)?),
                                 right,
@@ -891,7 +923,7 @@ impl Parser {
                             self.advance();
                             let right = self.parse_expression()?;
                             self.expect(")")?;
-                            let body = self.parse_statement()?;
+                            let body = self.parse_statement_body(false)?;
                             return Ok(ASTNode::ForOfStatement(ForOfStatement {
                                 left: ForInOfLeft::AssignmentTarget(expr_to_target(expr)?),
                                 right,
@@ -913,7 +945,7 @@ impl Parser {
                 self.advance();
                 let right = self.parse_expression()?;
                 self.expect(")")?;
-                let body = self.parse_statement()?;
+                let body = self.parse_statement_body(false)?;
                 let decl = VariableDeclaration {
                     kind,
                     declarations: vec![VariableDeclarator { id, init: None }],
@@ -928,7 +960,7 @@ impl Parser {
                 self.advance();
                 let right = self.parse_expression()?;
                 self.expect(")")?;
-                let body = self.parse_statement()?;
+                let body = self.parse_statement_body(false)?;
                 let decl = VariableDeclaration {
                     kind,
                     declarations: vec![VariableDeclarator { id, init: None }],
@@ -968,7 +1000,7 @@ impl Parser {
             self.advance();
             let right = self.parse_expression()?;
             self.expect(")")?;
-            let body = self.parse_statement()?;
+            let body = self.parse_statement_body(false)?;
             return Ok(ASTNode::ForInStatement(ForInStatement {
                 left: ForInOfLeft::AssignmentTarget(expr_to_target(expr)?),
                 right,
@@ -979,7 +1011,7 @@ impl Parser {
             self.advance();
             let right = self.parse_expression()?;
             self.expect(")")?;
-            let body = self.parse_statement()?;
+            let body = self.parse_statement_body(false)?;
             return Ok(ASTNode::ForOfStatement(ForOfStatement {
                 left: ForInOfLeft::AssignmentTarget(expr_to_target(expr)?),
                 right,
@@ -1004,7 +1036,7 @@ impl Parser {
             Some(self.parse_expression()?)
         };
         self.expect(")")?;
-        let body = self.parse_statement()?;
+        let body = self.parse_statement_body(false)?;
         Ok(ASTNode::ForStatement(ForStatement {
             init,
             test,
@@ -1018,7 +1050,7 @@ impl Parser {
         self.expect("(")?;
         let test = self.parse_expression()?;
         self.expect(")")?;
-        let body = self.parse_statement()?;
+        let body = self.parse_statement_body(false)?;
         Ok(ASTNode::WhileStatement(WhileStatement {
             test,
             body: Box::new(body),
@@ -1027,7 +1059,7 @@ impl Parser {
 
     fn parse_do_while_statement(&mut self) -> Result<ASTNode, String> {
         self.expect("do")?;
-        let body = self.parse_statement()?;
+        let body = self.parse_statement_body(false)?;
         self.expect_keyword("while")?;
         self.expect("(")?;
         let test = self.parse_expression()?;
@@ -1167,24 +1199,35 @@ impl Parser {
         }
     }
 
-    fn parse_with_statement(&mut self) -> Result<ASTNode, String> {
-        self.expect("with")?;
-        self.expect("(")?;
-        let object = self.parse_expression()?;
-        self.expect(")")?;
+    fn parse_statement_body(&mut self, allow_function: bool) -> Result<ASTNode, String> {
         if self.is_lexical_declaration_start() {
             return Err(
                 "SyntaxError: Lexical declaration cannot appear in a single-statement context"
                     .to_string(),
             );
         }
-        let body = self.parse_statement()?;
-        if Self::is_labelled_function(&body) {
+        let node = self.parse_statement()?;
+        let allowed_function = match &node {
+            ASTNode::FunctionDeclaration(func) => {
+                allow_function && !func.generator && !func.is_async
+            }
+            _ => false,
+        };
+        if !allowed_function && Self::is_labelled_function(&node) {
             return Err(
-                "SyntaxError: Labelled function declaration not allowed in with statement"
+                "SyntaxError: Function declaration not allowed in a single-statement context"
                     .to_string(),
             );
         }
+        Ok(node)
+    }
+
+    fn parse_with_statement(&mut self) -> Result<ASTNode, String> {
+        self.expect("with")?;
+        self.expect("(")?;
+        let object = self.parse_expression()?;
+        self.expect(")")?;
+        let body = self.parse_statement_body(false)?;
         Ok(ASTNode::WithStatement(WithStatement {
             object,
             body: Box::new(body),
@@ -2351,6 +2394,9 @@ impl Parser {
         if self.cur_type() == Some(TokenType::Identifier)
             || self.cur_type() == Some(TokenType::Keyword)
         {
+            if self.has_invalid_identifier_escape() {
+                return Err(self.error("Invalid escaped identifier"));
+            }
             let name = self.cur_value().to_string();
             match name.as_str() {
                 "NaN" => {
@@ -2646,6 +2692,9 @@ impl Parser {
             self.advance();
             return Ok((PropertyKey::PrivateIdentifier(name), false, false));
         }
+        if self.has_invalid_identifier_escape() {
+            return Err(self.error("Invalid escaped identifier"));
+        }
         if self.cur_type() == Some(TokenType::String) {
             let val = self.cur_value().to_string();
             self.advance();
@@ -2874,12 +2923,10 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
                             if let Expression::AssignmentExpression(a) = *value {
                                 properties.push(ObjectPatternProperty::Property {
                                     key,
-                                    value: AssignmentTarget::AssignmentPattern(
-                                        AssignmentPattern {
-                                            left: Box::new(a.left),
-                                            right: a.right,
-                                        },
-                                    ),
+                                    value: AssignmentTarget::AssignmentPattern(AssignmentPattern {
+                                        left: Box::new(a.left),
+                                        right: a.right,
+                                    }),
                                     computed: false,
                                     shorthand: true,
                                 });
@@ -2887,9 +2934,8 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
                                 let name = match &key {
                                     PropertyKey::Identifier(n) => n.clone(),
                                     _ => {
-                                        return Err(
-                                            "invalid shorthand property in destructuring".to_string()
-                                        );
+                                        return Err("invalid shorthand property in destructuring"
+                                            .to_string());
                                     }
                                 };
                                 properties.push(ObjectPatternProperty::Property {
@@ -2921,7 +2967,10 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
                 right: a.right,
             }))
         }
-        _ => Err(format!("SyntaxError: invalid assignment target: {:?}", expr)),
+        _ => Err(format!(
+            "SyntaxError: invalid assignment target: {:?}",
+            expr
+        )),
     }
 }
 

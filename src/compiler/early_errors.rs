@@ -574,10 +574,26 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
             validate_single_statement(&d.body, ctx, false)
         }
         ASTNode::WithStatement(w) => {
+            if ctx.strict {
+                return Err(
+                    "SyntaxError: Strict mode code may not include a with statement".to_string()
+                );
+            }
             validate_expression(&w.object, ctx)?;
             validate_single_statement(&w.body, ctx, false)
         }
         ASTNode::LabelledStatement(l) => {
+            let mut labels = std::collections::HashSet::new();
+            let mut current = l;
+            loop {
+                if !labels.insert(current.label.clone()) {
+                    return Err("SyntaxError: duplicate label in statement".to_string());
+                }
+                match &*current.body {
+                    ASTNode::LabelledStatement(next) => current = next,
+                    _ => break,
+                }
+            }
             check_label_identifier(&l.label, ctx)?;
             validate_single_statement(&l.body, ctx, true)
         }
@@ -638,11 +654,28 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
     }
 }
 
+fn statement_is_labelled_function(stmt: &ASTNode) -> bool {
+    match stmt {
+        ASTNode::LabelledStatement(l) => match &*l.body {
+            ASTNode::FunctionDeclaration(_) => true,
+            ASTNode::LabelledStatement(_) => statement_is_labelled_function(&l.body),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn validate_single_statement(
     stmt: &ASTNode,
     ctx: Ctx,
     allow_sloppy_function: bool,
 ) -> Result<(), String> {
+    if statement_is_labelled_function(stmt) {
+        return Err(
+            "SyntaxError: Labelled function declarations are not allowed in this context"
+                .to_string(),
+        );
+    }
     if matches!(stmt, ASTNode::FunctionDeclaration(_)) && (ctx.strict || !allow_sloppy_function) {
         return Err(
             "SyntaxError: Function declarations are not allowed in single-statement context"
@@ -675,19 +708,17 @@ fn validate_function_declaration(fd: &FunctionDeclaration, ctx: Ctx) -> Result<(
 }
 
 fn validate_class_declaration(cd: &ClassDeclaration, ctx: Ctx) -> Result<(), String> {
-    // Class declarations are always strict code, so the binding identifier is
-    // checked against the strict-mode reserved words.
     let strict_ctx = Ctx {
         strict: true,
-        in_async: false,
-        in_generator: false,
+        in_async: ctx.in_async,
+        in_generator: ctx.in_generator,
         in_static_block: false,
     };
     check_binding_identifier(&cd.name, strict_ctx)?;
     if let Some(sc) = &cd.super_class {
-        validate_expression(sc, ctx)?;
+        validate_expression(sc, strict_ctx)?;
     }
-    validate_class_body(&cd.body, ctx)
+    validate_class_body(&cd.body, strict_ctx, cd.super_class.is_some())
 }
 
 fn collect_parameter_names(params: &[Parameter], out: &mut Vec<(String, bool)>) {
@@ -755,6 +786,11 @@ fn validate_parameter(p: &Parameter, ctx: Ctx) -> Result<(), String> {
 /// Formal parameters may not contain YieldExpression (generators) or
 /// AwaitExpression (async functions).
 fn validate_parameter_default(expr: &Expression, ctx: Ctx) -> Result<(), String> {
+    if contains_super_call(expr) {
+        return Err(
+            "SyntaxError: 'super' call is not allowed in formal parameter defaults".to_string(),
+        );
+    }
     if ctx.in_generator && contains_yield(expr) {
         return Err(
             "SyntaxError: Yield expression is not allowed in generator parameters".to_string(),
@@ -816,12 +852,75 @@ fn validate_object_pattern(op: &ObjectPattern, ctx: Ctx) -> Result<(), String> {
 }
 
 
-fn validate_class_body(body: &ClassBody, outer: Ctx) -> Result<(), String> {
+fn class_element_name(key: &PropertyKey) -> Option<String> {
+    match key {
+        PropertyKey::Identifier(name) => Some(name.clone()),
+        PropertyKey::Literal(Literal::String(name, _)) => Some(name.clone()),
+        PropertyKey::PrivateIdentifier(name) => {
+            Some(name.trim_start_matches('#').to_string())
+        }
+        _ => None,
+    }
+}
+
+fn validate_class_body(
+    body: &ClassBody,
+    outer: Ctx,
+    has_super: bool,
+) -> Result<(), String> {
+    let mut private_names: std::collections::HashMap<String, (bool, bool, bool)> =
+        std::collections::HashMap::new();
     for element in &body.elements {
         match element {
             ClassElement::Method(m) => {
                 if let PropertyKey::Computed(k) = &m.name {
                     validate_expression(k, outer)?;
+                }
+                let name = class_element_name(&m.name);
+                if m.is_private {
+                    let Some(private_name) = name.as_ref() else {
+                        return Err("SyntaxError: invalid private name".to_string());
+                    };
+                    if private_name == "constructor" {
+                        return Err(
+                            "SyntaxError: private name #constructor is not allowed".to_string()
+                        );
+                    }
+                    let is_get = m.kind == MethodKind::Get;
+                    let is_set = m.kind == MethodKind::Set;
+                    if let Some((was_static, was_get, was_set)) =
+                        private_names.get(private_name).copied()
+                    {
+                        let accessor_pair = (is_get && was_set) || (is_set && was_get);
+                        if was_static != m.is_static || !accessor_pair {
+                            return Err(
+                                "SyntaxError: duplicate private name in class".to_string()
+                            );
+                        }
+                        private_names.insert(private_name.clone(), (m.is_static, is_get, is_set));
+                    } else {
+                        private_names.insert(private_name.clone(), (m.is_static, is_get, is_set));
+                    }
+                }
+                let is_constructor_name = name.as_deref() == Some("constructor");
+                if is_constructor_name && !m.is_static && m.kind != MethodKind::Constructor {
+                    return Err(
+                        "SyntaxError: class constructor may not be an accessor or generator"
+                            .to_string(),
+                    );
+                }
+                if m.kind == MethodKind::Constructor
+                    && (m.is_async || m.generator || m.is_static)
+                {
+                    return Err("SyntaxError: invalid class constructor".to_string());
+                }
+                if m.body.body.iter().any(|s| stmt_contains(s, Scan::SuperCall))
+                    && !(m.kind == MethodKind::Constructor && has_super && !m.is_static)
+                {
+                    return Err(
+                        "SyntaxError: 'super' call is only allowed in a derived constructor"
+                            .to_string(),
+                    );
                 }
                 match m.kind {
                     MethodKind::Get if !m.params.is_empty() => {
@@ -861,6 +960,27 @@ fn validate_class_body(body: &ClassBody, outer: Ctx) -> Result<(), String> {
             ClassElement::Property(p) => {
                 if let PropertyKey::Computed(k) = &p.name {
                     validate_expression(k, outer)?;
+                }
+                let name = class_element_name(&p.name);
+                if p.is_private {
+                    let Some(private_name) = name.as_ref() else {
+                        return Err("SyntaxError: invalid private name".to_string());
+                    };
+                    if private_name == "constructor" {
+                        return Err(
+                            "SyntaxError: private name #constructor is not allowed".to_string()
+                        );
+                    }
+                    if private_names.contains_key(private_name) {
+                        return Err("SyntaxError: duplicate private name in class".to_string());
+                    }
+                    private_names.insert(private_name.clone(), (p.is_static, false, false));
+                } else if name.as_deref() == Some("constructor")
+                    || (p.is_static && name.as_deref() == Some("prototype"))
+                {
+                    return Err(
+                        "SyntaxError: invalid class field name in class declaration".to_string(),
+                    );
                 }
                 if let Some(value) = &p.value {
                     let ctx = Ctx {
@@ -971,19 +1091,19 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             validate_function_body(&f.params, &f.body, f.is_async, f.generator, ctx, false)
         }
         Expression::ClassExpression(c) => {
+            let strict_ctx = Ctx {
+                strict: true,
+                in_async: ctx.in_async,
+                in_generator: ctx.in_generator,
+                in_static_block: false,
+            };
             if let Some(sc) = &c.super_class {
-                validate_expression(sc, ctx)?;
+                validate_expression(sc, strict_ctx)?;
             }
             if let Some(name) = &c.name {
-                let inner = Ctx {
-                    strict: true,
-                    in_async: false,
-                    in_generator: false,
-                    in_static_block: false,
-                };
-                check_binding_identifier(name, inner)?;
+                check_binding_identifier(name, strict_ctx)?;
             }
-            validate_class_body(&c.body, ctx)
+            validate_class_body(&c.body, strict_ctx, c.super_class.is_some())
         }
         Expression::TemplateLiteral(t) => {
             for e in &t.expressions {
@@ -1039,6 +1159,13 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             Ok(())
         }
         Expression::MemberExpression(m) => {
+            if matches!(*m.object, Expression::Super)
+                && matches!(m.property, MemberProperty::PrivateIdentifier(_))
+            {
+                return Err(
+                    "SyntaxError: private names may not be accessed through super".to_string()
+                );
+            }
             validate_expression(&m.object, ctx)?;
             if let MemberProperty::Computed(p) = &m.property {
                 validate_expression(p, ctx)?;
