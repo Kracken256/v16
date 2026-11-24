@@ -61,12 +61,24 @@ impl Parser {
     }
 
     fn expect_semicolon(&mut self) -> Result<(), String> {
-        if let Some(ref t) = self.current {
-            if t.value == ";" {
-                self.advance();
-            }
+        if self.at_punct(";") {
+            self.advance();
+            return Ok(());
         }
-        Ok(())
+        if self.is_eof()
+            || self.at_punct("}")
+            || self
+                .current
+                .as_ref()
+                .map_or(false, |t| t.line_terminator_before)
+        {
+            return Ok(());
+        }
+        Err(self.error(&format!(
+            "Expected ';' but got '{}' at pos {}",
+            self.cur_value(),
+            self.lexer.pos()
+        )))
     }
 
     fn at(&self, value: &str) -> bool {
@@ -1138,7 +1150,7 @@ impl Parser {
     fn has_line_terminator(&self) -> bool {
         self.current
             .as_ref()
-            .map_or(false, |t| t.line > self.saved_line)
+            .map_or(false, |t| t.line_terminator_before)
     }
 
     fn parse_return_statement(&mut self) -> Result<ASTNode, String> {
@@ -1158,6 +1170,9 @@ impl Parser {
 
     fn parse_throw_statement(&mut self) -> Result<ASTNode, String> {
         self.expect("throw")?;
+        if self.has_line_terminator() {
+            return Err(self.error("Illegal newline after throw"));
+        }
         let argument = self.parse_expression()?;
         self.expect_semicolon()?;
         Ok(ASTNode::ThrowStatement(ThrowStatement { argument }))

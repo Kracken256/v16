@@ -27,6 +27,7 @@ pub struct Token {
     pub value: String,
     pub line: u32,
     pub column: u32,
+    pub line_terminator_before: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,8 @@ pub struct Lexer {
     cached_peek: Option<PeekCache>,
 
     pub last_string_had_escape: bool,
+
+    pending_line_terminator: bool,
 }
 
 impl Lexer {
@@ -74,6 +77,7 @@ impl Lexer {
             last_token_kind: LastTokenKind::None,
             cached_peek: None,
             last_string_had_escape: false,
+            pending_line_terminator: false,
         }
     }
 
@@ -96,6 +100,13 @@ impl Lexer {
     }
 
     fn next_token_uncached(&mut self) -> Option<Token> {
+        let mut token = self.next_token_uncached_inner()?;
+        token.line_terminator_before = token.line_terminator_before || self.pending_line_terminator;
+        self.pending_line_terminator = false;
+        Some(token)
+    }
+
+    fn next_token_uncached_inner(&mut self) -> Option<Token> {
         self.skip_whitespace()?;
         if self.pos >= self.source.len() {
             return None;
@@ -146,6 +157,7 @@ impl Lexer {
                 value,
                 line: self.line,
                 column: self.column,
+            line_terminator_before: false,
             });
         }
 
@@ -203,6 +215,7 @@ impl Lexer {
 
         self.cached_peek = None;
         self.last_token_kind = LastTokenKind::None;
+        self.pending_line_terminator = false;
     }
 
     pub fn pos(&self) -> usize {
@@ -262,6 +275,7 @@ impl Lexer {
         let old_line = self.line;
         let old_column = self.column;
         let old_last_token_kind = self.last_token_kind;
+        let old_pending_line_terminator = self.pending_line_terminator;
 
         self.cached_peek = None;
         let result = self.next_token_uncached();
@@ -275,6 +289,7 @@ impl Lexer {
         self.line = old_line;
         self.column = old_column;
         self.last_token_kind = old_last_token_kind;
+        self.pending_line_terminator = old_pending_line_terminator;
 
         if let Some(token) = result {
             self.cached_peek = Some(PeekCache {
@@ -301,6 +316,7 @@ impl Lexer {
                     self.line += 1;
                     self.column = 1;
                     self.pos += 1;
+                    self.pending_line_terminator = true;
                 }
                 ' ' | '\t' | '\u{000B}' | '\u{000C}' | '\u{00A0}' | '\u{1680}' | '\u{202F}'
                 | '\u{205F}' | '\u{3000}' | '\u{FEFF}' => {
@@ -370,6 +386,7 @@ impl Lexer {
                 value,
                 line: self.line,
                 column: self.column,
+            line_terminator_before: false,
             };
         }
 
@@ -449,6 +466,7 @@ impl Lexer {
             value,
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         }
     }
 
@@ -637,6 +655,7 @@ impl Lexer {
             value,
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         }
     }
 
@@ -658,6 +677,7 @@ impl Lexer {
             value,
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         }
     }
 
@@ -692,6 +712,7 @@ impl Lexer {
             value,
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         }
     }
 
@@ -760,6 +781,7 @@ impl Lexer {
             value,
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         }
     }
 
@@ -780,6 +802,7 @@ impl Lexer {
                     value: String::new(),
                     line: self.line,
                     column: self.column,
+            line_terminator_before: false,
                 });
             }
 
@@ -794,6 +817,12 @@ impl Lexer {
                         self.advance();
                         break;
                     }
+                    if matches!(
+                        self.source[self.pos],
+                        '\n' | '\r' | '\u{2028}' | '\u{2029}'
+                    ) {
+                        self.pending_line_terminator = true;
+                    }
                     self.advance();
                 }
                 return self.next_token().unwrap_or(Token {
@@ -801,6 +830,7 @@ impl Lexer {
                     value: String::new(),
                     line: self.line,
                     column: self.column,
+            line_terminator_before: false,
                 });
             }
 
@@ -814,6 +844,7 @@ impl Lexer {
                         value: "/=".to_string(),
                         line: self.line,
                         column: self.column,
+                        line_terminator_before: false,
                     };
                 }
 
@@ -823,6 +854,7 @@ impl Lexer {
                     value: "/".to_string(),
                     line: self.line,
                     column: self.column,
+            line_terminator_before: false,
                 };
             }
 
@@ -877,6 +909,7 @@ impl Lexer {
                 value: format!("{}/{}", pattern, flags),
                 line: self.line,
                 column: self.column,
+            line_terminator_before: false,
             };
         }
         self.last_token_kind = LastTokenKind::RegexPrefix;
@@ -885,6 +918,7 @@ impl Lexer {
             value: "/".to_string(),
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         }
     }
 
@@ -1060,6 +1094,7 @@ impl Lexer {
             value,
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         }
     }
 
@@ -1346,6 +1381,7 @@ impl Lexer {
             value,
             line: self.line,
             column: self.column,
+            line_terminator_before: false,
         })
     }
 
