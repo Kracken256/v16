@@ -122,7 +122,7 @@ fn run_generator_step(
     let current_pc = state.pc;
     let snapshot_clone = state.snapshot.clone();
     let current_send_reg = state.send_reg;
-    let argc = state.argc;
+    let saved_args = state.saved_args.clone();
 
     let (value, new_snapshot, new_pc, done, new_send_reg) = {
         let bytecode = &*gen_obj.get_generator_state().unwrap().bytecode;
@@ -136,7 +136,7 @@ fn run_generator_step(
             current_pc,
             send_value,
             current_send_reg,
-            argc,
+            &saved_args,
         );
         let uncaught = vm.last_uncaught;
         ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;

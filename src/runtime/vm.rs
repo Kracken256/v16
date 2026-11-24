@@ -934,28 +934,32 @@ impl VM {
 
                     // The parameter prologue always runs when the generator is
                     // invoked; an initial `Yield` emitted by the compiler stops
-                    // execution before the body starts.
-                    let saved_handlers = self.exception_handlers.clone();
-
+                    // execution before the body starts.  The step must run on an
+                    // isolated VM so it cannot clobber the caller's frame,
+                    // registers or program counter.
                     let (result_snapshot, result_pc, result_done, result_send_reg) = {
-                        match self.execute_generator_step(
+                        let mut generator_vm = crate::runtime::vm::VM::new();
+                        ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
+                        let step = generator_vm.execute_generator_step(
                             ctx,
                             rb,
                             &snapshot,
                             0,
                             JSValue::undefined(),
                             None,
-                            args.len() as u32,
-                        ) {
+                            args,
+                        );
+                        let uncaught = generator_vm.last_uncaught.take();
+                        ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
+                        drop(generator_vm);
+                        match step {
                             Ok((_val, new_snapshot, new_pc, done, src)) => {
-                                self.exception_handlers = saved_handlers;
-                                self.frame_index = saved_frame_index;
                                 (new_snapshot, new_pc, done, src)
                             }
                             Err(e) => {
-                                self.exception_handlers = saved_handlers;
-                                self.frame_index = saved_frame_index;
-                                if self.pending_throw.is_some() {
+                                if let Some(exc) = uncaught {
+                                    self.last_caught_exception = Some(exc.clone());
+                                    self.pending_throw = Some(exc);
                                     return Ok(false);
                                 }
                                 if e.contains("SyntaxError") || e.contains("Uncaught") {
@@ -983,6 +987,7 @@ impl VM {
                         done: result_done,
                         send_reg: result_send_reg,
                         argc: args.len() as u32,
+                        saved_args: args.to_vec(),
                     });
                     let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -2017,19 +2022,31 @@ impl VM {
                 }
                 let has_params = (args.len() as u32) < rb.param_count as u32;
                 let (result_snapshot, result_pc, result_done, result_send_reg) = if has_params {
-                    match self.execute_generator_step(
+                    let mut generator_vm = crate::runtime::vm::VM::new();
+                    ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
+                    let step = generator_vm.execute_generator_step(
                         ctx,
                         rb,
                         &snapshot,
                         0,
                         JSValue::undefined(),
                         None,
-                        args.len() as u32,
-                    ) {
+                        args,
+                    );
+                    let uncaught = generator_vm.last_uncaught.take();
+                    ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
+                    drop(generator_vm);
+                    match step {
                         Ok((_val, new_snapshot, new_pc, done, src)) => {
                             (new_snapshot, new_pc, done, src)
                         }
-                        Err(_) => (snapshot, 0, false, None),
+                        Err(_) => {
+                            if let Some(exc) = uncaught {
+                                self.last_caught_exception = Some(exc.clone());
+                                self.pending_throw = Some(exc);
+                            }
+                            (snapshot, 0, false, None)
+                        }
                     }
                 } else {
                     (snapshot, 0, false, None)
@@ -2051,6 +2068,7 @@ impl VM {
                     done: result_done,
                     send_reg: result_send_reg,
                     argc: args.len() as u32,
+                    saved_args: args.to_vec(),
                 });
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -6675,6 +6693,7 @@ impl VM {
                                         done: false,
                                         send_reg: None,
                                         argc: args.len() as u32,
+                                        saved_args: args.to_vec(),
                                     },
                                 );
                                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -7553,22 +7572,13 @@ impl VM {
         start_pc: usize,
         send_value: JSValue,
         send_reg: Option<u16>,
-        argc: u32,
+        saved_args: &[JSValue],
     ) -> Result<(JSValue, Vec<JSValue>, usize, bool, Option<u16>), String> {
         self.ctx_ptr = ctx;
         self.last_yield_src = None;
         self.last_uncaught = None;
 
-        let mut saved_args = Vec::with_capacity(argc as usize);
-        for i in 0..argc as usize {
-            saved_args.push(
-                registers_snapshot
-                    .get(i + 1)
-                    .copied()
-                    .unwrap_or_else(JSValue::undefined),
-            );
-        }
-        self.pending_saved_args = Some(saved_args);
+        self.pending_saved_args = Some(saved_args.to_vec());
 
         let needed = bytecode.locals_count as usize;
         if needed > self.registers.len() {

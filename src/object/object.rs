@@ -16,6 +16,8 @@ pub struct GeneratorState {
     pub send_reg: Option<u16>,
 
     pub argc: u32,
+
+    pub saved_args: Vec<JSValue>,
 }
 use std::ptr::NonNull;
 
