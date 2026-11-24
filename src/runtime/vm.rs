@@ -4714,6 +4714,20 @@ impl VM {
                     let key_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
+                    if obj_val.is_null_or_undefined() {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot read property of null or undefined",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
                     let result = if obj_val.is_object_like() && key_val.is_int() {
                         let ptr = obj_val.get_ptr();
                         let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
@@ -4893,6 +4907,20 @@ impl VM {
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
                     let value = self.get_reg(val_reg);
+                    if obj_val.is_null_or_undefined() {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot set property of null or undefined",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
                     if obj_val.is_object_like() && key_val.is_int() {
                         let ptr = obj_val.get_ptr();
                         let js_obj = unsafe { JSValue::object_from_ptr_mut(ptr) };
@@ -5100,6 +5128,20 @@ impl VM {
                     let key_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
+                    if obj_val.is_null_or_undefined() {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot read property of null or undefined",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
 
                     if !obj_val.is_object_like()
                         && !obj_val.is_function()
@@ -5251,6 +5293,20 @@ impl VM {
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
                     let value = self.get_reg(val_reg);
+                    if obj_val.is_null_or_undefined() {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot set property of null or undefined",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
 
                     if key_val.is_string() {
                         self.set_named_prop(ctx, obj_val, value, key_val.get_atom(), usize::MAX);
@@ -8392,6 +8448,10 @@ impl VM {
         atom: crate::runtime::atom::Atom,
         ic_pc: usize,
     ) -> Option<JSValue> {
+        if obj_val.is_null_or_undefined() {
+            self.set_pending_type_error(ctx, "Cannot read property of null or undefined");
+            return None;
+        }
         if !obj_val.is_object_like()
             && !obj_val.is_function()
             && (obj_val.is_int()
