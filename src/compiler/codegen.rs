@@ -8428,6 +8428,16 @@ impl CodeGenerator {
             self.free_register(proto_key);
         }
 
+        let proto_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
+        let proto_key = self.alloc_register();
+        self.emit(Opcode::LoadConst);
+        self.emit_u16(proto_key);
+        self.emit_u32(proto_key_idx);
+        self.emit(Opcode::DefineClassPrototype);
+        self.emit_u16(class_slot);
+        self.emit_u16(proto_reg);
+        self.free_register(proto_key);
+
         for (method_key, method_bc, method_upvalues, is_gen, is_async, kind, is_private) in
             instance_methods
         {
@@ -8636,15 +8646,6 @@ impl CodeGenerator {
             self.free_register(method_reg);
         }
 
-        let proto_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
-        let proto_key = self.alloc_register();
-        self.emit(Opcode::LoadConst);
-        self.emit_u16(proto_key);
-        self.emit_u32(proto_key_idx);
-        self.emit(Opcode::DefineClassPrototype);
-        self.emit_u16(class_slot);
-        self.emit_u16(proto_reg);
-        self.free_register(proto_key);
         self.free_register(proto_reg);
 
         for element in &body.elements {
