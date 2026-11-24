@@ -14,6 +14,8 @@ pub struct GeneratorState {
     pub done: bool,
 
     pub send_reg: Option<u16>,
+
+    pub argc: u32,
 }
 use std::ptr::NonNull;
 

@@ -295,10 +295,20 @@ fn promise_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return value;
         }
     }
-    let mut promise = create_promise(ctx);
-    fulfill_promise(ctx, &mut promise, value);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
-    JSValue::new_object(ptr)
+    let promise = create_promise(ctx);
+    let promise_val = {
+        let ptr = Box::into_raw(Box::new(promise)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        JSValue::new_object(ptr)
+    };
+    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+        resolve_promise_value(ctx, vm, promise_val, value);
+    } else {
+        let p = promise_val.as_object_mut();
+        fulfill_promise(ctx, p, value);
+    }
+    promise_val
 }
 
 fn promise_reject(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -855,6 +865,85 @@ fn promise_with_resolvers(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     JSValue::new_object(result_ptr)
 }
 
+/// Create a TypeError object and reject `target` with it.
+fn reject_promise_with_type_error(ctx: &mut JSContext, target: JSValue, message: &str) {
+    let mut err = JSObject::new();
+    err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
+    err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(message)));
+    if let Some(proto) = ctx.get_type_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    let t = target.as_object_mut();
+    if t.is_promise() && get_promise_state(ctx, t).is_pending() {
+        reject_promise(ctx, t, JSValue::new_object(ptr));
+    }
+}
+
+/// Implements the Promise Resolution Procedure (ECMA-262 25.6.1.3.2) for `target`.
+/// If `value` is a thenable (including another promise) this adopts its eventual
+/// state, otherwise it fulfills `target` with `value`.
+fn resolve_promise_value(
+    ctx: &mut JSContext,
+    vm: &mut crate::runtime::vm::VM,
+    target: JSValue,
+    value: JSValue,
+) {
+    if !target.is_object() {
+        return;
+    }
+    {
+        let target_obj = target.as_object();
+        if !target_obj.is_promise() || !get_promise_state(ctx, target_obj).is_pending() {
+            return;
+        }
+        // Chaining a promise with itself is a TypeError.
+        if value.is_object()
+            && value.as_object() as *const JSObject == target_obj as *const JSObject
+        {
+            reject_promise_with_type_error(
+                ctx,
+                target,
+                "Chaining cycle detected for promise",
+            );
+            return;
+        }
+    }
+    if value.is_object() {
+        let then_atom = ctx.intern("then");
+        let then_val = value.as_object().get(then_atom);
+        if let Some(then_fn) = then_val {
+            if then_fn.is_function() {
+                let (resolve_val, reject_val) = create_resolve_reject_fns(ctx, target);
+                match vm.call_function_with_this(
+                    ctx,
+                    then_fn,
+                    value,
+                    &[resolve_val, reject_val],
+                ) {
+                    Ok(_) => return,
+                    Err(_) => {
+                        let exc = vm
+                            .last_caught_exception
+                            .take()
+                            .unwrap_or_else(JSValue::undefined);
+                        let t = target.as_object_mut();
+                        if t.is_promise() && get_promise_state(ctx, t).is_pending() {
+                            reject_promise(ctx, t, exc);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    let t = target.as_object_mut();
+    if t.is_promise() && get_promise_state(ctx, t).is_pending() {
+        fulfill_promise(ctx, t, value);
+    }
+}
+
 fn resolve_value_as_promise(ctx: &mut JSContext, value: JSValue) -> JSValue {
     if value.is_object() {
         let obj = value.as_object();
@@ -881,46 +970,21 @@ fn promise_internal_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !promise_val.is_object() {
         return JSValue::undefined();
     }
-    let promise = promise_val.as_object_mut();
-    if !promise.is_promise() || !get_promise_state(ctx, promise).is_pending() {
-        return JSValue::undefined();
-    }
-    if value.is_object() {
-        let val_obj = value.as_object();
-        if val_obj.is_promise() {
-            let state = get_promise_state(ctx, val_obj);
-            let result_val = get_promise_result(ctx, val_obj);
-            match state {
-                PromiseState::Fulfilled => fulfill_promise(ctx, promise, result_val),
-                PromiseState::Rejected => reject_promise(ctx, promise, result_val),
-                PromiseState::Pending => {
-                    let already_atom = ctx.intern("__already_resolved__");
-                    promise.set(already_atom, JSValue::bool(true));
-                    let reactions_atom = intern_str(ctx, PROMISE_REACTIONS_SLOT);
-                    let mut reactions = get_promise_reactions(ctx, val_obj);
-                    let target = promise_val;
-                    reactions.push(Reaction {
-                        handler: JSValue::undefined(),
-                        is_reject: false,
-                        is_all_settled: false, is_finally: false,
-                        target_promise: target,
-                    });
-                    reactions.push(Reaction {
-                        handler: JSValue::undefined(),
-                        is_reject: true,
-                        is_all_settled: false, is_finally: false,
-                        target_promise: target,
-                    });
-                    let reactions_arr = create_reaction_array(ctx, reactions);
-                    let val_mut = value.as_object_mut();
-                    val_mut.set(reactions_atom, reactions_arr);
-                    return JSValue::undefined();
-                }
-            }
+    {
+        let promise = promise_val.as_object();
+        if !promise.is_promise() || !get_promise_state(ctx, promise).is_pending() {
             return JSValue::undefined();
         }
     }
-    fulfill_promise(ctx, promise, value);
+    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+        resolve_promise_value(ctx, vm, promise_val, value);
+    } else {
+        let promise = promise_val.as_object_mut();
+        if promise.is_promise() && get_promise_state(ctx, promise).is_pending() {
+            fulfill_promise(ctx, promise, value);
+        }
+    }
     JSValue::undefined()
 }
 
@@ -1197,29 +1261,38 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                 }
                 if handler.is_function() {
                     let result = vm.call_function(ctx, handler, &[argument]);
-                    if reaction.target_promise.is_object() {
-                        let target = reaction.target_promise.as_object_mut();
-                        if target.is_promise() {
-                            if reaction.is_finally {
-                                match result {
-                                    Ok(_) => {
-                                        if reaction.is_reject {
-                                            reject_promise(ctx, target, argument);
-                                        } else {
-                                            fulfill_promise(ctx, target, argument);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let msg = JSValue::new_string(ctx.intern(&e));
-                                        reject_promise(ctx, target, msg);
+                    let target_val = reaction.target_promise;
+                    let target_ok = target_val.is_object()
+                        && {
+                            let t = target_val.as_object();
+                            t.is_promise() && get_promise_state(ctx, t).is_pending()
+                        };
+                    if target_ok {
+                        if reaction.is_finally {
+                            let target = target_val.as_object_mut();
+                            match result {
+                                Ok(_) => {
+                                    if reaction.is_reject {
+                                        reject_promise(ctx, target, argument);
+                                    } else {
+                                        fulfill_promise(ctx, target, argument);
                                     }
                                 }
-                            } else {
-                                match result {
-                                    Ok(val) => fulfill_promise(ctx, target, val),
-                                    Err(_) => {
-                                        reject_promise(ctx, target, JSValue::undefined());
-                                    }
+                                Err(e) => {
+                                    let msg = JSValue::new_string(ctx.intern(&e));
+                                    reject_promise(ctx, target, msg);
+                                }
+                            }
+                        } else {
+                            match result {
+                                Ok(val) => resolve_promise_value(ctx, vm, target_val, val),
+                                Err(_) => {
+                                    let exc = vm
+                                        .last_caught_exception
+                                        .take()
+                                        .unwrap_or_else(JSValue::undefined);
+                                    let target = target_val.as_object_mut();
+                                    reject_promise(ctx, target, exc);
                                 }
                             }
                         }

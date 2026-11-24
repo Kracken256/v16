@@ -109,7 +109,7 @@ fn run_generator_step(
     ctx: &mut JSContext,
     gen_obj: &mut JSObject,
     send_value: JSValue,
-) -> Result<(JSValue, usize, bool), String> {
+) -> Result<(JSValue, usize, bool), (String, Option<JSValue>)> {
     let state = match gen_obj.get_generator_state() {
         Some(s) => s,
         None => return Ok((JSValue::undefined(), 0, true)),
@@ -122,6 +122,7 @@ fn run_generator_step(
     let current_pc = state.pc;
     let snapshot_clone = state.snapshot.clone();
     let current_send_reg = state.send_reg;
+    let argc = state.argc;
 
     let (value, new_snapshot, new_pc, done, new_send_reg) = {
         let bytecode = &*gen_obj.get_generator_state().unwrap().bytecode;
@@ -135,9 +136,14 @@ fn run_generator_step(
             current_pc,
             send_value,
             current_send_reg,
+            argc,
         );
+        let uncaught = vm.last_uncaught;
         ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
-        result?
+        match result {
+            Ok(v) => v,
+            Err(e) => return Err((e, uncaught)),
+        }
     };
 
     if let Some(state) = gen_obj.get_generator_state_mut() {
@@ -176,10 +182,19 @@ fn generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     match run_generator_step(ctx, gen_obj, send_value) {
         Ok((value, _new_pc, done)) => create_iterator_result(ctx, value, done),
-        Err(_) => {
+        Err((msg, exc)) => {
             if let Some(state) = gen_obj.get_generator_state_mut() {
                 state.done = true;
             }
+            let thrown = exc.unwrap_or_else(|| {
+                let mut err = JSObject::new();
+                err.set(ctx.intern("name"), JSValue::new_string(ctx.intern("Error")));
+                err.set(ctx.intern("message"), JSValue::new_string(ctx.intern(&msg)));
+                let ptr = Box::into_raw(Box::new(err)) as usize;
+                ctx.runtime_mut().gc_heap_mut().track(ptr);
+                JSValue::new_object(ptr)
+            });
+            ctx.pending_exception = Some(thrown);
             create_iterator_result(ctx, JSValue::undefined(), true)
         }
     }
@@ -237,11 +252,14 @@ fn async_generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let iter_result = create_iterator_result(ctx, value, done);
             ctx.call_builtin("promise_resolve", &[iter_result])
         }
-        Err(e) => {
+        Err((e, exc)) => {
             if let Some(state) = gen_obj.get_generator_state_mut() {
                 state.done = true;
             }
-            let err_val = JSValue::new_string(ctx.intern(&e));
+            let err_val = match exc {
+                Some(v) => v,
+                None => JSValue::new_string(ctx.intern(&e)),
+            };
             ctx.call_builtin("promise_reject", &[err_val])
         }
     }

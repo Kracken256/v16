@@ -150,6 +150,10 @@ pub struct VM {
 
     pub last_yield_src: Option<u16>,
 
+    pub last_uncaught: Option<JSValue>,
+
+    pub pending_saved_args: Option<Vec<JSValue>>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -193,6 +197,8 @@ impl VM {
             instanceof_cache_result: false,
             regex_lit_cache: std::collections::HashMap::new(),
             last_yield_src: None,
+            last_uncaught: None,
+            pending_saved_args: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -234,6 +240,25 @@ impl VM {
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.pending_throw = Some(JSValue::new_object(ptr));
         None
+    }
+
+    /// Returns true when `Symbol.iterator` on the array still resolves to the
+    /// built-in array iterator, so the fast array iteration path is valid.
+    fn array_uses_default_iterator(&mut self, ctx: &mut JSContext, arr: JSValue) -> bool {
+        let default_ptr = match ctx.get_array_iterator_fn() {
+            Some(p) => p,
+            None => return false,
+        };
+        let sym_iter = crate::builtins::symbol::get_symbol_iterator(ctx);
+        if !sym_iter.is_symbol() {
+            return false;
+        }
+        let sym_atom = crate::runtime::atom::Atom(0x40000000 | sym_iter.get_symbol_id());
+        let arr_obj = unsafe { arr.as_object() };
+        match arr_obj.get(sym_atom) {
+            Some(v) => v.is_function() && v.get_ptr() == default_ptr,
+            None => false,
+        }
     }
 
     fn create_iter_object(&mut self, ctx: &mut JSContext, iterable: JSValue) -> JSValue {
@@ -907,11 +932,12 @@ impl VM {
                         snapshot[i + 1] = *arg;
                     }
 
-                    let has_params = argc < rb.param_count;
-
+                    // The parameter prologue always runs when the generator is
+                    // invoked; an initial `Yield` emitted by the compiler stops
+                    // execution before the body starts.
                     let saved_handlers = self.exception_handlers.clone();
 
-                    let (result_snapshot, result_pc, result_done, result_send_reg) = if has_params {
+                    let (result_snapshot, result_pc, result_done, result_send_reg) = {
                         match self.execute_generator_step(
                             ctx,
                             rb,
@@ -919,6 +945,7 @@ impl VM {
                             0,
                             JSValue::undefined(),
                             None,
+                            args.len() as u32,
                         ) {
                             Ok((_val, new_snapshot, new_pc, done, src)) => {
                                 self.exception_handlers = saved_handlers;
@@ -937,8 +964,6 @@ impl VM {
                                 (snapshot, 0, false, None)
                             }
                         }
-                    } else {
-                        (snapshot, 0, false, None)
                     };
 
                     let mut gen_obj = crate::object::object::JSObject::new();
@@ -957,6 +982,7 @@ impl VM {
                         pc: result_pc,
                         done: result_done,
                         send_reg: result_send_reg,
+                        argc: args.len() as u32,
                     });
                     let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -1882,7 +1908,13 @@ impl VM {
         }
 
         if !func.is_function() {
-            return Err("call_function: not a function".to_string());
+            let msg = format!(
+                "{} is not a function",
+                self.format_thrown_value(&func, ctx)
+            );
+            self.set_pending_type_error(ctx, &msg);
+            self.last_caught_exception = self.pending_throw.take();
+            return Err(msg);
         }
 
         let ptr = func.get_ptr();
@@ -1992,6 +2024,7 @@ impl VM {
                         0,
                         JSValue::undefined(),
                         None,
+                        args.len() as u32,
                     ) {
                         Ok((_val, new_snapshot, new_pc, done, src)) => {
                             (new_snapshot, new_pc, done, src)
@@ -2017,6 +2050,7 @@ impl VM {
                     pc: result_pc,
                     done: result_done,
                     send_reg: result_send_reg,
+                    argc: args.len() as u32,
                 });
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -2433,6 +2467,7 @@ impl VM {
                 self.registers[0] = global_val;
             }
 
+            let saved_args = self.pending_saved_args.take();
             let frame = &mut self.frames[0];
             frame.registers_base = 0;
             frame.registers_count = needed;
@@ -2445,6 +2480,9 @@ impl VM {
             frame.function_ptr = None;
             frame.this_value = global_val;
             frame.saved_args.clear();
+            if let Some(args) = saved_args {
+                frame.saved_args = args;
+            }
             frame.upvalue_sync_map = None;
             frame.upvalue_sync_bitset = 0;
             frame.uses_arguments = false;
@@ -6636,6 +6674,7 @@ impl VM {
                                         pc: 0,
                                         done: false,
                                         send_reg: None,
+                                        argc: args.len() as u32,
                                     },
                                 );
                                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -7247,7 +7286,7 @@ impl VM {
                         self.create_iter_object(ctx, iterable)
                     } else if iterable.is_object() || iterable.is_function() {
                         let is_array = iterable.as_object().is_dense_array();
-                        if is_array {
+                        if is_array && self.array_uses_default_iterator(ctx, iterable) {
                             self.create_iter_object(ctx, iterable)
                         } else {
                             let obj: &crate::object::object::JSObject = if iterable.is_function() {
@@ -7326,7 +7365,12 @@ impl VM {
                     let dst_done = self.read_u16_pc();
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
-                    self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None)?;
+                    if let Err(e) = self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None) {
+                        if self.pending_throw.is_some() {
+                            continue;
+                        }
+                        return Err(e);
+                    }
                 }
                 Opcode::IteratorNextSend => {
                     let dst_val = self.read_u16_pc();
@@ -7335,7 +7379,14 @@ impl VM {
                     let send_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
                     let send_val = self.get_reg(send_reg);
-                    self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val))?;
+                    if let Err(e) =
+                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val))
+                    {
+                        if self.pending_throw.is_some() {
+                            continue;
+                        }
+                        return Err(e);
+                    }
                 }
                 Opcode::IteratorClose => {
                     let iter_reg = self.read_u16_pc();
@@ -7502,9 +7553,22 @@ impl VM {
         start_pc: usize,
         send_value: JSValue,
         send_reg: Option<u16>,
+        argc: u32,
     ) -> Result<(JSValue, Vec<JSValue>, usize, bool, Option<u16>), String> {
         self.ctx_ptr = ctx;
         self.last_yield_src = None;
+        self.last_uncaught = None;
+
+        let mut saved_args = Vec::with_capacity(argc as usize);
+        for i in 0..argc as usize {
+            saved_args.push(
+                registers_snapshot
+                    .get(i + 1)
+                    .copied()
+                    .unwrap_or_else(JSValue::undefined),
+            );
+        }
+        self.pending_saved_args = Some(saved_args);
 
         let needed = bytecode.locals_count as usize;
         if needed > self.registers.len() {
@@ -7528,7 +7592,13 @@ impl VM {
             }
         }
 
-        let result = self.execute_inner(ctx, bytecode, true, start_pc, true)?;
+        let result = match self.execute_inner(ctx, bytecode, true, start_pc, true) {
+            Ok(r) => r,
+            Err(e) => {
+                self.last_uncaught = self.pending_throw.take();
+                return Err(e);
+            }
+        };
         match result {
             ExecutionOutcome::Complete(val) => Ok((
                 val,
@@ -7545,6 +7615,53 @@ impl VM {
                 self.last_yield_src,
             )),
         }
+    }
+
+    /// Reads a property, invoking accessor getters and propagating their
+    /// exceptions through the pending-throw machinery.
+    fn get_prop_value(
+        &mut self,
+        ctx: &mut JSContext,
+        obj: JSValue,
+        atom: crate::runtime::atom::Atom,
+    ) -> Result<JSValue, String> {
+        if !obj.is_object_like() {
+            return Ok(JSValue::undefined());
+        }
+        let js_obj = unsafe { obj.as_object() };
+        if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
+            if let Some(getter) = entry.get {
+                if getter.is_function() {
+                    return self.call_function_with_this(ctx, getter, obj, &[]);
+                }
+            }
+            return Ok(JSValue::undefined());
+        }
+        if let Some(v) = js_obj.get(atom) {
+            return Ok(v);
+        }
+        let mut current = js_obj.prototype;
+        let mut depth = 0u32;
+        while let Some(proto_ptr) = current {
+            if proto_ptr.is_null() || depth > 1000 {
+                break;
+            }
+            depth += 1;
+            let proto = unsafe { &*proto_ptr };
+            if let Some(entry) = proto.get_own_accessor_entry(atom) {
+                if let Some(getter) = entry.get {
+                    if getter.is_function() {
+                        return self.call_function_with_this(ctx, getter, obj, &[]);
+                    }
+                }
+                return Ok(JSValue::undefined());
+            }
+            if let Some(v) = proto.get(atom) {
+                return Ok(v);
+            }
+            current = proto.prototype;
+        }
+        Ok(JSValue::undefined())
     }
 
     fn op_iterator_next(
@@ -7654,13 +7771,26 @@ impl VM {
                 match self.call_function_with_this(ctx, next_fn_val, iter_val, &args) {
                     Ok(result) => {
                         if result.is_object() {
-                            let result_obj = result.as_object();
-                            let value = result_obj
-                                .get(ctx.intern("value"))
-                                .unwrap_or(JSValue::undefined());
-                            let done = result_obj
-                                .get(ctx.intern("done"))
-                                .unwrap_or(JSValue::bool(false));
+                            let value_atom = ctx.intern("value");
+                            let done_atom = ctx.intern("done");
+                            let value = match self.get_prop_value(ctx, result, value_atom) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    self.set_reg(dst_val, JSValue::undefined());
+                                    self.set_reg(dst_done, JSValue::bool(true));
+                                    self.rethrow_last_caught();
+                                    return Err(e);
+                                }
+                            };
+                            let done = match self.get_prop_value(ctx, result, done_atom) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    self.set_reg(dst_val, JSValue::undefined());
+                                    self.set_reg(dst_done, JSValue::bool(true));
+                                    self.rethrow_last_caught();
+                                    return Err(e);
+                                }
+                            };
                             self.set_reg(dst_val, value);
                             self.set_reg(dst_done, done);
                         } else {
@@ -7671,6 +7801,7 @@ impl VM {
                     Err(e) => {
                         self.set_reg(dst_val, JSValue::undefined());
                         self.set_reg(dst_done, JSValue::bool(true));
+                        self.rethrow_last_caught();
                         return Err(e);
                     }
                 }

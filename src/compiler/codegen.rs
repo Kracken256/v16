@@ -1359,7 +1359,52 @@ impl CodeGenerator {
         function_name: Option<&str>,
         return_last_expr: bool,
     ) -> Result<(Bytecode, Vec<(u32, u16)>), String> {
-        self.is_strict = self.is_strict || Self::has_use_strict_directive(body);
+        self.compile_function_with_parent_gen(
+            params,
+            body,
+            ctx,
+            parent_vars,
+            function_name,
+            return_last_expr,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_function_with_parent_gen(
+        &mut self,
+        params: &[Parameter],
+        body: &BlockStatement,
+        ctx: &mut JSContext,
+        parent_vars: FxHashMap<String, ParentVar>,
+        function_name: Option<&str>,
+        return_last_expr: bool,
+        is_generator: bool,
+    ) -> Result<(Bytecode, Vec<(u32, u16)>), String> {
+        let has_use_strict = Self::has_use_strict_directive(body);
+        self.is_strict = self.is_strict || has_use_strict;
+        let is_simple_params = params.iter().all(|p| matches!(p, Parameter::Identifier(_)));
+        if has_use_strict && !is_simple_params {
+            return Err(
+                "SyntaxError: Illegal 'use strict' directive in function with non-simple parameter list"
+                    .to_string(),
+            );
+        }
+        if !is_simple_params {
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for p in params {
+                let mut names = std::collections::HashSet::new();
+                Self::collect_parameter_bindings(p, &mut names);
+                for n in names {
+                    if !seen.insert(n) {
+                        return Err(
+                            "SyntaxError: Duplicate parameter name not allowed in this context"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
         let saved_is_script_level = self.is_script_level;
         let saved_scope_is_global = self.scope_is_global.clone();
         self.next_register = 0;
@@ -1654,6 +1699,19 @@ impl CodeGenerator {
             .body
             .last()
             .map_or(false, |s| matches!(s, ASTNode::ReturnStatement(_)));
+
+        // For generator functions the parameter prologue must run when the
+        // generator is invoked (so parameter errors surface synchronously),
+        // but the body must not run until the first `next()`. Emitting an
+        // initial `Yield` after the prologue suspends execution there.
+        if is_generator {
+            let r = self.alloc_register();
+            self.emit(Opcode::LoadUndefined);
+            self.emit_u16(r);
+            self.emit(Opcode::Yield);
+            self.emit_u16(r);
+            self.free_register(r);
+        }
 
         for (i, stmt) in body.body.iter().enumerate() {
             if let Some(&line) = body.lines.get(i) {
@@ -4512,13 +4570,10 @@ impl CodeGenerator {
                         self.emit(Opcode::GetGlobal);
                         self.emit_u16(r);
                         self.emit_u32(idx);
-                        // Emit CheckRef for closed lexical variables, unless
-                        // suppress_ref_error is set (typeof operator).
-                        let is_closed =
-                            self.parent_vars.get(&id.name).map_or(false, |pv| pv.closed);
-                        if (is_closed && !self.suppress_ref_error)
-                            || (!self.suppress_ref_error && self.is_strict)
-                        {
+                        // Emit CheckRef for unresolvable references so that reading an
+                        // undeclared identifier throws a ReferenceError.  The only
+                        // exception is the `typeof` operator, which never throws.
+                        if !self.suppress_ref_error {
                             self.emit(Opcode::CheckRef);
                             self.emit_u16(r);
                             self.emit_u32(idx);
@@ -6488,6 +6543,7 @@ impl CodeGenerator {
         call: &CallExpression,
         ctx: &mut JSContext,
     ) -> Result<u16, String> {
+
         if self.opt_tiny_inline {
             if let Some(reg) = self.try_emit_tiny_inline_call(call, ctx)? {
                 return Ok(reg);
@@ -7179,7 +7235,15 @@ impl CodeGenerator {
             }
         }
         let (bytecode, upvalues) = nested_codegen
-            .compile_function_with_parent(params, body, ctx, parent_vars, name, false)
+            .compile_function_with_parent_gen(
+                params,
+                body,
+                ctx,
+                parent_vars,
+                name,
+                false,
+                is_generator,
+            )
             .map_err(|e| format!("nested function compile error: {}", e))?;
 
         let func_name_atom = name.map(|n| ctx.atom_table_mut().intern(n).0).unwrap_or(0);

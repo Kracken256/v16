@@ -357,6 +357,7 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
 
     let rb = {
         let ast = Parser::new(&source).parse()?;
+        crate::compiler::early_errors::validate_program(&ast, true)?;
         let opt_level = ctx.get_compiler_opt_level();
         let mut codegen = CodeGenerator::with_opt_level(opt_level);
         let block = BlockStatement {

@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod codegen;
+pub mod early_errors;
 pub mod ic;
 pub mod lexer;
 pub mod location;
@@ -35,6 +36,7 @@ pub fn compile_script_to_bytecode_with_opt_level(
     is_eval: bool,
 ) -> Result<Bytecode, String> {
     let ast = parser::Parser::new(source).parse()?;
+    early_errors::validate_program(&ast, is_strict)?;
 
     let mut func_codegen = CodeGenerator::with_opt_level(opt_level);
     func_codegen.is_strict = is_strict;

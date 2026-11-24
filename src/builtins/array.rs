@@ -386,11 +386,9 @@ pub fn init_array(ctx: &mut JSContext) {
     set_ne(&mut proto_obj, ctx.common_atoms.constructor, array_value);
 
     let sym_iter_atom = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
-    set_ne(
-        &mut proto_obj,
-        sym_iter_atom,
-        create_builtin_function(ctx, "array_symbol_iterator"),
-    );
+    let array_iter_fn = create_builtin_function(ctx, "array_symbol_iterator");
+    set_ne(&mut proto_obj, sym_iter_atom, array_iter_fn);
+    ctx.set_array_iterator_fn(array_iter_fn.get_ptr());
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         proto_obj.prototype = Some(obj_proto_ptr);

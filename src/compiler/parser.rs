@@ -527,6 +527,7 @@ impl Parser {
         } else {
             None
         };
+        self.check_class_heritage(&super_class)?;
         self.expect("{")?;
         let body = self.parse_class_body()?;
         self.expect("}")?;
@@ -552,6 +553,7 @@ impl Parser {
         } else {
             None
         };
+        self.check_class_heritage(&super_class)?;
         self.expect("{")?;
         let body = self.parse_class_body()?;
         self.expect("}")?;
@@ -677,7 +679,113 @@ impl Parser {
                 is_private,
             }));
         }
-        Ok(ClassBody { elements })
+        let body = ClassBody { elements };
+        self.validate_class_body(&body)?;
+        Ok(body)
+    }
+
+    /// Validates early errors that only apply once the whole class body is known,
+    /// e.g. duplicate constructors and duplicate private names.
+    fn validate_class_body(&self, body: &ClassBody) -> Result<(), String> {
+        let mut ctor_count = 0usize;
+        // (name, is_static, kind) where kind: 0 = method/field, 1 = getter, 2 = setter
+        let mut private: Vec<(String, bool, u8)> = Vec::new();
+
+        for element in &body.elements {
+            match element {
+                ClassElement::Method(m) => {
+                    let name_str = match &m.name {
+                        PropertyKey::Identifier(n) => Some(n.clone()),
+                        PropertyKey::PrivateIdentifier(n) => Some(n.clone()),
+                        _ => None,
+                    };
+                    if m.is_private {
+                        let name = name_str.unwrap_or_default();
+                        if name == "constructor" {
+                            return Err(self.error(
+                                "class may not have a private element named constructor",
+                            ));
+                        }
+                        let kind = match m.kind {
+                            MethodKind::Get => 1u8,
+                            MethodKind::Set => 2u8,
+                            _ => 0u8,
+                        };
+                        private.push((name, m.is_static, kind));
+                    } else if name_str.as_deref() == Some("constructor") {
+                        if !m.is_static {
+                            if m.is_async
+                                || m.generator
+                                || m.kind == MethodKind::Get
+                                || m.kind == MethodKind::Set
+                            {
+                                return Err(self.error(
+                                    "class constructor may not be an accessor, generator or async",
+                                ));
+                            }
+                            ctor_count += 1;
+                            if ctor_count > 1 {
+                                return Err(self.error("a class may only have one constructor"));
+                            }
+                        }
+                    } else if m.is_static && name_str.as_deref() == Some("prototype") {
+                        return Err(
+                            self.error("classes may not have a static property named prototype")
+                        );
+                    }
+                }
+                ClassElement::Property(p) => {
+                    if p.is_private {
+                        let name = match &p.name {
+                            PropertyKey::PrivateIdentifier(n) => n.clone(),
+                            _ => String::new(),
+                        };
+                        if name == "constructor" {
+                            return Err(self.error(
+                                "class may not have a private element named constructor",
+                            ));
+                        }
+                        private.push((name, p.is_static, 0u8));
+                    } else if p.is_static {
+                        if let PropertyKey::Identifier(n) = &p.name {
+                            if n == "prototype" {
+                                return Err(self.error(
+                                    "classes may not have a static property named prototype",
+                                ));
+                            }
+                        }
+                    }
+                }
+                ClassElement::StaticBlock(_) => {}
+            }
+        }
+
+        for i in 0..private.len() {
+            for j in (i + 1)..private.len() {
+                let (n1, s1, k1) = &private[i];
+                let (n2, s2, k2) = &private[j];
+                if n1 == n2 && s1 == s2 {
+                    let accessor_pair = (*k1 == 1 && *k2 == 2) || (*k1 == 2 && *k2 == 1);
+                    if !accessor_pair {
+                        return Err(self.error(&format!("duplicate private name #{}", n1)));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_class_heritage(&self, super_class: &Option<Box<Expression>>) -> Result<(), String> {
+        if let Some(expr) = super_class {
+            match &**expr {
+                Expression::ArrowFunction(_) => {
+                    return Err(self.error("class heritage may not be an arrow function"));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn parse_if_statement(&mut self) -> Result<ASTNode, String> {
@@ -1325,6 +1433,7 @@ impl Parser {
         } else {
             None
         };
+        self.check_class_heritage(&super_class)?;
         self.expect("{")?;
         let body = self.parse_class_body()?;
         self.expect("}")?;
@@ -1980,23 +2089,54 @@ impl Parser {
             if self.peek_at(".") {
                 self.advance();
                 self.expect(".")?;
-                self.expect("meta")?;
-                return Ok(Expression::MetaProperty(MetaProperty {
-                    meta: "import".to_string(),
-                    property: "meta".to_string(),
-                }));
+                if self.at_keyword("meta") {
+                    self.advance();
+                    return Ok(Expression::MetaProperty(MetaProperty {
+                        meta: "import".to_string(),
+                        property: "meta".to_string(),
+                    }));
+                }
+                // `import.defer(...)` and `import.source(...)` proposals parse as
+                // a plain call to the dynamic import builtin.
+                let is_defer_or_source = (self.cur_type() == Some(TokenType::Identifier)
+                    || self.cur_type() == Some(TokenType::Keyword))
+                    && (self.cur_value() == "defer" || self.cur_value() == "source");
+                if is_defer_or_source {
+                    self.advance();
+                    self.expect("(")?;
+                    let arg = self.parse_assignment_expression()?;
+                    self.expect(")")?;
+                    return Ok(Expression::CallExpression(CallExpression {
+                        callee: Box::new(Expression::Identifier(Identifier {
+                            name: "import".to_string(),
+                        })),
+                        arguments: vec![Argument::Expression(arg)],
+                    }));
+                }
+                return Err(self.error("expected 'meta'"));
             }
             if self.peek_at("(") {
                 self.advance();
                 self.expect("(")?;
-                let arg = self.parse_assignment_expression()?;
+                let mut arguments = Vec::new();
+                arguments.push(Argument::Expression(self.parse_assignment_expression()?));
+                // Optional second argument (import attributes) and trailing comma.
+                if self.at_punct(",") {
+                    self.advance();
+                    if !self.at_punct(")") {
+                        arguments.push(Argument::Expression(self.parse_assignment_expression()?));
+                        if self.at_punct(",") {
+                            self.advance();
+                        }
+                    }
+                }
                 self.expect(")")?;
 
                 return Ok(Expression::CallExpression(CallExpression {
                     callee: Box::new(Expression::Identifier(Identifier {
                         name: "import".to_string(),
                     })),
-                    arguments: vec![Argument::Expression(arg)],
+                    arguments,
                 }));
             }
         }
@@ -2134,6 +2274,12 @@ impl Parser {
                     self.advance();
                     return Ok(Expression::Literal(Literal::Number(f64::INFINITY)));
                 }
+                "import" => {
+                    // A bare `import` is a reserved word and cannot be used as an
+                    // identifier reference (e.g. `typeof import`). Dynamic import
+                    // and `import.meta` are handled before reaching this point.
+                    return Err(self.error("Unexpected reserved word 'import'"));
+                }
                 _ => {
                     self.advance();
                     return Ok(Expression::Identifier(Identifier { name }));
@@ -2146,6 +2292,14 @@ impl Parser {
 
     fn parse_new_expression(&mut self) -> Result<Expression, String> {
         self.expect("new")?;
+
+        // `new import(...)` is not allowed: an ImportCall is a CallExpression,
+        // not a MemberExpression, so it cannot be the callee of `new`.
+        // A parenthesized form such as `new (import(...))` is valid, and is
+        // distinguishable here because the next token is `(`.
+        if self.at_keyword("import") {
+            return Err(self.error("Unexpected 'import' after 'new'"));
+        }
 
         let callee = if self.at_keyword("new") {
             Box::new(self.parse_new_expression()?)
@@ -2634,7 +2788,7 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
                 right: a.right,
             }))
         }
-        _ => Err(format!("invalid assignment target: {:?}", expr)),
+        _ => Err(format!("SyntaxError: invalid assignment target: {:?}", expr)),
     }
 }
 

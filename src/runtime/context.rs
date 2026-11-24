@@ -260,6 +260,8 @@ pub struct JSContext {
     number_prototype: Option<usize>,
     array_prototype: Option<usize>,
     array_iterator_prototype: Option<usize>,
+
+    array_iterator_fn: Option<usize>,
     map_iterator_prototype: Option<usize>,
     set_iterator_prototype: Option<usize>,
     regexp_prototype: Option<usize>,
@@ -343,6 +345,7 @@ impl JSContext {
             number_prototype: None,
             array_prototype: None,
             array_iterator_prototype: None,
+            array_iterator_fn: None,
             map_iterator_prototype: None,
             set_iterator_prototype: None,
             regexp_prototype: None,
@@ -616,6 +619,14 @@ impl JSContext {
 
     pub fn get_array_iterator_prototype(&self) -> Option<usize> {
         self.array_iterator_prototype
+    }
+
+    pub fn set_array_iterator_fn(&mut self, ptr: usize) {
+        self.array_iterator_fn = Some(ptr);
+    }
+
+    pub fn get_array_iterator_fn(&self) -> Option<usize> {
+        self.array_iterator_fn
     }
 
     pub fn set_map_iterator_prototype(&mut self, ptr: usize) {

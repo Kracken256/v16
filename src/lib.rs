@@ -63,6 +63,7 @@ pub fn compile_to_register_bytecode_with_opt_level(
     use compiler::parser::Parser;
     use compiler::peephole;
     let program = Parser::new(code).parse()?;
+    compiler::early_errors::validate_program(&program, false)?;
     let mut func_codegen = CodeGenerator::with_opt_level(opt_level);
     let block = compiler::ast::BlockStatement {
         body: program.body,
