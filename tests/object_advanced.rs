@@ -1,4 +1,4 @@
-use pipa::{JSContext, JSRuntime, eval};
+use v16::{JSContext, JSRuntime, eval};
 
 fn assert_js_ok(ctx: &mut JSContext, code: &str, msg: &str) {
     let r = eval(ctx, code);

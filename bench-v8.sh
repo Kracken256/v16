@@ -17,7 +17,7 @@ echo
 
 # ── 2. Discover engines ───────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PIPA="$SCRIPT_DIR/target/release/pipa"
+V16="$SCRIPT_DIR/target/release/v16"
 
 declare -a ENGINES=()
 declare -A ENGINE_PATHS=()
@@ -30,13 +30,13 @@ for eng in qjs node boa; do
   fi
 done
 
-if [[ -x "$PIPA" ]]; then
-  ENGINES+=("pipa")
-  ENGINE_PATHS["pipa"]="$PIPA"
+if [[ -x "$V16" ]]; then
+  ENGINES+=("v16")
+  ENGINE_PATHS["v16"]="$V16"
 fi
 
 if [[ ${#ENGINES[@]} -eq 0 ]]; then
-  echo "No JS engines found. Install qjs, node, boa, or build pipa first."
+  echo "No JS engines found. Install qjs, node, boa, or build v16 first."
   exit 1
 fi
 

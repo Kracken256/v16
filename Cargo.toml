@@ -1,5 +1,5 @@
 [package]
-name = "pipa-js"
+name = "v16-js"
 version = "0.1.8"
 edition = "2024"
 authors = ["jinti<shenjindi@fourz.cn>"]
@@ -18,7 +18,7 @@ exclude = [
 ]
 
 [lib]
-name = "pipa"
+name = "v16"
 
 [features]
 default = [
@@ -46,8 +46,8 @@ rustyline = { version = "18", optional = true }
 serde_yaml = "0.9"
 
 [[bin]]
-name = "pipa"
-path = "bin/pipa.rs"
+name = "v16"
+path = "bin/v16.rs"
 
 [profile.release]
 opt-level = 3

@@ -6,7 +6,7 @@ for the first 50 passing tests (and every 500th afterwards) and only prints the
 full error detail for the first 5 failures.  That makes its plain output
 useless for per-test reporting.
 
-The runner does, however, support ``PIPA_T262_TRACE=1`` which prints a
+The runner does, however, support ``V16_T262_TRACE=1`` which prints a
 ``>>> <path>`` line for *every* test file it discovers (including tests that
 are later skipped).  Combined with the fact that every failure prints a
 ``✗ <path> - <error>`` line, the trace output is enough to reconstruct the
@@ -59,15 +59,15 @@ except ImportError:  # pragma: no cover - fallback so the scripts still start
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TEST262_ROOT = Path(os.environ.get("PIPA_TEST262_ROOT", REPO_ROOT / "test262" / "test"))
-HARNESS_DIR = Path(os.environ.get("PIPA_TEST262_HARNESS", REPO_ROOT / "test262" / "harness"))
+TEST262_ROOT = Path(os.environ.get("V16_TEST262_ROOT", REPO_ROOT / "test262" / "test"))
+HARNESS_DIR = Path(os.environ.get("V16_TEST262_HARNESS", REPO_ROOT / "test262" / "harness"))
 RUNNER_BIN = Path(
     os.environ.get(
-        "PIPA_TEST262_RUNNER",
+        "V16_TEST262_RUNNER",
         REPO_ROOT / "target" / "release" / "examples" / "test262_runner",
     )
 )
-DOCS_ROOT = Path(os.environ.get("PIPA_TEST262_DOCS", REPO_ROOT / "docs" / "test"))
+DOCS_ROOT = Path(os.environ.get("V16_TEST262_DOCS", REPO_ROOT / "docs" / "test"))
 
 #: Raw runner logs deliberately live *outside* the repository.  A full run
 #: creates thousands of log files, and writing them into the workspace makes
@@ -78,14 +78,14 @@ CACHE_ROOT = Path(
         Path.home() / ".cache",
     )
 )
-LOG_ROOT = Path(os.environ.get("PIPA_TEST262_LOGS", CACHE_ROOT / "pipa" / "test262-logs"))
+LOG_ROOT = Path(os.environ.get("V16_TEST262_LOGS", CACHE_ROOT / "v16" / "test262-logs"))
 
 #: Chunk results are cached here so that an interrupted run resumes instead of
 #: starting over.  A full language run takes long enough that a crashed editor
 #: (or a closed terminal) would otherwise throw away all of the finished work.
 #: The cache lives outside the repository for the same reason as the logs.
 CHUNK_CACHE_ROOT = Path(
-    os.environ.get("PIPA_TEST262_CACHE", CACHE_ROOT / "pipa" / "test262-cache")
+    os.environ.get("V16_TEST262_CACHE", CACHE_ROOT / "v16" / "test262-cache")
 )
 
 #: Bump this whenever the log parsing or the pass/fail classification changes.
@@ -567,8 +567,8 @@ def run_chunk(
     discovered_relative = [path.relative_to(TEST262_ROOT).as_posix() for path in discovered]
 
     env = os.environ.copy()
-    env["PIPA_T262_TRACE"] = "1"
-    env["PIPA_T262_TIMEOUT_MS"] = str(timeout_ms)
+    env["V16_T262_TRACE"] = "1"
+    env["V16_T262_TIMEOUT_MS"] = str(timeout_ms)
     if extra_env:
         env.update(extra_env)
 

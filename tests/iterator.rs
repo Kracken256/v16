@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
 fn eval_int(code: &str) -> i64 {
     let mut runtime = JSRuntime::new();

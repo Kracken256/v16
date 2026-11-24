@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
 const ASSERT_LIB: &str = r#"
 function assert_eq(actual, expected, msg) {

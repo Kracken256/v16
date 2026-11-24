@@ -1,10 +1,10 @@
 #![cfg(feature = "full_runtime_tests")]
 
-use pipa::object::JSObject;
-use pipa::value::JSValue;
-use pipa::{JSRuntime, eval};
+use v16::object::JSObject;
+use v16::value::JSValue;
+use v16::{JSRuntime, eval};
 
-fn test262_create_realm(ctx: &mut pipa::JSContext, _args: &[JSValue]) -> JSValue {
+fn test262_create_realm(ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue {
     let global = ctx.global();
     let mut realm = JSObject::new();
     realm.set(ctx.intern("global"), global);
@@ -12,7 +12,7 @@ fn test262_create_realm(ctx: &mut pipa::JSContext, _args: &[JSValue]) -> JSValue
     JSValue::new_object(ptr)
 }
 
-fn test262_eval_script(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
+fn test262_eval_script(ctx: &mut v16::JSContext, args: &[JSValue]) -> JSValue {
     let script = if let Some(v) = args.first() {
         if v.is_string() {
             let atom = v.get_atom();
@@ -29,11 +29,11 @@ fn test262_eval_script(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
     }
 }
 
-fn test262_detach_array_buffer(_ctx: &mut pipa::JSContext, _args: &[JSValue]) -> JSValue {
+fn test262_detach_array_buffer(_ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue {
     JSValue::undefined()
 }
 
-fn inject_test262_globals(ctx: &mut pipa::JSContext) {
+fn inject_test262_globals(ctx: &mut v16::JSContext) {
     let global = ctx.global();
     if !global.is_object() {
         return;
@@ -41,7 +41,7 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
     let global_obj = global.as_object_mut();
 
     let print_func = {
-        let mut f = pipa::object::function::JSFunction::new_builtin(ctx.intern("print"), 1);
+        let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("print"), 1);
         f.builtin_atom = Some(ctx.intern("console_log"));
         f.builtin_func = ctx.get_builtin_func("console_log");
         let ptr = Box::into_raw(Box::new(f)) as usize;
@@ -51,22 +51,22 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
 
     ctx.register_builtin(
         "test262_create_realm",
-        pipa::host::HostFunction::new("createRealm", 0, test262_create_realm),
+        v16::host::HostFunction::new("createRealm", 0, test262_create_realm),
     );
     ctx.register_builtin(
         "test262_eval_script",
-        pipa::host::HostFunction::new("evalScript", 1, test262_eval_script),
+        v16::host::HostFunction::new("evalScript", 1, test262_eval_script),
     );
     ctx.register_builtin(
         "test262_detach_array_buffer",
-        pipa::host::HostFunction::new("detachArrayBuffer", 1, test262_detach_array_buffer),
+        v16::host::HostFunction::new("detachArrayBuffer", 1, test262_detach_array_buffer),
     );
 
     let mut dollar_262 = JSObject::new();
     dollar_262.set(ctx.intern("global"), global);
 
     let create_realm_func = {
-        let mut f = pipa::object::function::JSFunction::new_builtin(ctx.intern("createRealm"), 0);
+        let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("createRealm"), 0);
         f.builtin_atom = Some(ctx.intern("test262_create_realm"));
         f.builtin_func = ctx.get_builtin_func("test262_create_realm");
         let ptr = Box::into_raw(Box::new(f)) as usize;
@@ -75,7 +75,7 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
     dollar_262.set(ctx.intern("createRealm"), create_realm_func);
 
     let eval_script_func = {
-        let mut f = pipa::object::function::JSFunction::new_builtin(ctx.intern("evalScript"), 1);
+        let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("evalScript"), 1);
         f.builtin_atom = Some(ctx.intern("test262_eval_script"));
         f.builtin_func = ctx.get_builtin_func("test262_eval_script");
         let ptr = Box::into_raw(Box::new(f)) as usize;
@@ -85,7 +85,7 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
 
     let detach_func = {
         let mut f =
-            pipa::object::function::JSFunction::new_builtin(ctx.intern("detachArrayBuffer"), 1);
+            v16::object::function::JSFunction::new_builtin(ctx.intern("detachArrayBuffer"), 1);
         f.builtin_atom = Some(ctx.intern("test262_detach_array_buffer"));
         f.builtin_func = ctx.get_builtin_func("test262_detach_array_buffer");
         let ptr = Box::into_raw(Box::new(f)) as usize;

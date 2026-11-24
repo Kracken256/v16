@@ -1,9 +1,9 @@
 // examples/process_basic.js
 // Demonstrate process.argv, argc, env, cwd, exit
 //
-// Run: pipa --features process examples/process_basic.js
+// Run: v16 --features process examples/process_basic.js
 
-import("pipa:process").then(function(p) {
+import("v16:process").then(function(p) {
     console.log("=== process.argv ===");
     console.log("argc:", p.argc);
     console.log("argv:", JSON.stringify(p.argv));

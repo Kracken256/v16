@@ -1,8 +1,8 @@
-use pipa::host::HostFunction;
-use pipa::object::function::JSFunction;
-use pipa::object::object::JSObject;
-use pipa::runtime::context::JSContext;
-use pipa::{
+use v16::host::HostFunction;
+use v16::object::function::JSFunction;
+use v16::object::object::JSObject;
+use v16::runtime::context::JSContext;
+use v16::{
     JSRuntime, JSValue, OptLevel, compile_to_bytecode_with_opt_level, eval, eval_with_opt_level,
 };
 use std::fs;
@@ -42,7 +42,7 @@ fn main() {
     match cmd.as_str() {
         "-compile" => {
             if args.len() < arg_index + 3 {
-                eprintln!("Usage: pipa [-O0|-O1|-O2|-O3] -compile <input.js> <output.jsc>");
+                eprintln!("Usage: v16 [-O0|-O1|-O2|-O3] -compile <input.js> <output.jsc>");
                 std::process::exit(1);
             }
             let input_path = &args[arg_index + 1];
@@ -51,7 +51,7 @@ fn main() {
         }
         "-diss" => {
             if args.len() < arg_index + 2 {
-                eprintln!("Usage: pipa [-O0|-O1|-O2|-O3] -diss <input.jsc>");
+                eprintln!("Usage: v16 [-O0|-O1|-O2|-O3] -diss <input.jsc>");
                 std::process::exit(1);
             }
             let input_path = &args[arg_index + 1];
@@ -69,13 +69,13 @@ fn main() {
 }
 
 fn print_usage() {
-    eprintln!("Usage: pipa [-O0|-O1|-O2|-O3] <script.js|script.jsc>");
-    eprintln!("       pipa [-O0|-O1|-O2|-O3] -compile <input.js> <output.jsc>");
-    eprintln!("       pipa [-O0|-O1|-O2|-O3] -diss <input.jsc>");
+    eprintln!("Usage: v16 [-O0|-O1|-O2|-O3] <script.js|script.jsc>");
+    eprintln!("       v16 [-O0|-O1|-O2|-O3] -compile <input.js> <output.jsc>");
+    eprintln!("       v16 [-O0|-O1|-O2|-O3] -diss <input.jsc>");
     eprintln!();
     eprintln!("A simple JavaScript runtime with setTimeout, console, and import support.");
-    eprintln!("GC debug: PIPA_GCDUMP=1|summary|roots|live|dead|alloc|all");
-    eprintln!("          PIPA_GCDUMP_LIMIT=<n> to cap per-collection detail lines");
+    eprintln!("GC debug: V16_GCDUMP=1|summary|roots|live|dead|alloc|all");
+    eprintln!("          V16_GCDUMP_LIMIT=<n> to cap per-collection detail lines");
     eprintln!();
     eprintln!("Global functions:");
     eprintln!("  setTimeout(fn, ms)    - Execute fn after ms milliseconds");
@@ -88,7 +88,7 @@ fn print_usage() {
 
 fn setup_context(ctx: &mut JSContext) {
     ctx.register_builtin("print", HostFunction::new("print", 1, print_fn));
-    ctx.register_builtin("pipa_load", HostFunction::new("load", 1, load_fn));
+    ctx.register_builtin("v16_load", HostFunction::new("load", 1, load_fn));
 
     let global = ctx.global();
     let global_ptr = global.get_ptr();
@@ -103,8 +103,8 @@ fn setup_context(ctx: &mut JSContext) {
     global_obj.set(ctx.intern("print"), print_fn_val);
 
     let load_fn_val = {
-        let mut func = JSFunction::new_builtin(ctx.intern("pipa_load"), 1);
-        func.set_builtin_marker(ctx, "pipa_load");
+        let mut func = JSFunction::new_builtin(ctx.intern("v16_load"), 1);
+        func.set_builtin_marker(ctx, "v16_load");
         let ptr = Box::into_raw(Box::new(func)) as usize;
         JSValue::new_function(ptr)
     };
@@ -153,7 +153,7 @@ fn disassemble_jsc(input_path: &str) {
         }
     };
 
-    let bytecode = match pipa::compiler::opcode::Bytecode::deserialize(&data) {
+    let bytecode = match v16::compiler::opcode::Bytecode::deserialize(&data) {
         Ok(bc) => bc,
         Err(e) => {
             eprintln!("Deserialization error: {}", e);
@@ -173,7 +173,7 @@ fn execute_jsc(script_path: &str) {
         }
     };
 
-    let bytecode = match pipa::compiler::opcode::Bytecode::deserialize(&data) {
+    let bytecode = match v16::compiler::opcode::Bytecode::deserialize(&data) {
         Ok(bc) => bc,
         Err(e) => {
             eprintln!("Deserialization error: {}", e);
@@ -199,14 +199,14 @@ fn execute_jsc(script_path: &str) {
         JSValue::new_string(ctx.intern(&script_dir_str)),
     );
 
-    let mut vm = pipa::runtime::vm::VM::new();
+    let mut vm = v16::runtime::vm::VM::new();
     match vm.execute(&mut ctx, &bytecode) {
-        Ok(pipa::runtime::vm::ExecutionOutcome::Complete(result)) => {
+        Ok(v16::runtime::vm::ExecutionOutcome::Complete(result)) => {
             if !result.is_undefined() {
                 println!("{:?}", js_value_to_string(&result, &ctx));
             }
         }
-        Ok(pipa::runtime::vm::ExecutionOutcome::Yield(result)) => {
+        Ok(v16::runtime::vm::ExecutionOutcome::Yield(result)) => {
             if !result.is_undefined() {
                 println!("{:?}", js_value_to_string(&result, &ctx));
             }
@@ -248,7 +248,7 @@ fn execute_js(script_path: &str, opt_level: OptLevel) {
 
     match eval_with_opt_level(&mut ctx, &code, opt_level) {
         Ok(result) => {
-            let _ = pipa::run_event_loop(&mut ctx);
+            let _ = v16::run_event_loop(&mut ctx);
             if !result.is_undefined() {
                 println!("{:?}", js_value_to_string(&result, &ctx));
             }
@@ -388,7 +388,7 @@ fn count_bracket_delta(line: &str) -> i32 {
 #[cfg(feature = "repl")]
 fn start_repl() {
     let history_path = std::env::var("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".pipa_history"))
+        .map(|h| std::path::PathBuf::from(h).join(".v16_history"))
         .ok();
 
     let mut rl = rustyline::DefaultEditor::new().expect("Failed to create REPL editor");
@@ -400,7 +400,7 @@ fn start_repl() {
     let mut ctx = runtime.new_context();
     setup_context(&mut ctx);
 
-    println!("Pipa REPL  (type .exit or press Ctrl+D to quit)");
+    println!("V16 REPL  (type .exit or press Ctrl+D to quit)");
 
     let mut buffer = String::new();
     let mut depth = 0i32;
@@ -459,10 +459,10 @@ fn start_repl() {
 
 #[cfg(feature = "repl")]
 fn eval_repl(ctx: &mut JSContext, code: &str) -> Result<JSValue, String> {
-    use pipa::builtins::promise::run_microtasks_with_vm;
-    use pipa::runtime::vm::{ExecutionOutcome, VM};
+    use v16::builtins::promise::run_microtasks_with_vm;
+    use v16::runtime::vm::{ExecutionOutcome, VM};
 
-    let rb = pipa::compile_to_bytecode_with_opt_level(ctx, code, ctx.get_compiler_opt_level())?;
+    let rb = v16::compile_to_bytecode_with_opt_level(ctx, code, ctx.get_compiler_opt_level())?;
 
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
     let mut vm = VM::new();

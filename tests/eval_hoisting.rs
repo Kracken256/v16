@@ -1,6 +1,6 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
-fn eval_ok(ctx: &mut pipa::JSContext, code: &str) {
+fn eval_ok(ctx: &mut v16::JSContext, code: &str) {
     let r = eval(ctx, code);
     assert!(r.is_ok(), "eval failed: {:?}", r);
 }

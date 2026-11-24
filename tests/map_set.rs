@@ -1,12 +1,12 @@
 #![cfg(feature = "full_runtime_tests")]
 
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
-fn eval_bool(ctx: &mut pipa::JSContext, code: &str) -> bool {
+fn eval_bool(ctx: &mut v16::JSContext, code: &str) -> bool {
     eval(ctx, code).unwrap().get_bool()
 }
 
-fn eval_int(ctx: &mut pipa::JSContext, code: &str) -> i64 {
+fn eval_int(ctx: &mut v16::JSContext, code: &str) -> i64 {
     eval(ctx, code).unwrap().get_int()
 }
 

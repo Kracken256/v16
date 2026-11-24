@@ -66,7 +66,7 @@ enum P2FoldProfile {
 
 impl P2FoldProfile {
     fn from_env_override() -> Option<Self> {
-        let mode = std::env::var("PIPA_P2_PROFILE").ok()?;
+        let mode = std::env::var("V16_P2_PROFILE").ok()?;
         match mode.as_str() {
             "raw" => Some(Self::Raw),
             "ternary" => Some(Self::Ternary),
@@ -213,17 +213,17 @@ impl CodeGenerator {
             settings.p2_fold_profile = profile;
         }
         settings.opt_jump_if_nullish =
-            Self::env_flag("PIPA_OPT_JUMP_NULLISH", settings.opt_jump_if_nullish);
-        settings.opt_call23 = Self::env_flag("PIPA_OPT_CALL23", settings.opt_call23);
+            Self::env_flag("V16_OPT_JUMP_NULLISH", settings.opt_jump_if_nullish);
+        settings.opt_call23 = Self::env_flag("V16_OPT_CALL23", settings.opt_call23);
         settings.opt_fused_cmp_jump =
-            Self::env_flag("PIPA_OPT_FUSED_CMP_JUMP", settings.opt_fused_cmp_jump);
+            Self::env_flag("V16_OPT_FUSED_CMP_JUMP", settings.opt_fused_cmp_jump);
         settings.opt_fused_getprop_call = Self::env_flag(
-            "PIPA_OPT_FUSED_GETPROP_CALL",
+            "V16_OPT_FUSED_GETPROP_CALL",
             settings.opt_fused_getprop_call,
         );
-        settings.opt_tiny_inline = Self::env_flag("PIPA_OPT_TINY_INLINE", settings.opt_tiny_inline);
+        settings.opt_tiny_inline = Self::env_flag("V16_OPT_TINY_INLINE", settings.opt_tiny_inline);
         settings.opt_branch_result_prealloc = Self::env_flag(
-            "PIPA_OPT_BRANCH_RESULT_PREALLOC",
+            "V16_OPT_BRANCH_RESULT_PREALLOC",
             settings.opt_branch_result_prealloc,
         );
         Self::with_settings(settings)
@@ -2354,7 +2354,7 @@ impl CodeGenerator {
             }
             Expression::CallExpression(CallExpression {
                 callee: Box::new(Expression::Identifier(Identifier {
-                    name: "__pipa_import__".to_string(),
+                    name: "__v16_import__".to_string(),
                 })),
                 arguments,
             })
@@ -4940,7 +4940,7 @@ impl CodeGenerator {
             Expression::MetaProperty(_) => {
                 let call = Expression::CallExpression(CallExpression {
                     callee: Box::new(Expression::Identifier(Identifier {
-                        name: "__pipa_import_meta__".to_string(),
+                        name: "__v16_import_meta__".to_string(),
                     })),
                     arguments: Vec::new(),
                 });

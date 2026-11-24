@@ -1,8 +1,8 @@
 #![cfg(feature = "full_runtime_tests")]
 
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
-fn get_int(ctx: &mut pipa::JSContext, code: &str) -> i64 {
+fn get_int(ctx: &mut v16::JSContext, code: &str) -> i64 {
     let result = eval(ctx, code).unwrap();
     if result.is_int() {
         result.get_int()

@@ -17,7 +17,7 @@ const GC_GROWTH_FACTOR: usize = 12;
 const NURSERY_PINNED_STREAK_LIMIT: usize = 10;
 
 fn nursery_pinned_streak_limit() -> usize {
-    env::var("PIPA_NURSERY_PINNED_STREAK_LIMIT")
+    env::var("V16_NURSERY_PINNED_STREAK_LIMIT")
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .map(|value| value.max(1))
@@ -36,7 +36,7 @@ struct GcDebugConfig {
 
 impl GcDebugConfig {
     fn from_env() -> Self {
-        let raw = match env::var("PIPA_GCDUMP") {
+        let raw = match env::var("V16_GCDUMP") {
             Ok(value) => value,
             Err(_) => return Self::default(),
         };
@@ -50,7 +50,7 @@ impl GcDebugConfig {
             return Self::default();
         }
 
-        let limit = env::var("PIPA_GCDUMP_LIMIT")
+        let limit = env::var("V16_GCDUMP_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .map(|value| value.max(1))

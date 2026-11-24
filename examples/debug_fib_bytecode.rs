@@ -1,7 +1,7 @@
-use pipa::JSRuntime;
-use pipa::compiler::ast::BlockStatement;
-use pipa::compiler::codegen::CodeGenerator;
-use pipa::compiler::parser::Parser;
+use v16::JSRuntime;
+use v16::compiler::ast::BlockStatement;
+use v16::compiler::codegen::CodeGenerator;
+use v16::compiler::parser::Parser;
 
 fn main() {
     let mut rt = JSRuntime::new();

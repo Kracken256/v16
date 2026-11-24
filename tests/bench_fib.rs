@@ -1,10 +1,10 @@
-use pipa::compiler::ast::BlockStatement;
-use pipa::compiler::codegen::CodeGenerator;
-use pipa::compiler::parser::Parser;
-use pipa::runtime::vm::VM;
-use pipa::{JSRuntime, eval};
+use v16::compiler::ast::BlockStatement;
+use v16::compiler::codegen::CodeGenerator;
+use v16::compiler::parser::Parser;
+use v16::runtime::vm::VM;
+use v16::{JSRuntime, eval};
 
-fn eval_register(ctx: &mut pipa::JSContext, code: &str) -> Result<pipa::JSValue, String> {
+fn eval_register(ctx: &mut v16::JSContext, code: &str) -> Result<v16::JSValue, String> {
     let ast = Parser::new(code).parse()?;
     let mut codegen = CodeGenerator::new();
     let block = BlockStatement {
@@ -15,8 +15,8 @@ fn eval_register(ctx: &mut pipa::JSContext, code: &str) -> Result<pipa::JSValue,
     let mut vm = VM::new();
     let outcome = vm.execute(ctx, &rb)?;
     match outcome {
-        pipa::runtime::vm::ExecutionOutcome::Complete(v) => Ok(v),
-        pipa::runtime::vm::ExecutionOutcome::Yield(v) => Ok(v),
+        v16::runtime::vm::ExecutionOutcome::Complete(v) => Ok(v),
+        v16::runtime::vm::ExecutionOutcome::Yield(v) => Ok(v),
     }
 }
 

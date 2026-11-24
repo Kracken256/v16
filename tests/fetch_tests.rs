@@ -1,15 +1,15 @@
 #![cfg(feature = "fetch")]
 
-use pipa::http::chunked::ChunkedDecoder;
-use pipa::http::conn::Connection;
-use pipa::http::connect_state::{ConnEvent, ConnectState};
-use pipa::http::headers::Headers;
-use pipa::http::method::HttpMethod;
-use pipa::http::status::HttpStatus;
-use pipa::http::url::Url;
-use pipa::http::ws::frame::{OpCode, WsFrame};
-use pipa::http::ws::handshake::WsHandshake;
-use pipa::util::iomux::Poller;
+use v16::http::chunked::ChunkedDecoder;
+use v16::http::conn::Connection;
+use v16::http::connect_state::{ConnEvent, ConnectState};
+use v16::http::headers::Headers;
+use v16::http::method::HttpMethod;
+use v16::http::status::HttpStatus;
+use v16::http::url::Url;
+use v16::http::ws::frame::{OpCode, WsFrame};
+use v16::http::ws::handshake::WsHandshake;
+use v16::util::iomux::Poller;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -829,11 +829,11 @@ fn test_connection_plain_connect() {
 }
 
 fn compile_and_run_js(js_code: &str) -> Result<String, String> {
-    use pipa::runtime::runtime::JSRuntime;
+    use v16::runtime::runtime::JSRuntime;
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
 
-    let result = pipa::eval(&mut ctx, js_code).map_err(|e| e.to_string())?;
+    let result = v16::eval(&mut ctx, js_code).map_err(|e| e.to_string())?;
 
     let output = if result.is_string() {
         ctx.get_atom_str(result.get_atom()).to_string()
@@ -856,7 +856,7 @@ fn test_js_fetch_basic() {
 #[test]
 fn test_sse_parse_single() {
     let buf = &mut b"data: hello\n\n".to_vec();
-    let event = pipa::builtins::eventsource::parse_sse_event(buf);
+    let event = v16::builtins::eventsource::parse_sse_event(buf);
     assert!(event.is_some());
     assert_eq!(event.as_ref().unwrap().data, "hello");
     assert!(event.unwrap().event_type.is_empty());
@@ -865,7 +865,7 @@ fn test_sse_parse_single() {
 #[test]
 fn test_sse_parse_multiple_lines() {
     let buf = &mut b"data: line1\ndata: line2\n\n".to_vec();
-    let event = pipa::builtins::eventsource::parse_sse_event(buf);
+    let event = v16::builtins::eventsource::parse_sse_event(buf);
     assert!(event.is_some());
     assert_eq!(event.unwrap().data, "line1\nline2");
 }
@@ -873,7 +873,7 @@ fn test_sse_parse_multiple_lines() {
 #[test]
 fn test_sse_parse_custom_event() {
     let buf = &mut b"event: custom\ndata: {\"key\":\"value\"}\n\n".to_vec();
-    let event = pipa::builtins::eventsource::parse_sse_event(buf);
+    let event = v16::builtins::eventsource::parse_sse_event(buf);
     assert!(event.is_some());
     let e = event.unwrap();
     assert_eq!(e.data, "{\"key\":\"value\"}");
@@ -883,7 +883,7 @@ fn test_sse_parse_custom_event() {
 #[test]
 fn test_sse_parse_with_id() {
     let buf = &mut b"event: time\ndata: 2026-04-28T14:55:39Z\nid: 3\n\n".to_vec();
-    let event = pipa::builtins::eventsource::parse_sse_event(buf);
+    let event = v16::builtins::eventsource::parse_sse_event(buf);
     assert!(event.is_some());
     let e = event.unwrap();
     assert_eq!(e.data, "2026-04-28T14:55:39Z");
@@ -894,7 +894,7 @@ fn test_sse_parse_with_id() {
 #[test]
 fn test_sse_parse_incomplete() {
     let buf = &mut b"data: hello\n".to_vec();
-    let event = pipa::builtins::eventsource::parse_sse_event(buf);
+    let event = v16::builtins::eventsource::parse_sse_event(buf);
     assert!(event.is_none());
 }
 
@@ -940,7 +940,7 @@ fn test_sse_e2e() {
 
     let mut events = Vec::new();
     let mut sse_buf = body.as_bytes().to_vec();
-    while let Some(event) = pipa::builtins::eventsource::parse_sse_event(&mut sse_buf) {
+    while let Some(event) = v16::builtins::eventsource::parse_sse_event(&mut sse_buf) {
         events.push(event);
     }
     assert_eq!(
@@ -964,8 +964,8 @@ fn test_reactor_fetch_e2e() {
     let server = TestServer::start_http();
     let port = server.port;
 
-    use pipa::builtins::global::init_globals;
-    use pipa::runtime::runtime::JSRuntime;
+    use v16::builtins::global::init_globals;
+    use v16::runtime::runtime::JSRuntime;
 
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
@@ -977,15 +977,15 @@ fn test_reactor_fetch_e2e() {
         p;
         "#,
     );
-    let promise_val = pipa::compiler::eval_code(&mut ctx, &code).unwrap();
+    let promise_val = v16::compiler::eval_code(&mut ctx, &code).unwrap();
     assert!(
         promise_val.is_object(),
         "fetch should return a promise object"
     );
 
-    pipa::run_event_loop_with_timeout(&mut ctx, 5000).unwrap();
+    v16::run_event_loop_with_timeout(&mut ctx, 5000).unwrap();
 
-    let check = pipa::compiler::eval_code(
+    let check = v16::compiler::eval_code(
         &mut ctx,
         r#"
         p.__promise_state__;
@@ -1007,8 +1007,8 @@ fn test_reactor_ws_e2e() {
     let server = TestServer::start_ws_echo();
     let port = server.port;
 
-    use pipa::builtins::global::init_globals;
-    use pipa::runtime::runtime::JSRuntime;
+    use v16::builtins::global::init_globals;
+    use v16::runtime::runtime::JSRuntime;
 
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
@@ -1020,12 +1020,12 @@ fn test_reactor_ws_e2e() {
         ws;
         "#,
     );
-    let ws_val = pipa::compiler::eval_code(&mut ctx, &code).unwrap();
+    let ws_val = v16::compiler::eval_code(&mut ctx, &code).unwrap();
     assert!(ws_val.is_object(), "WebSocket ctor should return object");
 
-    pipa::run_event_loop_with_timeout(&mut ctx, 5000).unwrap();
+    v16::run_event_loop_with_timeout(&mut ctx, 5000).unwrap();
 
-    let state_val = pipa::compiler::eval_code(&mut ctx, "ws.readyState;").unwrap();
+    let state_val = v16::compiler::eval_code(&mut ctx, "ws.readyState;").unwrap();
     let state = state_val.get_int();
     assert!(
         state == 1,
@@ -1040,8 +1040,8 @@ fn test_reactor_sse_e2e() {
     let server = TestServer::start_sse();
     let port = server.port;
 
-    use pipa::builtins::global::init_globals;
-    use pipa::runtime::runtime::JSRuntime;
+    use v16::builtins::global::init_globals;
+    use v16::runtime::runtime::JSRuntime;
 
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
@@ -1053,12 +1053,12 @@ fn test_reactor_sse_e2e() {
         es;
         "#,
     );
-    let es_val = pipa::compiler::eval_code(&mut ctx, &code).unwrap();
+    let es_val = v16::compiler::eval_code(&mut ctx, &code).unwrap();
     assert!(es_val.is_object(), "EventSource ctor should return object");
 
-    pipa::run_event_loop_with_timeout(&mut ctx, 5000).unwrap();
+    v16::run_event_loop_with_timeout(&mut ctx, 5000).unwrap();
 
-    let state_val = pipa::compiler::eval_code(&mut ctx, "es.readyState;").unwrap();
+    let state_val = v16::compiler::eval_code(&mut ctx, "es.readyState;").unwrap();
     let state = state_val.get_int();
     assert!(
         state == 1 || state == 2,

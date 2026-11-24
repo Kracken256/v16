@@ -2,10 +2,11 @@
 
 ## Principles
 
-- bench-v8 每项不得回归：功能（所有8项必须通过）+ 性能（得分不允许明显下降，~±5% 正常波动）
-- 代码不得包含注释（不增删任何注释）
-- test262 不得有 crash：任何类别的运行不能产生 segfault
-- 每个 fix/优化单独 commit
+- No bench-v8 regressions: functionality (all 8 benchmarks must pass) and
+  performance (the score must not drop meaningfully; ~±5% is normal noise).
+- The code must not contain comments (do not add or remove any comments).
+- No Test262 crashes: no category may segfault, abort, or hang.
+- One commit per fix or optimization.
 
 ## Status (2026-06-14)
 

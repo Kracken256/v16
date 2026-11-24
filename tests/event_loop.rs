@@ -1,12 +1,12 @@
 #![cfg(feature = "full_runtime_tests")]
 
-use pipa::{JSRuntime, eval, run_event_loop, run_event_loop_with_timeout};
+use v16::{JSRuntime, eval, run_event_loop, run_event_loop_with_timeout};
 
-fn get_int(ctx: &mut pipa::JSContext, code: &str) -> i64 {
+fn get_int(ctx: &mut v16::JSContext, code: &str) -> i64 {
     eval(ctx, code).unwrap().get_int()
 }
 
-fn get_bool(ctx: &mut pipa::JSContext, code: &str) -> bool {
+fn get_bool(ctx: &mut v16::JSContext, code: &str) -> bool {
     eval(ctx, code).unwrap().get_bool()
 }
 

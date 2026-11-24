@@ -318,7 +318,7 @@ impl WsConnection {
         let path = self.url.request_target();
         let mut headers = WsHandshake::build_request(&host, &path, &self.key);
         if !headers.contains("user-agent") {
-            headers.set("User-Agent", "pipa/0.1");
+            headers.set("User-Agent", "v16/0.1");
         }
         let mut buf = Vec::new();
         buf.extend_from_slice(b"GET ");

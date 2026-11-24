@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
 fn js_eq(code: &str) {
     let mut rt = JSRuntime::new();

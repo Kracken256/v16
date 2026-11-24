@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, JSValue, eval, set_interrupt};
+use v16::{JSRuntime, JSValue, eval, set_interrupt};
 
 #[test]
 fn test_runtime_creation() {

@@ -6,7 +6,7 @@ use crate::runtime::context::JSContext;
 use crate::value::JSValue;
 
 pub fn init_process_module(ctx: &mut JSContext) {
-    let specifier = "pipa:process";
+    let specifier = "v16:process";
 
     ctx.register_builtin("process_exit", HostFunction::new("exit", 1, process_exit));
     ctx.register_builtin("process_cwd", HostFunction::new("cwd", 0, process_cwd));

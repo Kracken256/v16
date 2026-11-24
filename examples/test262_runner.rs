@@ -1,6 +1,6 @@
-use pipa::object::JSObject;
-use pipa::value::JSValue;
-use pipa::{JSRuntime, eval};
+use v16::object::JSObject;
+use v16::value::JSValue;
+use v16::{JSRuntime, eval};
 use serde_yaml::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -25,12 +25,12 @@ fn start_watchdog() {
         std::thread::sleep(std::time::Duration::from_millis(20));
         let deadline = WATCHDOG_DEADLINE_MS.load(std::sync::atomic::Ordering::Relaxed);
         if deadline != 0 && now_ms() >= deadline {
-            pipa::set_external_interrupt(true);
+            v16::set_external_interrupt(true);
         }
     });
 }
 
-fn test262_print(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
+fn test262_print(ctx: &mut v16::JSContext, args: &[JSValue]) -> JSValue {
     let msg = if let Some(v) = args.get(0) {
         if v.is_string() {
             let atom = v.get_atom();
@@ -155,10 +155,10 @@ fn parse_frontmatter(content: &str) -> Option<(TestMeta, &str)> {
     ))
 }
 
-fn test262_create_realm(ctx: &mut pipa::JSContext, _args: &[JSValue]) -> JSValue {
-    let mut new_runtime = pipa::JSRuntime::new();
-    let mut new_ctx = pipa::JSContext::new(&mut new_runtime);
-    pipa::builtins::init_globals(&mut new_ctx);
+fn test262_create_realm(ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue {
+    let mut new_runtime = v16::JSRuntime::new();
+    let mut new_ctx = v16::JSContext::new(&mut new_runtime);
+    v16::builtins::init_globals(&mut new_ctx);
     inject_test262_globals(&mut new_ctx);
     let new_global = new_ctx.global();
 
@@ -174,7 +174,7 @@ fn test262_create_realm(ctx: &mut pipa::JSContext, _args: &[JSValue]) -> JSValue
     JSValue::new_object(realm_ptr)
 }
 
-fn test262_eval_script(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
+fn test262_eval_script(ctx: &mut v16::JSContext, args: &[JSValue]) -> JSValue {
     let script = if let Some(v) = args.get(1) {
         if v.is_string() {
             let atom = v.get_atom();
@@ -191,11 +191,11 @@ fn test262_eval_script(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
     }
 }
 
-fn test262_detach_array_buffer(_ctx: &mut pipa::JSContext, _args: &[JSValue]) -> JSValue {
+fn test262_detach_array_buffer(_ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue {
     JSValue::undefined()
 }
 
-fn inject_test262_globals(ctx: &mut pipa::JSContext) {
+fn inject_test262_globals(ctx: &mut v16::JSContext) {
     let global = ctx.global();
     if !global.is_object() {
         return;
@@ -203,7 +203,7 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
     let global_obj = global.as_object_mut();
 
     let print_func = {
-        let mut f = pipa::object::function::JSFunction::new_builtin(ctx.intern("print"), 1);
+        let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("print"), 1);
         f.builtin_atom = Some(ctx.intern("test262_print"));
         f.builtin_func = ctx.get_builtin_func("test262_print");
         let ptr = Box::into_raw(Box::new(f)) as usize;
@@ -214,27 +214,27 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
 
     ctx.register_builtin(
         "test262_print",
-        pipa::host::HostFunction::new("print", 1, test262_print),
+        v16::host::HostFunction::new("print", 1, test262_print),
     );
 
     ctx.register_builtin(
         "test262_create_realm",
-        pipa::host::HostFunction::new("createRealm", 0, test262_create_realm),
+        v16::host::HostFunction::new("createRealm", 0, test262_create_realm),
     );
     ctx.register_builtin(
         "test262_eval_script",
-        pipa::host::HostFunction::new("evalScript", 1, test262_eval_script),
+        v16::host::HostFunction::new("evalScript", 1, test262_eval_script),
     );
     ctx.register_builtin(
         "test262_detach_array_buffer",
-        pipa::host::HostFunction::new("detachArrayBuffer", 1, test262_detach_array_buffer),
+        v16::host::HostFunction::new("detachArrayBuffer", 1, test262_detach_array_buffer),
     );
 
     let mut dollar_262 = JSObject::new();
     dollar_262.set(ctx.intern("global"), global);
 
     let create_realm_func = {
-        let mut f = pipa::object::function::JSFunction::new_builtin(ctx.intern("createRealm"), 0);
+        let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("createRealm"), 0);
         f.builtin_atom = Some(ctx.intern("test262_create_realm"));
         f.builtin_func = ctx.get_builtin_func("test262_create_realm");
         let ptr = Box::into_raw(Box::new(f)) as usize;
@@ -244,7 +244,7 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
     dollar_262.set(ctx.intern("createRealm"), create_realm_func);
 
     let eval_script_func = {
-        let mut f = pipa::object::function::JSFunction::new_builtin(ctx.intern("evalScript"), 1);
+        let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("evalScript"), 1);
         f.builtin_atom = Some(ctx.intern("test262_eval_script"));
         f.builtin_func = ctx.get_builtin_func("test262_eval_script");
         let ptr = Box::into_raw(Box::new(f)) as usize;
@@ -255,7 +255,7 @@ fn inject_test262_globals(ctx: &mut pipa::JSContext) {
 
     let detach_func = {
         let mut f =
-            pipa::object::function::JSFunction::new_builtin(ctx.intern("detachArrayBuffer"), 1);
+            v16::object::function::JSFunction::new_builtin(ctx.intern("detachArrayBuffer"), 1);
         f.builtin_atom = Some(ctx.intern("test262_detach_array_buffer"));
         f.builtin_func = ctx.get_builtin_func("test262_detach_array_buffer");
         let ptr = Box::into_raw(Box::new(f)) as usize;
@@ -361,7 +361,7 @@ fn error_matches_type(err: &str, expected_type: &Option<String>) -> bool {
 }
 
 fn run_test_mode(
-    ctx: &mut pipa::JSContext,
+    ctx: &mut v16::JSContext,
     code: &str,
     meta: &TestMeta,
     harness_code: &str,
@@ -371,7 +371,7 @@ fn run_test_mode(
     let full_code = build_code(code, harness_code, force_strict);
     let is_async = meta.flags.contains(&"async".to_string());
 
-    if std::env::var("PIPA_T262_DEBUG").is_ok() {
+    if std::env::var("V16_T262_DEBUG").is_ok() {
         eprintln!("=== FULL CODE ===\n{}\n=== END CODE ===", full_code);
     }
 
@@ -442,17 +442,17 @@ fn main() {
 
 fn runner_main() {
     let args: Vec<String> = std::env::args().collect();
-    let trace_tests = std::env::var("PIPA_T262_TRACE")
+    let trace_tests = std::env::var("V16_T262_TRACE")
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let skip_intl = std::env::var("PIPA_T262_SKIP_INTL")
+    let skip_intl = std::env::var("V16_T262_SKIP_INTL")
         .ok()
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let per_test_timeout_ms: u64 = std::env::var("PIPA_T262_TIMEOUT_MS")
+    let per_test_timeout_ms: u64 = std::env::var("V16_T262_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(15000);
@@ -475,7 +475,7 @@ fn runner_main() {
     let mut failed = 0;
     let mut skipped = 0;
 
-    println!("test262 runner for Pipa");
+    println!("test262 runner for V16");
     println!("Test directory: {}", test_dir);
     println!("Harness directory: {:?}", harness_dir);
     println!("------------------------\n");
@@ -664,7 +664,7 @@ fn runner_main() {
             };
             mode_labels.push(label);
 
-            pipa::set_external_interrupt(false);
+            v16::set_external_interrupt(false);
             if per_test_timeout_ms > 0 {
                 WATCHDOG_DEADLINE_MS.store(
                     now_ms() + per_test_timeout_ms,
@@ -680,7 +680,7 @@ fn runner_main() {
                 per_test_timeout_ms,
             );
             WATCHDOG_DEADLINE_MS.store(0, std::sync::atomic::Ordering::Relaxed);
-            pipa::set_external_interrupt(false);
+            v16::set_external_interrupt(false);
 
             match outcome {
                 TestOutcome::Passed => {}

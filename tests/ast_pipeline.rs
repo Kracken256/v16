@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, eval_via_ast, parse_to_ast};
+use v16::{JSRuntime, eval_via_ast, parse_to_ast};
 
 #[test]
 fn parse_empty_program() {

@@ -52,7 +52,7 @@ fn fetch_impl(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         h
     } else {
         let mut h = crate::http::headers::Headers::new();
-        h.set("User-Agent", "pipa/0.1");
+        h.set("User-Agent", "v16/0.1");
         h.set("Accept", "*/*");
         h.set("Connection", "close");
         h

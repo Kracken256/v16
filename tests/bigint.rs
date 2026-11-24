@@ -1,11 +1,11 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
-fn assert_js_ok(ctx: &mut pipa::JSContext, code: &str, msg: &str) {
+fn assert_js_ok(ctx: &mut v16::JSContext, code: &str, msg: &str) {
     let r = eval(ctx, code);
     assert!(r.is_ok(), "{}: {:?}", msg, r);
 }
 
-fn assert_bigint_eq(ctx: &mut pipa::JSContext, expr: &str, expected: i64) {
+fn assert_bigint_eq(ctx: &mut v16::JSContext, expr: &str, expected: i64) {
     let code = format!(
         "var __v = ({}); if (typeof __v !== 'bigint') throw new Error('not bigint'); if (__v !== ({}n)) throw new Error('bigint mismatch');",
         expr, expected
@@ -13,7 +13,7 @@ fn assert_bigint_eq(ctx: &mut pipa::JSContext, expr: &str, expected: i64) {
     assert_js_ok(ctx, &code, "bigint assertion failed");
 }
 
-fn assert_bool_eq(ctx: &mut pipa::JSContext, expr: &str, expected: bool) {
+fn assert_bool_eq(ctx: &mut v16::JSContext, expr: &str, expected: bool) {
     let expected_js = if expected { "true" } else { "false" };
     let code = format!(
         "var __v = ({}); if (__v !== {}) throw new Error('bool mismatch');",

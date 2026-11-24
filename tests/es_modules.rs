@@ -1,10 +1,10 @@
 #![cfg(feature = "full_runtime_tests")]
 
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 use std::fs;
 
 fn setup_test_module(name: &str, content: &str) -> String {
-    let path = format!("/tmp/pipa_test_{}.js", name);
+    let path = format!("/tmp/v16_test_{}.js", name);
     fs::write(&path, content).expect("Failed to write test module");
     path
 }
@@ -24,7 +24,7 @@ fn test_module_registry_basic() {
 
 #[test]
 fn test_module_specifier_resolution() {
-    use pipa::runtime::module::resolve_specifier;
+    use v16::runtime::module::resolve_specifier;
 
     let base = "/home/user/project/main.js";
     let resolved = resolve_specifier("./utils.js", base);
@@ -37,7 +37,7 @@ fn test_module_specifier_resolution() {
 
 #[test]
 fn test_module_object_creation() {
-    use pipa::runtime::module::{Module, ModuleState};
+    use v16::runtime::module::{Module, ModuleState};
 
     let module = Module::new("test.js".to_string(), "export const x = 42;".to_string());
 
@@ -48,8 +48,8 @@ fn test_module_object_creation() {
 
 #[test]
 fn test_module_export_add() {
-    use pipa::runtime::module::Module;
-    use pipa::value::JSValue;
+    use v16::runtime::module::Module;
+    use v16::value::JSValue;
 
     let mut module = Module::new("test.js".to_string(), String::new());
 
@@ -64,9 +64,9 @@ fn test_module_export_add() {
 
 #[test]
 fn test_module_namespace_object() {
-    use pipa::runtime::atom::AtomTable;
-    use pipa::runtime::module::Module;
-    use pipa::value::JSValue;
+    use v16::runtime::atom::AtomTable;
+    use v16::runtime::module::Module;
+    use v16::value::JSValue;
 
     let mut module = Module::new("test.js".to_string(), String::new());
     module.add_export("a".to_string(), JSValue::new_int(1), false);
@@ -140,7 +140,7 @@ fn test_import_meta_parsing() {
 fn test_module_load_and_register() {
     let module_path = setup_test_module("load_test", "export const value = 123;");
 
-    let source = pipa::runtime::module::load_module_source(&module_path);
+    let source = v16::runtime::module::load_module_source(&module_path);
     assert!(source.is_ok());
     assert!(source.unwrap().contains("export const value"));
 
@@ -152,11 +152,11 @@ fn test_import_namespace() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var x = 42;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import * as ns from './module.js'; ns.x");
@@ -169,13 +169,13 @@ fn test_import_namespace_multiple_exports() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var a = 1; export var b = 2; export var c = 3;".to_string(),
     );
-    module.add_export("a".to_string(), pipa::JSValue::new_int(1), false);
-    module.add_export("b".to_string(), pipa::JSValue::new_int(2), false);
-    module.add_export("c".to_string(), pipa::JSValue::new_int(3), false);
+    module.add_export("a".to_string(), v16::JSValue::new_int(1), false);
+    module.add_export("b".to_string(), v16::JSValue::new_int(2), false);
+    module.add_export("c".to_string(), v16::JSValue::new_int(3), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -191,11 +191,11 @@ fn test_import_named() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var x = 42;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import { x } from './module.js'; x");
@@ -208,11 +208,11 @@ fn test_import_default() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export default 42;".to_string(),
     );
-    module.add_export("default".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("default".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import foo from './module.js'; foo");
@@ -281,13 +281,13 @@ fn test_export_multiple_named() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var x = 1, y = 2, z = 3;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(1), false);
-    module.add_export("y".to_string(), pipa::JSValue::new_int(2), false);
-    module.add_export("z".to_string(), pipa::JSValue::new_int(3), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
+    module.add_export("y".to_string(), v16::JSValue::new_int(2), false);
+    module.add_export("z".to_string(), v16::JSValue::new_int(3), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -304,13 +304,13 @@ fn test_re_export_all() {
     let mut ctx = rt.new_context();
 
     let mut module_a =
-        pipa::runtime::module::Module::new("./a.js".to_string(), "export var a = 10;".to_string());
-    module_a.add_export("a".to_string(), pipa::JSValue::new_int(10), false);
+        v16::runtime::module::Module::new("./a.js".to_string(), "export var a = 10;".to_string());
+    module_a.add_export("a".to_string(), v16::JSValue::new_int(10), false);
     rt.module_registry_mut().register(module_a);
 
     let mut module_b =
-        pipa::runtime::module::Module::new("./b.js".to_string(), "export var b = 20;".to_string());
-    module_b.add_export("b".to_string(), pipa::JSValue::new_int(20), false);
+        v16::runtime::module::Module::new("./b.js".to_string(), "export var b = 20;".to_string());
+    module_b.add_export("b".to_string(), v16::JSValue::new_int(20), false);
     rt.module_registry_mut().register(module_b);
 
     let r = eval(&mut ctx, "import * as ns from './a.js'; ns.a");
@@ -320,7 +320,7 @@ fn test_re_export_all() {
 
 #[test]
 fn test_module_state_transitions() {
-    use pipa::runtime::module::{Module, ModuleState};
+    use v16::runtime::module::{Module, ModuleState};
 
     let mut module = Module::new("test.js".to_string(), "export var x = 1;".to_string());
     assert_eq!(module.state, ModuleState::Unlinked);
@@ -343,11 +343,11 @@ fn test_import_aliased() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var x = 42;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import { x as y } from './module.js'; y");
@@ -360,12 +360,12 @@ fn test_import_multiple_aliased() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var a = 1; export var b = 2;".to_string(),
     );
-    module.add_export("a".to_string(), pipa::JSValue::new_int(1), false);
-    module.add_export("b".to_string(), pipa::JSValue::new_int(2), false);
+    module.add_export("a".to_string(), v16::JSValue::new_int(1), false);
+    module.add_export("b".to_string(), v16::JSValue::new_int(2), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -381,12 +381,12 @@ fn test_import_default_and_named() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export default 100; export var x = 50;".to_string(),
     );
-    module.add_export("default".to_string(), pipa::JSValue::new_int(100), false);
-    module.add_export("x".to_string(), pipa::JSValue::new_int(50), false);
+    module.add_export("default".to_string(), v16::JSValue::new_int(100), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(50), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -506,8 +506,8 @@ fn test_import_side_effect_only() {
     let mut ctx = rt.new_context();
 
     let mut module =
-        pipa::runtime::module::Module::new("./sideeffect.js".to_string(), "var x = 1;".to_string());
-    module.add_export("x".to_string(), pipa::JSValue::new_int(1), false);
+        v16::runtime::module::Module::new("./sideeffect.js".to_string(), "var x = 1;".to_string());
+    module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import './sideeffect.js';");
@@ -521,13 +521,13 @@ fn test_circular_dependency_simple() {
     let mut ctx = rt.new_context();
 
     let mut module_a =
-        pipa::runtime::module::Module::new("./a.js".to_string(), "export var a = 1;".to_string());
-    module_a.add_export("a".to_string(), pipa::JSValue::new_int(1), false);
+        v16::runtime::module::Module::new("./a.js".to_string(), "export var a = 1;".to_string());
+    module_a.add_export("a".to_string(), v16::JSValue::new_int(1), false);
     rt.module_registry_mut().register(module_a);
 
     let mut module_b =
-        pipa::runtime::module::Module::new("./b.js".to_string(), "export var b = 2;".to_string());
-    module_b.add_export("b".to_string(), pipa::JSValue::new_int(2), false);
+        v16::runtime::module::Module::new("./b.js".to_string(), "export var b = 2;".to_string());
+    module_b.add_export("b".to_string(), v16::JSValue::new_int(2), false);
     rt.module_registry_mut().register(module_b);
 
     let r = eval(
@@ -543,18 +543,18 @@ fn test_circular_dependency_mutual() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module_a = pipa::runtime::module::Module::new(
+    let mut module_a = v16::runtime::module::Module::new(
         "./cycle_a.js".to_string(),
         "export var a = 10;".to_string(),
     );
-    module_a.add_export("a".to_string(), pipa::JSValue::new_int(10), false);
+    module_a.add_export("a".to_string(), v16::JSValue::new_int(10), false);
     rt.module_registry_mut().register(module_a);
 
-    let mut module_b = pipa::runtime::module::Module::new(
+    let mut module_b = v16::runtime::module::Module::new(
         "./cycle_b.js".to_string(),
         "export var b = 20;".to_string(),
     );
-    module_b.add_export("b".to_string(), pipa::JSValue::new_int(20), false);
+    module_b.add_export("b".to_string(), v16::JSValue::new_int(20), false);
     rt.module_registry_mut().register(module_b);
 
     let r = eval(
@@ -570,11 +570,11 @@ fn test_module_namespace_immutable() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./immutable.js".to_string(),
         "export var x = 1;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(1), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -589,11 +589,11 @@ fn test_namespace_contains_default() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./hasdefault.js".to_string(),
         "export default 42;".to_string(),
     );
-    module.add_export("default".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("default".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -621,11 +621,11 @@ fn test_import_nonexistent_export_returns_undefined() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./hasx.js".to_string(),
         "export var x = 1;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(1), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -641,12 +641,12 @@ fn test_multiple_imports_same_module() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./multi.js".to_string(),
         "export var a = 1; export var b = 2;".to_string(),
     );
-    module.add_export("a".to_string(), pipa::JSValue::new_int(1), false);
-    module.add_export("b".to_string(), pipa::JSValue::new_int(2), false);
+    module.add_export("a".to_string(), v16::JSValue::new_int(1), false);
+    module.add_export("b".to_string(), v16::JSValue::new_int(2), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(
@@ -724,18 +724,18 @@ fn test_module_evaluation_order() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module_a = pipa::runtime::module::Module::new(
+    let mut module_a = v16::runtime::module::Module::new(
         "./order_a.js".to_string(),
         "export var a = 1;".to_string(),
     );
-    module_a.add_export("a".to_string(), pipa::JSValue::new_int(1), false);
+    module_a.add_export("a".to_string(), v16::JSValue::new_int(1), false);
     rt.module_registry_mut().register(module_a);
 
-    let mut module_b = pipa::runtime::module::Module::new(
+    let mut module_b = v16::runtime::module::Module::new(
         "./order_b.js".to_string(),
         "export var b = 2;".to_string(),
     );
-    module_b.add_export("b".to_string(), pipa::JSValue::new_int(2), false);
+    module_b.add_export("b".to_string(), v16::JSValue::new_int(2), false);
     rt.module_registry_mut().register(module_b);
 
     let r = eval(
@@ -781,11 +781,11 @@ fn test_import_export_function() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./func.js".to_string(),
         "export function add(a, b) { return a + b; }".to_string(),
     );
-    let add_fn = pipa::JSValue::new_function(0);
+    let add_fn = v16::JSValue::new_function(0);
     module.add_export("add".to_string(), add_fn, false);
     rt.module_registry_mut().register(module);
 

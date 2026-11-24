@@ -1,6 +1,6 @@
 #![cfg(feature = "full_runtime_tests")]
 
-use pipa::{JSContext, JSRuntime, eval, run_event_loop};
+use v16::{JSContext, JSRuntime, eval, run_event_loop};
 #[test]
 fn test_exponentiation() {
     let mut rt = JSRuntime::new();
@@ -303,11 +303,11 @@ fn test_import_syntax() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var x = 42;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import './module.js';");
@@ -319,11 +319,11 @@ fn test_import_namespace() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var x = 42;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import * as ns from './module.js'; ns.x");
@@ -336,11 +336,11 @@ fn test_import_named() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export var x = 42;".to_string(),
     );
-    module.add_export("x".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import { x } from './module.js'; x");
@@ -353,11 +353,11 @@ fn test_import_default() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let mut module = pipa::runtime::module::Module::new(
+    let mut module = v16::runtime::module::Module::new(
         "./module.js".to_string(),
         "export default 42;".to_string(),
     );
-    module.add_export("default".to_string(), pipa::JSValue::new_int(42), false);
+    module.add_export("default".to_string(), v16::JSValue::new_int(42), false);
     rt.module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import x from './module.js'; x");

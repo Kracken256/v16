@@ -13,9 +13,9 @@ fn main() {
         "\\u{1F600}", "[\\d-a]", "[a-\\d]", "(?<1a>x)", "(?<a-b>x)", "(?<a>x)(?<b>y)",
     ];
     for p in patterns {
-        let mut flags = pipa::regexp::RegexFlags::default();
+        let mut flags = v16::regexp::RegexFlags::default();
         flags.unicode = true;
-        let r = pipa::regexp::Regex::new_with_flags(p, flags);
+        let r = v16::regexp::Regex::new_with_flags(p, flags);
         match r {
             Ok(_) => println!("OK   {:?}", p),
             Err(e) => println!("ERR  {:?} -> {}", p, e),

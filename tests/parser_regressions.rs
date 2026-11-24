@@ -1,4 +1,4 @@
-use pipa::compiler::parser::Parser;
+use v16::compiler::parser::Parser;
 
 fn parse_ok(src: &str) {
     Parser::new(src)

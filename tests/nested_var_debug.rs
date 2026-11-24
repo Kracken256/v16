@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
 #[test]
 fn debug_nested_var_resolution() {

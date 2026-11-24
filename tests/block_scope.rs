@@ -1,11 +1,11 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
-fn assert_js_ok(ctx: &mut pipa::JSContext, code: &str, msg: &str) {
+fn assert_js_ok(ctx: &mut v16::JSContext, code: &str, msg: &str) {
     let r = eval(ctx, code);
     assert!(r.is_ok(), "{}: {:?}", msg, r);
 }
 
-fn assert_js_err(ctx: &mut pipa::JSContext, code: &str, msg: &str) {
+fn assert_js_err(ctx: &mut v16::JSContext, code: &str, msg: &str) {
     let r = eval(ctx, code);
     assert!(r.is_err(), "{}: expected error but got {:?}", msg, r);
 }

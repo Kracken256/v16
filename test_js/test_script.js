@@ -1,5 +1,5 @@
-// Test script for Pipa eval binary
-console.log("Hello from Pipa!");
+// Test script for V16 eval binary
+console.log("Hello from V16!");
 
 let x = 42;
 console.log("x =", x);

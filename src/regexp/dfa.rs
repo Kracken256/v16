@@ -833,9 +833,9 @@ mod tests {
     #[test]
     fn test_dfa_unicode() {
         let dfa = SimpleDFA::new("hello").unwrap();
-        assert!(dfa.is_match("你好 hello 世界"));
+        assert!(dfa.is_match("àéî hello üöä"));
 
-        let m = dfa.find("你好 hello 世界").unwrap();
+        let m = dfa.find("àéî hello üöä").unwrap();
         assert_eq!(m.start, 7);
         assert_eq!(m.end, 12);
     }

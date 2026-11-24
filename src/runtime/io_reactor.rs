@@ -499,7 +499,7 @@ impl IoReactor {
                         };
                         let mut hdrs = WsHandshake::build_request(&host, &path, &key);
                         if !hdrs.contains("user-agent") {
-                            hdrs.set("User-Agent", "pipa/0.1");
+                            hdrs.set("User-Agent", "v16/0.1");
                         }
                         let mut write_buf = Vec::new();
                         write_buf.extend_from_slice(b"GET ");

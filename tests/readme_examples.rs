@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, JSValue, eval, eval_async};
+use v16::{JSRuntime, JSValue, eval, eval_async};
 
 #[test]
 fn test_example_eval_js() {
@@ -32,7 +32,7 @@ fn test_example_read_strings() {
 
 #[test]
 fn test_example_register_builtin() {
-    fn js_print(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
+    fn js_print(ctx: &mut v16::JSContext, args: &[JSValue]) -> JSValue {
         for arg in args {
             if arg.is_string() {
                 print!("{}", ctx.get_atom_str(arg.get_atom()));
@@ -76,7 +76,7 @@ fn test_example_bytecode_compilation() {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
 
-    let (code, _constants) = pipa::compile_to_register_bytecode(
+    let (code, _constants) = v16::compile_to_register_bytecode(
         &mut ctx,
         "function fib(n) { return n < 2 ? n : fib(n-1) + fib(n-2); } fib(20)",
     )

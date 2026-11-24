@@ -87,12 +87,12 @@ pub fn init_globals(ctx: &mut JSContext) {
     );
     ctx.register_builtin("import", HostFunction::new("import", 1, js_import));
     ctx.register_builtin(
-        "__pipa_import__",
-        HostFunction::new("__pipa_import__", 2, pipa_import),
+        "__v16_import__",
+        HostFunction::new("__v16_import__", 2, v16_import),
     );
     ctx.register_builtin(
-        "__pipa_import_meta__",
-        HostFunction::new("__pipa_import_meta__", 0, pipa_import_meta),
+        "__v16_import_meta__",
+        HostFunction::new("__v16_import_meta__", 0, v16_import_meta),
     );
     ctx.register_builtin(
         "disassemble",
@@ -541,7 +541,7 @@ fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 }
 
-fn pipa_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+fn v16_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_string() {
         return throw_type_error(ctx, "Import specifier must be a string");
     }
@@ -566,7 +566,7 @@ fn pipa_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 }
 
-fn pipa_import_meta(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
+fn v16_import_meta(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     let url = ctx
         .get_current_module()
         .map(|s| s.to_string())
@@ -3395,13 +3395,13 @@ fn init_global_funcs(ctx: &mut JSContext) {
         );
         set_non_enumerable(
             global_obj,
-            ctx.intern("__pipa_import__"),
-            create_builtin_function(ctx, "__pipa_import__"),
+            ctx.intern("__v16_import__"),
+            create_builtin_function(ctx, "__v16_import__"),
         );
         set_non_enumerable(
             global_obj,
-            ctx.intern("__pipa_import_meta__"),
-            create_builtin_function(ctx, "__pipa_import_meta__"),
+            ctx.intern("__v16_import_meta__"),
+            create_builtin_function(ctx, "__v16_import_meta__"),
         );
         set_non_enumerable(
             global_obj,

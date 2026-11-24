@@ -1,11 +1,11 @@
 // examples/process_exec.js
 // Demonstrate process.exec() - spawn commands and capture output
 //
-// Run: pipa --features process examples/process_exec.js
+// Run: v16 --features process examples/process_exec.js
 
-import("pipa:process").then(function(p) {
+import("v16:process").then(function(p) {
     // Simple command
-    return p.exec("echo", ["hello from pipa"]).then(function(r) {
+    return p.exec("echo", ["hello from v16"]).then(function(r) {
         console.log("=== exec echo ===");
         console.log("stdout:", JSON.stringify(r.stdout));
         console.log("stderr:", JSON.stringify(r.stderr));

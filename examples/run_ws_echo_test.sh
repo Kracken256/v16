@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-echo "=== Building pipa with fetch feature ==="
-cargo build --bin pipa --features fetch 2>&1 | tail -1
+echo "=== Building v16 with fetch feature ==="
+cargo build --bin v16 --features fetch 2>&1 | tail -1
 
 echo ""
 echo "=== Starting WebSocket echo server ==="
@@ -17,7 +17,7 @@ cargo test --features fetch --test fetch_tests test_e2e_ws_handshake -- --test-t
 
 echo ""
 echo "=== Testing HTTPS fetch ==="
-timeout 30 ./target/debug/pipa examples/fetch_example.js 2>&1
+timeout 30 ./target/debug/v16 examples/fetch_example.js 2>&1
 
 echo ""
 echo "=== All tests complete ==="

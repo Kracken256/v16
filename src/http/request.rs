@@ -324,7 +324,7 @@ impl HttpRequest {
             buf.extend_from_slice(b"\r\n");
         }
         if !self.req_headers.contains("user-agent") {
-            buf.extend_from_slice(b"User-Agent: pipa/0.1\r\n");
+            buf.extend_from_slice(b"User-Agent: v16/0.1\r\n");
         }
         if !self.req_headers.contains("accept") {
             buf.extend_from_slice(b"Accept: */*\r\n");

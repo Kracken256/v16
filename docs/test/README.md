@@ -42,7 +42,7 @@ Useful flags (all category scripts and the wrapper accept them):
 | `--strict`          | exit non-zero when at least one test failed                     |
 | `--build`           | build the runner if the binary is missing                       |
 | `--docs DIR`        | output directory (default `docs/test`)                          |
-| `--logs DIR`        | raw runner log directory (default `~/.cache/pipa/test262-logs`) |
+| `--logs DIR`        | raw runner log directory (default `~/.cache/v16/test262-logs`) |
 | `--log-all`         | also keep logs for chunks that passed                           |
 
 The scripts drive `examples/test262_runner`, which must be built first:
@@ -51,8 +51,8 @@ The scripts drive `examples/test262_runner`, which must be built first:
 cargo build -r --example test262_runner
 ```
 
-Raw per-chunk logs are written **outside the repository** (`~/.cache/pipa/test262-logs/`
-by default, or `$PIPA_TEST262_LOGS`). Only chunks with failures or warnings are
+Raw per-chunk logs are written **outside the repository** (`~/.cache/v16/test262-logs/`
+by default, or `$V16_TEST262_LOGS`). Only chunks with failures or warnings are
 saved unless `--log-all` is passed. Keeping logs out of the workspace matters:
 the run produces thousands of files, and a file watcher indexing them will
 destabilise VS Code. `.vscode/settings.json` additionally excludes `test262/`,

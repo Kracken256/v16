@@ -1,9 +1,9 @@
 // examples/process_chain.js
 // Demonstrate chaining multiple exec calls, pipe-like workflow
 //
-// Run: pipa --features process examples/process_chain.js
+// Run: v16 --features process examples/process_chain.js
 
-import("pipa:process").then(function(p) {
+import("v16:process").then(function(p) {
     console.log("=== Chained exec workflow ===");
 
     // Step 1: get current directory

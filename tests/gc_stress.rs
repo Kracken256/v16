@@ -1,6 +1,6 @@
 #![cfg(feature = "full_runtime_tests")]
 
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
 #[test]
 fn test_no_nursery_disable_under_survivors() {

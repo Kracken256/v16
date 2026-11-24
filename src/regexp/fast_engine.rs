@@ -420,10 +420,10 @@ mod tests {
     #[test]
     fn test_fast_unicode() {
         let re = FastRegex::new("hello", 0).unwrap();
-        assert!(re.is_match("你好 hello 世界"));
+        assert!(re.is_match("àéî hello üöä"));
 
-        let m = re.find("你好 hello 世界").unwrap();
-        assert_eq!(m.as_str("你好 hello 世界"), "hello");
+        let m = re.find("àéî hello üöä").unwrap();
+        assert_eq!(m.as_str("àéî hello üöä"), "hello");
     }
 
     #[test]

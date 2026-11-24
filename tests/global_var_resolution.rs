@@ -1,4 +1,4 @@
-use pipa::{JSRuntime, eval};
+use v16::{JSRuntime, eval};
 
 #[test]
 fn test_global_function_accessible_from_nested_call() {
