@@ -328,9 +328,6 @@ impl Parser {
                     None
                 };
                 if let Some(arg) = rest {
-                    if self.at_punct(",") {
-                        self.advance();
-                    }
                     elements.push(Some(PatternElement::RestElement(RestElement {
                         argument: arg,
                     })));
@@ -366,11 +363,19 @@ impl Parser {
                 if self.at_punct("...") {
                     self.advance();
                     let arg = self.parse_binding_pattern()?;
+                    let target = match arg {
+                        BindingPattern::Identifier(name) => AssignmentTarget::Identifier(name),
+                        _ => {
+                            return Err(self.error(
+                                "rest property must be a binding identifier",
+                            ))
+                        }
+                    };
                     properties.push(ObjectPatternProperty::RestElement(RestElement {
-                        argument: Box::new(binding_to_target(arg)),
+                        argument: Box::new(target),
                     }));
-                    if self.at_punct(",") {
-                        self.advance();
+                    if !self.at_punct("}") {
+                        return Err(self.error("rest property must be last property"));
                     }
                     continue;
                 }
@@ -2585,6 +2590,7 @@ impl Parser {
     fn parse_array_expression_inner(&mut self) -> Result<Expression, String> {
         self.expect("[")?;
         let mut elements = Vec::new();
+        let mut trailing_comma_after_spread = false;
         while !self.at_punct("]") && !self.is_eof() {
             if self.at_punct(",") {
                 elements.push(None);
@@ -2603,10 +2609,18 @@ impl Parser {
             }
             if self.at_punct(",") {
                 self.advance();
+                if self.at_punct("]")
+                    && matches!(elements.last(), Some(Some(ArrayElement::Spread(_))))
+                {
+                    trailing_comma_after_spread = true;
+                }
             }
         }
         self.expect("]")?;
-        Ok(Expression::ArrayExpression(ArrayExpression { elements }))
+        Ok(Expression::ArrayExpression(ArrayExpression {
+            elements,
+            trailing_comma_after_spread,
+        }))
     }
 
     fn parse_object_expression(&mut self) -> Result<Expression, String> {
@@ -2616,12 +2630,16 @@ impl Parser {
     fn parse_object_expression_inner(&mut self) -> Result<Expression, String> {
         self.expect("{")?;
         let mut properties = Vec::new();
+        let mut trailing_comma_after_spread = false;
         while !self.at_punct("}") && !self.is_eof() {
             if self.at_punct("...") {
                 self.advance();
                 properties.push(Property::SpreadElement(self.parse_assignment_expression()?));
                 if self.at_punct(",") {
                     self.advance();
+                    if self.at_punct("}") {
+                        trailing_comma_after_spread = true;
+                    }
                 }
                 continue;
             }
@@ -2783,6 +2801,7 @@ impl Parser {
         self.expect("}")?;
         Ok(Expression::ObjectExpression(ObjectExpression {
             properties,
+            trailing_comma_after_spread,
         }))
     }
 
@@ -3004,14 +3023,30 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
         Expression::ObjectPattern(p) => Ok(AssignmentTarget::ObjectPattern(p)),
         Expression::ArrayExpression(arr) => {
             let mut elements = Vec::new();
-            for elem in arr.elements {
+            let len = arr.elements.len();
+            let mut last_is_spread = false;
+            for (index, elem) in arr.elements.into_iter().enumerate() {
+                last_is_spread = false;
                 match elem {
                     Some(ArrayElement::Expression(e)) => {
                         elements.push(Some(PatternElement::Pattern(expr_to_target(e)?)));
                     }
                     Some(ArrayElement::Spread(e)) => {
+                        let argument = expr_to_target(e)?;
+                        if matches!(argument, AssignmentTarget::AssignmentPattern(_)) {
+                            return Err(
+                                "SyntaxError: rest element may not have an initializer"
+                                    .to_string(),
+                            );
+                        }
+                        if index != len - 1 {
+                            return Err(
+                                "SyntaxError: rest element must be last element".to_string()
+                            );
+                        }
+                        last_is_spread = true;
                         elements.push(Some(PatternElement::RestElement(RestElement {
-                            argument: Box::new(expr_to_target(e)?),
+                            argument: Box::new(argument),
                         })));
                     }
                     None => {
@@ -3019,15 +3054,37 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
                     }
                 }
             }
+            if last_is_spread && arr.trailing_comma_after_spread {
+                return Err("SyntaxError: rest element may not have a trailing comma".to_string());
+            }
             Ok(AssignmentTarget::ArrayPattern(ArrayPattern { elements }))
         }
         Expression::ObjectExpression(obj) => {
             let mut properties = Vec::new();
-            for prop in obj.properties {
+            let len = obj.properties.len();
+            let mut last_is_spread = false;
+            for (index, prop) in obj.properties.into_iter().enumerate() {
+                last_is_spread = false;
                 match prop {
                     Property::SpreadElement(arg) => {
+                        let argument = expr_to_target(arg)?;
+                        if !matches!(
+                            argument,
+                            AssignmentTarget::Identifier(_) | AssignmentTarget::MemberExpression(_)
+                        ) {
+                            return Err(
+                                "SyntaxError: rest property must be an assignment target"
+                                    .to_string(),
+                            );
+                        }
+                        if index != len - 1 {
+                            return Err(
+                                "SyntaxError: rest property must be last property".to_string()
+                            );
+                        }
+                        last_is_spread = true;
                         properties.push(ObjectPatternProperty::RestElement(RestElement {
-                            argument: Box::new(expr_to_target(arg)?),
+                            argument: Box::new(argument),
                         }));
                     }
                     Property::Property {
@@ -3074,6 +3131,9 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
                         }
                     }
                 }
+            }
+            if last_is_spread && obj.trailing_comma_after_spread {
+                return Err("SyntaxError: rest property may not have a trailing comma".to_string());
             }
             Ok(AssignmentTarget::ObjectPattern(ObjectPattern {
                 properties,

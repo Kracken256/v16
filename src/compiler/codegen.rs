@@ -5201,6 +5201,7 @@ impl CodeGenerator {
                             )))
                         })
                         .collect(),
+                    trailing_comma_after_spread: false,
                 };
                 let raw = ArrayExpression {
                     elements: tagged
@@ -5213,6 +5214,7 @@ impl CodeGenerator {
                             )))
                         })
                         .collect(),
+                    trailing_comma_after_spread: false,
                 };
                 let template_object = Expression::CallExpression(CallExpression {
                     callee: Box::new(Expression::Identifier(Identifier {
