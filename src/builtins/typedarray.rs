@@ -1959,12 +1959,26 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     ta_proto.set(ctx.intern("sort"), create_builtin_function(ctx, "ta_sort"));
     ta_proto.set(ctx.intern("subarray"), create_builtin_function(ctx, "ta_subarray"));
 
+    let mut ta_parent = JSObject::new();
+    for (name, builtin) in [
+        ("buffer", "typedarray_buffer"),
+        ("byteLength", "typedarray_byteLength"),
+        ("byteOffset", "typedarray_byteOffset"),
+        ("length", "typedarray_length"),
+    ] {
+        let getter = create_builtin_function(ctx, builtin);
+        ta_parent.define_accessor_flags(ctx.intern(name), Some(getter), None, false, true);
+    }
+    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
+        ta_parent.prototype = Some(obj_proto_ptr);
+    }
+    let ta_parent_ptr = Box::into_raw(Box::new(ta_parent)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ta_parent_ptr);
+    ta_proto.prototype = Some(ta_parent_ptr as *mut JSObject);
+
     let to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
     ta_proto.set(to_string_tag_key, JSValue::new_string(ctx.intern("TypedArray")));
 
-    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
-        ta_proto.prototype = Some(obj_proto_ptr);
-    }
     let ta_proto_ptr = Box::into_raw(Box::new(ta_proto)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(ta_proto_ptr);
     ctx.set_typed_array_prototype(ta_proto_ptr);

@@ -5003,6 +5003,15 @@ impl VM {
                                         }
                                     }
                                 }
+                            } else if js_obj.find_offset(atom).is_none()
+                                && self.prototype_rejects_typed_array_set(ctx, obj_val, atom)
+                            {
+                                if self.frames[self.frame_index].is_strict_frame {
+                                    self.set_pending_type_error(
+                                        ctx,
+                                        "Cannot create property on typed array prototype",
+                                    );
+                                }
                             } else {
                                 js_obj.set_cached(atom, value, ctx.shape_cache_mut());
                             }
@@ -9103,6 +9112,64 @@ impl VM {
         (false, None)
     }
 
+    fn canonical_numeric_index_string(name: &str) -> Option<f64> {
+        if name == "-0" {
+            return Some(-0.0);
+        }
+        if name == "NaN" {
+            return Some(f64::NAN);
+        }
+        if name == "Infinity" {
+            return Some(f64::INFINITY);
+        }
+        if name == "-Infinity" {
+            return Some(f64::NEG_INFINITY);
+        }
+        let value: f64 = name.parse().ok()?;
+        if value.fract() == 0.0 && value.abs() < 1e21 && format!("{}", value) == name {
+            Some(value)
+        } else if format!("{}", value) == name {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn prototype_rejects_typed_array_set(
+        &mut self,
+        ctx: &mut JSContext,
+        obj_val: JSValue,
+        atom: crate::runtime::atom::Atom,
+    ) -> bool {
+        let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
+        let mut current = js_obj.prototype;
+        while let Some(proto_ptr) = current {
+            if proto_ptr.is_null() {
+                return false;
+            }
+            let proto = unsafe { &*proto_ptr };
+            if proto.obj_type() == crate::object::object::ObjectType::TypedArray {
+                let length_atom = ctx.intern("length");
+                let name = ctx.get_atom_str(atom);
+                let Some(index) = Self::canonical_numeric_index_string(&name) else {
+                    return false;
+                };
+                let length = proto
+                    .get(length_atom)
+                    .and_then(|v| if v.is_int() { Some(v.get_int()) } else { None })
+                    .unwrap_or(0);
+                let valid = index.is_finite()
+                    && index.fract() == 0.0
+                    && !(index == 0.0 && name == "-0")
+                    && index >= 0.0
+                    && index < length as f64;
+                return !valid;
+            }
+            current = proto.prototype;
+        }
+        false
+    }
+
     #[inline(always)]
     fn set_named_prop(
         &mut self,
@@ -9209,6 +9276,18 @@ impl VM {
                     ctx.get_atom_str(atom)
                 );
                 self.set_pending_type_error(ctx, &msg);
+                return false;
+            }
+
+            if pre_offset.is_none()
+                && self.prototype_rejects_typed_array_set(ctx, obj_val, atom)
+            {
+                if self.frames[self.frame_index].is_strict_frame {
+                    self.set_pending_type_error(
+                        ctx,
+                        "Cannot create property on typed array prototype",
+                    );
+                }
                 return false;
             }
 
