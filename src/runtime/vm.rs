@@ -1608,6 +1608,65 @@ impl VM {
         }
     }
 
+    fn take_pending_exception(&mut self, ctx: &mut JSContext) -> Option<JSValue> {
+        let caught = self.last_caught_exception.take();
+        let host = ctx.pending_exception.take();
+        caught
+            .or(host)
+            .or_else(|| self.pending_throw.take())
+    }
+
+    fn invoke_iterator_return(
+        &mut self,
+        ctx: &mut JSContext,
+        iter_val: JSValue,
+    ) -> Option<JSValue> {
+        if !iter_val.is_object() {
+            return None;
+        }
+        let return_atom = ctx.intern("return");
+        let ret_fn = {
+            let iter_obj = iter_val.as_object();
+            let mut found = iter_obj.get(return_atom);
+            if found.is_none() {
+                let mut proto = iter_obj.prototype;
+                while let Some(p) = proto {
+                    let pobj = unsafe { &*p };
+                    if let Some(v) = pobj.get(return_atom) {
+                        found = Some(v);
+                        break;
+                    }
+                    proto = pobj.prototype;
+                }
+            }
+            found
+        };
+        match ret_fn {
+            None => None,
+            Some(f) if f.is_undefined() || f.is_null() => None,
+            Some(f) if f.is_function() => {
+                match self.call_function_with_this(ctx, f, iter_val, &[]) {
+                    Ok(result) => {
+                        if result.is_object_like() {
+                            None
+                        } else {
+                            self.set_pending_type_error(
+                                ctx,
+                                "Iterator result is not an object",
+                            );
+                            self.take_pending_exception(ctx)
+                        }
+                    }
+                    Err(_) => self.take_pending_exception(ctx),
+                }
+            }
+            Some(_) => {
+                self.set_pending_type_error(ctx, "Iterator return is not a function");
+                self.take_pending_exception(ctx)
+            }
+        }
+    }
+
     #[cold]
     fn set_pending_reference_error(&mut self, ctx: &mut JSContext, msg: &str) {
         use crate::object::object::JSObject;
@@ -8185,8 +8244,27 @@ impl VM {
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
                     if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None, false)
+                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None, false, true)
                     {
+                        if self.pending_throw.is_some() {
+                            continue;
+                        }
+                        return Err(e);
+                    }
+                }
+                Opcode::IteratorStep => {
+                    let dst_done = self.read_u16_pc();
+                    let iter_reg = self.read_u16_pc();
+                    let iter_val = self.get_reg(iter_reg);
+                    if let Err(e) = self.op_iterator_next(
+                        ctx,
+                        dst_done,
+                        dst_done,
+                        iter_val,
+                        None,
+                        false,
+                        false,
+                    ) {
                         if self.pending_throw.is_some() {
                             continue;
                         }
@@ -8199,7 +8277,7 @@ impl VM {
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
                     if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None, true)
+                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None, true, true)
                     {
                         if self.pending_throw.is_some() {
                             continue;
@@ -8215,7 +8293,7 @@ impl VM {
                     let iter_val = self.get_reg(iter_reg);
                     let send_val = self.get_reg(send_reg);
                     if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), false)
+                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), false, true)
                     {
                         if self.pending_throw.is_some() {
                             continue;
@@ -8231,7 +8309,7 @@ impl VM {
                     let iter_val = self.get_reg(iter_reg);
                     let send_val = self.get_reg(send_reg);
                     if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), true)
+                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), true, true)
                     {
                         if self.pending_throw.is_some() {
                             continue;
@@ -8242,55 +8320,27 @@ impl VM {
                 Opcode::IteratorClose => {
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
-                    if iter_val.is_object() {
-                        let return_atom = ctx.intern("return");
-                        let ret_fn = {
-                            let iter_obj = iter_val.as_object();
-                            let mut found = iter_obj.get(return_atom);
-                            if found.is_none() {
-                                let mut proto = iter_obj.prototype;
-                                while let Some(p) = proto {
-                                    let pobj = unsafe { &*p };
-                                    if let Some(v) = pobj.get(return_atom) {
-                                        found = Some(v);
-                                        break;
-                                    }
-                                    proto = pobj.prototype;
-                                }
-                            }
-                            found
-                        };
-                        let mut failure: Option<JSValue> = None;
-                        match ret_fn {
-                            None => {}
-                            Some(f) if f.is_undefined() || f.is_null() => {}
-                            Some(f) if f.is_function() => {
-                                match self.call_function_with_this(ctx, f, iter_val, &[]) {
-                                    Ok(result) => {
-                                        if !result.is_object_like() {
-                                            self.set_pending_type_error(
-                                                ctx,
-                                                "Iterator result is not an object",
-                                            );
-                                            failure = ctx.pending_exception.take();
-                                        }
-                                    }
-                                    Err(_) => {
-                                        let host_exc = ctx.pending_exception.take();
-                                        failure =
-                                            self.last_caught_exception.take().or(host_exc);
-                                    }
-                                }
-                            }
-                            Some(_) => {
-                                self.set_pending_type_error(
-                                    ctx,
-                                    "Iterator return is not a function",
-                                );
-                                failure = ctx.pending_exception.take();
-                            }
+                    if let Some(exc) = self.invoke_iterator_return(ctx, iter_val) {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
                         }
-                        if let Some(exc) = failure {
+                    }
+                }
+                Opcode::IteratorCloseFinally => {
+                    let iter_reg = self.read_u16_pc();
+                    let iter_val = self.get_reg(iter_reg);
+                    let throw_completion = self.pending_finally_rethrow.is_some();
+                    if let Some(exc) = self.invoke_iterator_return(ctx, iter_val) {
+                        if throw_completion {
+                            self.last_caught_exception = None;
+                            ctx.pending_exception = None;
+                            self.pending_throw = None;
+                        } else {
+                            if self.pending_finally_return.is_some() {
+                                self.pending_finally_return = None;
+                            }
                             match self.dispatch_throw_value(ctx, exc) {
                                 ThrowDispatch::Caught => continue,
                                 ThrowDispatch::Uncaught(e) => return Err(e),
@@ -8875,6 +8925,7 @@ impl VM {
         iter_val: JSValue,
         send: Option<JSValue>,
         await_result: bool,
+        want_value: bool,
     ) -> Result<(), String> {
         if !iter_val.is_object() {
             self.set_reg(dst_val, JSValue::undefined());
@@ -8983,26 +9034,6 @@ impl VM {
                         if result.is_object() {
                             let value_atom = ctx.intern("value");
                             let done_atom = ctx.intern("done");
-                            let mut value = match self.get_prop_value(ctx, result, value_atom) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    self.set_reg(dst_val, JSValue::undefined());
-                                    self.set_reg(dst_done, JSValue::bool(true));
-                                    self.rethrow_last_caught(ctx);
-                                    return Err(e);
-                                }
-                            };
-                            if await_result {
-                                match self.await_settled_value(ctx, value) {
-                                    Ok(Some(v)) => value = v,
-                                    Ok(None) => {}
-                                    Err(e) => {
-                                        self.set_reg(dst_val, JSValue::undefined());
-                                        self.set_reg(dst_done, JSValue::bool(true));
-                                        return Err(e);
-                                    }
-                                }
-                            }
                             let done = match self.get_prop_value(ctx, result, done_atom) {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -9012,6 +9043,29 @@ impl VM {
                                     return Err(e);
                                 }
                             };
+                            let mut value = JSValue::undefined();
+                            if want_value && !done.is_truthy() {
+                                value = match self.get_prop_value(ctx, result, value_atom) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        self.set_reg(dst_val, JSValue::undefined());
+                                        self.set_reg(dst_done, JSValue::bool(true));
+                                        self.rethrow_last_caught(ctx);
+                                        return Err(e);
+                                    }
+                                };
+                                if await_result {
+                                    match self.await_settled_value(ctx, value) {
+                                        Ok(Some(v)) => value = v,
+                                        Ok(None) => {}
+                                        Err(e) => {
+                                            self.set_reg(dst_val, JSValue::undefined());
+                                            self.set_reg(dst_done, JSValue::bool(true));
+                                            return Err(e);
+                                        }
+                                    }
+                                }
+                            }
                             self.set_reg(dst_val, value);
                             self.set_reg(dst_done, done);
                         } else {

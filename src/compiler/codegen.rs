@@ -20,6 +20,25 @@ struct WithScope {
     inner_bindings: std::collections::HashSet<String>,
 }
 
+enum DestructuringReference {
+    Identifier {
+        name: String,
+        location: Option<VarLocation>,
+    },
+    Named {
+        object: u16,
+        atom: crate::runtime::atom::Atom,
+    },
+    Computed {
+        object: u16,
+        key: u16,
+    },
+    Private {
+        object: u16,
+        key: u16,
+    },
+}
+
 #[derive(Debug, Clone, Copy)]
 enum VarLocation {
     Local(u16),
@@ -556,6 +575,61 @@ impl CodeGenerator {
         if let Some(p) = skip_patch {
             let end = self.code.len();
             self.patch_jump(p, end);
+        }
+    }
+
+    fn begin_iterator_close_region(&mut self) -> (usize, usize) {
+        self.emit(Opcode::Try);
+        let catch_pc_pos = self.code.len();
+        self.emit_i32(0);
+        let finally_pc_pos = self.code.len();
+        self.emit_i32(0);
+        (catch_pc_pos, finally_pc_pos)
+    }
+
+    fn end_iterator_close_region(
+        &mut self,
+        catch_pc_pos: usize,
+        finally_pc_pos: usize,
+        iter_reg: u16,
+        done_reg: u16,
+        always_close: bool,
+    ) {
+        self.emit(Opcode::Catch);
+        self.emit(Opcode::Jump);
+        let normal_jump = self.code.len();
+        self.emit_i32(0);
+
+        let finally_start = self.code.len();
+        let finally_bytes = (finally_start as i32).to_le_bytes();
+        self.code[catch_pc_pos..catch_pc_pos + 4].copy_from_slice(&finally_bytes);
+        self.code[finally_pc_pos..finally_pc_pos + 4].copy_from_slice(&finally_bytes);
+
+        self.emit(Opcode::Finally);
+        self.emit(Opcode::JumpIf);
+        self.emit_u16(done_reg);
+        let close_skip = self.code.len();
+        self.emit_i32(0);
+        self.emit(Opcode::IteratorCloseFinally);
+        self.emit_u16(iter_reg);
+        let close_end = self.code.len();
+        self.patch_jump(close_skip, close_end);
+        self.emit(Opcode::EndFinally);
+
+        let normal_start = self.code.len();
+        self.patch_jump(normal_jump, normal_start);
+        if always_close {
+            self.emit(Opcode::IteratorClose);
+            self.emit_u16(iter_reg);
+        } else {
+            self.emit(Opcode::JumpIf);
+            self.emit_u16(done_reg);
+            let skip = self.code.len();
+            self.emit_i32(0);
+            self.emit(Opcode::IteratorClose);
+            self.emit_u16(iter_reg);
+            let end = self.code.len();
+            self.patch_jump(skip, end);
         }
     }
 
@@ -6823,6 +6897,129 @@ impl CodeGenerator {
         }
     }
 
+    fn gen_destructuring_reference(
+        &mut self,
+        target: &AssignmentTarget,
+        ctx: &mut JSContext,
+    ) -> Result<Option<DestructuringReference>, String> {        match target {
+            AssignmentTarget::Identifier(name) => Ok(Some(DestructuringReference::Identifier {
+                name: name.clone(),
+                location: self.resolve_var(name, ctx),
+            })),
+            AssignmentTarget::MemberExpression(member) => {
+                let object = self.gen_expression(&member.object, ctx)?;
+                match &member.property {
+                    MemberProperty::Identifier(name) => {
+                        let atom = ctx.intern(name);
+                        Ok(Some(DestructuringReference::Named { object, atom }))
+                    }
+                    MemberProperty::Computed(expr) => {
+                        let key = self.gen_expression(expr, ctx)?;
+                        Ok(Some(DestructuringReference::Computed { object, key }))
+                    }
+                    MemberProperty::PrivateIdentifier(name) => {
+                        let key_idx = self.intern_and_add_const(ctx, name);
+                        let key = self.alloc_register();
+                        self.emit(Opcode::LoadConst);
+                        self.emit_u16(key);
+                        self.emit_u32(key_idx);
+                        Ok(Some(DestructuringReference::Private { object, key }))
+                    }
+                }
+            }
+            AssignmentTarget::ComputedMember(object_expr, key_expr) => {
+                let object = self.gen_expression(object_expr, ctx)?;
+                let key = self.gen_expression(key_expr, ctx)?;
+                Ok(Some(DestructuringReference::Computed { object, key }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn gen_store_destructuring_reference(
+        &mut self,
+        reference: DestructuringReference,
+        value_reg: u16,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        match reference {
+            DestructuringReference::Identifier { name, location } => {
+                if self.binding_is_const(&name) {
+                    self.emit_throw_const_assignment(&name, ctx);
+                    return Ok(());
+                }
+                match location {
+                    Some(VarLocation::Local(slot)) => {
+                        if self.binding_needs_tdz_check(&name) {
+                            self.emit(Opcode::CheckTdz);
+                            self.emit_u16(slot);
+                        }
+                        if slot != value_reg {
+                            self.emit(Opcode::Move);
+                            self.emit_u16(slot);
+                            self.emit_u16(value_reg);
+                        }
+                        if self.is_global_var(&name) {
+                            let global_idx = self.intern_and_add_const(ctx, &name);
+                            self.emit(Opcode::SetGlobal);
+                            self.emit_u32(global_idx);
+                            self.emit_u16(slot);
+                        }
+                        Ok(())
+                    }
+                    Some(VarLocation::Upvalue(slot)) => {
+                        if self.binding_needs_tdz_check(&name) {
+                            let tmp = self.alloc_register();
+                            self.emit(Opcode::GetUpvalue);
+                            self.emit_u16(tmp);
+                            self.emit_u16(slot);
+                            self.emit(Opcode::CheckTdz);
+                            self.emit_u16(tmp);
+                            self.free_register(tmp);
+                        }
+                        self.emit(Opcode::SetUpvalue);
+                        self.emit_u16(slot);
+                        self.emit_u16(value_reg);
+                        Ok(())
+                    }
+                    None => {
+                        let global_idx = self.intern_and_add_const(ctx, &name);
+                        self.emit(Opcode::SetGlobal);
+                        self.emit_u32(global_idx);
+                        self.emit_u16(value_reg);
+                        Ok(())
+                    }
+                }
+            }
+            DestructuringReference::Named { object, atom } => {
+                self.emit(Opcode::SetNamedProp);
+                self.emit_u16(object);
+                self.emit_u16(value_reg);
+                self.emit_u32(atom.0);
+                self.free_register(object);
+                Ok(())
+            }
+            DestructuringReference::Computed { object, key } => {
+                self.emit(Opcode::SetField);
+                self.emit_u16(object);
+                self.emit_u16(key);
+                self.emit_u16(value_reg);
+                self.free_register(key);
+                self.free_register(object);
+                Ok(())
+            }
+            DestructuringReference::Private { object, key } => {
+                self.emit(Opcode::SetPrivate);
+                self.emit_u16(object);
+                self.emit_u16(key);
+                self.emit_u16(value_reg);
+                self.free_register(key);
+                self.free_register(object);
+                Ok(())
+            }
+        }
+    }
+
     fn gen_assignment_target_destructure(
         &mut self,
         target: &AssignmentTarget,
@@ -6959,76 +7156,112 @@ impl CodeGenerator {
         self.emit_u16(iter_reg);
         self.emit_u16(value_reg);
 
+        let done_reg = self.alloc_register();
+        self.emit(Opcode::LoadFalse);
+        self.emit_u16(done_reg);
+
+        let (catch_pc_pos, finally_pc_pos) = self.begin_iterator_close_region();
+
         let len = arr.elements.len();
-        let mut last_done_reg: Option<u16> = None;
-        for (i, elem) in arr.elements.iter().enumerate() {
-            if i == len - 1 {
-                if let Some(PatternElement::RestElement(rest)) = elem {
-                    let rest_reg = self.alloc_register();
-                    self.emit(Opcode::NewArray);
-                    self.emit_u16(rest_reg);
-                    self.emit_u16(0);
-                    let loop_start = self.code.len();
-                    let val_for_rest = self.alloc_register();
-                    let done_for_rest = self.alloc_register();
-                    self.emit(Opcode::IteratorNext);
-                    self.emit_u16(val_for_rest);
-                    self.emit_u16(done_for_rest);
-                    self.emit_u16(iter_reg);
-                    self.emit(Opcode::JumpIf);
-                    self.emit_u16(done_for_rest);
-                    let exit_patch = self.code.len();
-                    self.emit_i32(0);
-                    self.free_register(done_for_rest);
-                    self.emit(Opcode::ArrayPush);
-                    self.emit_u16(rest_reg);
-                    self.emit_u16(val_for_rest);
-                    self.free_register(val_for_rest);
-                    self.emit_backward_jump(loop_start);
-                    let end_pos = self.code.len();
-                    self.patch_jump(exit_patch, end_pos);
+        for elem in arr.elements.iter() {
+            if let Some(PatternElement::RestElement(rest)) = elem {
+                let reference = self.gen_destructuring_reference(&rest.argument, ctx)?;
+                let rest_reg = self.alloc_register();
+                self.emit(Opcode::NewArray);
+                self.emit_u16(rest_reg);
+                self.emit_u16(0);
+
+                let loop_start = self.code.len();
+                self.emit(Opcode::JumpIf);
+                self.emit_u16(done_reg);
+                let done_exit = self.code.len();
+                self.emit_i32(0);
+
+                let val_for_rest = self.alloc_register();
+                let done_for_rest = self.alloc_register();
+                self.emit(Opcode::LoadTrue);
+                self.emit_u16(done_reg);
+                self.emit(Opcode::IteratorNext);
+                self.emit_u16(val_for_rest);
+                self.emit_u16(done_for_rest);
+                self.emit_u16(iter_reg);
+                self.emit(Opcode::Move);
+                self.emit_u16(done_reg);
+                self.emit_u16(done_for_rest);
+                self.free_register(done_for_rest);
+
+                self.emit(Opcode::JumpIf);
+                self.emit_u16(done_reg);
+                let next_done_exit = self.code.len();
+                self.emit_i32(0);
+
+                self.emit(Opcode::ArrayPush);
+                self.emit_u16(rest_reg);
+                self.emit_u16(val_for_rest);
+                self.free_register(val_for_rest);
+                self.emit_backward_jump(loop_start);
+
+                let loop_end = self.code.len();
+                self.patch_jump(done_exit, loop_end);
+                self.patch_jump(next_done_exit, loop_end);
+
+                if let Some(reference) = reference {
+                    self.gen_store_destructuring_reference(reference, rest_reg, ctx)?;
+                } else {
                     self.gen_assignment_target_destructure(&rest.argument, rest_reg, ctx)?;
-                    self.free_register(rest_reg);
-                    self.free_register(iter_reg);
-                    return Ok(());
                 }
+                self.free_register(rest_reg);
+                break;
             }
 
             let val_reg = self.alloc_register();
-            let done_reg = self.alloc_register();
-            self.emit(Opcode::IteratorNext);
+            self.emit(Opcode::LoadUndefined);
             self.emit_u16(val_reg);
-            self.emit_u16(done_reg);
-            self.emit_u16(iter_reg);
 
-            self.emit(Opcode::JumpIfNot);
+            let reference = match elem {
+                Some(PatternElement::Pattern(target)) => {
+                    self.gen_destructuring_reference(target, ctx)?
+                }
+                Some(PatternElement::AssignmentPattern(ap)) => {
+                    self.gen_destructuring_reference(&ap.left, ctx)?
+                }
+                _ => None,
+            };
+
+            self.emit(Opcode::JumpIf);
             self.emit_u16(done_reg);
-            let not_done_skip = self.code.len();
+            let skip_next = self.code.len();
             self.emit_i32(0);
 
-            let undef_reg = self.alloc_register();
-            self.emit(Opcode::LoadUndefined);
-            self.emit_u16(undef_reg);
-            self.emit(Opcode::Move);
-            self.emit_u16(val_reg);
-            self.emit_u16(undef_reg);
-            self.free_register(undef_reg);
-
-            let after_undef = self.code.len();
-            self.patch_jump(not_done_skip, after_undef);
-            if i == len - 1 {
-                last_done_reg = Some(done_reg);
+            let step_done_reg = self.alloc_register();
+            self.emit(Opcode::LoadTrue);
+            self.emit_u16(done_reg);
+            if elem.is_none() {
+                self.emit(Opcode::IteratorStep);
+                self.emit_u16(step_done_reg);
+                self.emit_u16(iter_reg);
             } else {
-                self.free_register(done_reg);
+                self.emit(Opcode::IteratorNext);
+                self.emit_u16(val_reg);
+                self.emit_u16(step_done_reg);
+                self.emit_u16(iter_reg);
             }
+            self.emit(Opcode::Move);
+            self.emit_u16(done_reg);
+            self.emit_u16(step_done_reg);
+            self.free_register(step_done_reg);
+
+            let after_next = self.code.len();
+            self.patch_jump(skip_next, after_next);
 
             if let Some(elem) = elem {
                 match elem {
                     PatternElement::Pattern(target) => {
-                        self.gen_assignment_target_destructure(target, val_reg, ctx)?;
-                    }
-                    PatternElement::RestElement(_) => {
-                        return Err("SyntaxError: rest element not at end".to_string());
+                        if let Some(reference) = reference {
+                            self.gen_store_destructuring_reference(reference, val_reg, ctx)?;
+                        } else {
+                            self.gen_assignment_target_destructure(target, val_reg, ctx)?;
+                        }
                     }
                     PatternElement::AssignmentPattern(ap) => {
                         let binding_name = match &*ap.left {
@@ -7041,16 +7274,26 @@ impl CodeGenerator {
                             binding_name,
                             ctx,
                         )?;
-                        self.gen_assignment_target_destructure(&ap.left, val_reg, ctx)?;
+                        if let Some(reference) = reference {
+                            self.gen_store_destructuring_reference(reference, val_reg, ctx)?;
+                        } else {
+                            self.gen_assignment_target_destructure(&ap.left, val_reg, ctx)?;
+                        }
                     }
+                    PatternElement::RestElement(_) => {}
                 }
             }
             self.free_register(val_reg);
         }
-        if let Some(d) = last_done_reg {
-            self.emit_iterator_close(iter_reg, Some(d));
-            self.free_register(d);
-        }
+
+        self.end_iterator_close_region(
+            catch_pc_pos,
+            finally_pc_pos,
+            iter_reg,
+            done_reg,
+            len == 0,
+        );
+        self.free_register(done_reg);
         self.free_register(iter_reg);
         Ok(())
     }
@@ -7118,6 +7361,14 @@ impl CodeGenerator {
                             _ => return Err("Invalid property key".to_string()),
                         }
                     };
+
+                    let reference = match value {
+                        AssignmentTarget::AssignmentPattern(ap) => {
+                            self.gen_destructuring_reference(&ap.left, ctx)?
+                        }
+                        target => self.gen_destructuring_reference(target, ctx)?,
+                    };
+
                     let elem_reg = self.alloc_register();
                     self.emit(Opcode::GetProp);
                     self.emit_u16(elem_reg);
@@ -7129,10 +7380,43 @@ impl CodeGenerator {
                         self.emit_u16(key_reg);
                     }
                     self.free_register(key_reg);
-                    self.gen_assignment_target_destructure(value, elem_reg, ctx)?;
+
+                    match value {
+                        AssignmentTarget::AssignmentPattern(ap) => {
+                            let binding_name = match &*ap.left {
+                                AssignmentTarget::Identifier(name) => Some(name.as_str()),
+                                _ => None,
+                            };
+                            self.gen_default_value_assignment(
+                                &ap.right,
+                                elem_reg,
+                                binding_name,
+                                ctx,
+                            )?;
+                            if let Some(reference) = reference {
+                                self.gen_store_destructuring_reference(
+                                    reference, elem_reg, ctx,
+                                )?;
+                            } else {
+                                self.gen_assignment_target_destructure(
+                                    &ap.left, elem_reg, ctx,
+                                )?;
+                            }
+                        }
+                        target => {
+                            if let Some(reference) = reference {
+                                self.gen_store_destructuring_reference(
+                                    reference, elem_reg, ctx,
+                                )?;
+                            } else {
+                                self.gen_assignment_target_destructure(target, elem_reg, ctx)?;
+                            }
+                        }
+                    }
                     self.free_register(elem_reg);
                 }
                 ObjectPatternProperty::RestElement(rest) => {
+                    let reference = self.gen_destructuring_reference(&rest.argument, ctx)?;
                     let rest_reg = self.alloc_register();
                     self.emit(Opcode::NewObject);
                     self.emit_u16(rest_reg);
@@ -7146,7 +7430,11 @@ impl CodeGenerator {
                         self.emit_u16(rest_reg);
                         self.emit_u16(value_reg);
                     }
-                    self.gen_assignment_target_destructure(&rest.argument, rest_reg, ctx)?;
+                    if let Some(reference) = reference {
+                        self.gen_store_destructuring_reference(reference, rest_reg, ctx)?;
+                    } else {
+                        self.gen_assignment_target_destructure(&rest.argument, rest_reg, ctx)?;
+                    }
                     self.free_register(rest_reg);
                 }
             }

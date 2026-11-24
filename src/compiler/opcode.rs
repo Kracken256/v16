@@ -162,6 +162,8 @@ pub enum Opcode {
     InitGlobalVar = 198,
     IteratorNextSend = 202,
     IteratorClose = 203,
+    IteratorStep = 222,
+    IteratorCloseFinally = 223,
     GetAsyncIterator = 204,
     IteratorNextAwait = 205,
     ObjectRest = 206,
@@ -293,6 +295,8 @@ impl Opcode {
             151 => Some(Opcode::IteratorNext),
             202 => Some(Opcode::IteratorNextSend),
             203 => Some(Opcode::IteratorClose),
+            222 => Some(Opcode::IteratorStep),
+            223 => Some(Opcode::IteratorCloseFinally),
             204 => Some(Opcode::GetAsyncIterator),
             205 => Some(Opcode::IteratorNextAwait),
             206 => Some(Opcode::ObjectRest),
@@ -507,6 +511,8 @@ impl Opcode {
             Opcode::IteratorNext => 7,
             Opcode::IteratorNextSend => 9,
             Opcode::IteratorClose => 3,
+            Opcode::IteratorStep => 5,
+            Opcode::IteratorCloseFinally => 3,
             Opcode::GetAsyncIterator => 5,
             Opcode::IteratorNextAwait => 7,
             Opcode::ObjectRest => 7,
@@ -1183,6 +1189,15 @@ impl Bytecode {
                     write!(operands, " r{}, r{}, r{}, r{}", dst_val, dst_done, iter, send).unwrap();
                 }
                 Opcode::IteratorClose => {
+                    let iter = read_u16(1);
+                    write!(operands, " r{}", iter).unwrap();
+                }
+                Opcode::IteratorStep => {
+                    let dst_done = read_u16(1);
+                    let iter = read_u16(3);
+                    write!(operands, " r{}, r{}", dst_done, iter).unwrap();
+                }
+                Opcode::IteratorCloseFinally => {
                     let iter = read_u16(1);
                     write!(operands, " r{}", iter).unwrap();
                 }
