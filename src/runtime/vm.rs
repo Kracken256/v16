@@ -8198,9 +8198,41 @@ impl VM {
                             }
                             found
                         };
-                        if let Some(f) = ret_fn {
-                            if f.is_function() {
-                                self.call_function_with_this(ctx, f, iter_val, &[])?;
+                        let mut failure: Option<JSValue> = None;
+                        match ret_fn {
+                            None => {}
+                            Some(f) if f.is_undefined() || f.is_null() => {}
+                            Some(f) if f.is_function() => {
+                                match self.call_function_with_this(ctx, f, iter_val, &[]) {
+                                    Ok(result) => {
+                                        if !result.is_object_like() {
+                                            self.set_pending_type_error(
+                                                ctx,
+                                                "Iterator result is not an object",
+                                            );
+                                            failure = ctx.pending_exception.take();
+                                        }
+                                    }
+                                    Err(_) => {
+                                        let host_exc = ctx.pending_exception.take();
+                                        failure =
+                                            self.last_caught_exception.take().or(host_exc);
+                                    }
+                                }
+                            }
+                            Some(_) => {
+                                self.set_pending_type_error(
+                                    ctx,
+                                    "Iterator return is not a function",
+                                );
+                                failure = ctx.pending_exception.take();
+                            }
+                        }
+                        if let Some(exc) = failure {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
                             }
                         }
                     }
