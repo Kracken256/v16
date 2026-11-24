@@ -7480,13 +7480,14 @@ impl CodeGenerator {
                     continue;
                 }
                 let mut nested = self.nested_codegen();
-                let (method_bc, method_upvalues) = nested.compile_function_with_parent(
+                let (method_bc, method_upvalues) = nested.compile_function_with_parent_gen(
                     &m.params,
                     &m.body,
                     ctx,
                     class_parent_vars.clone(),
                     None,
                     false,
+                    m.generator,
                 )?;
                 instance_methods.push((
                     m.name.clone(),
@@ -7527,13 +7528,14 @@ impl CodeGenerator {
                 }
                 let mut nested = self.nested_codegen();
                 nested.in_static_method = true;
-                let (method_bc, method_upvalues) = nested.compile_function_with_parent(
+                let (method_bc, method_upvalues) = nested.compile_function_with_parent_gen(
                     &m.params,
                     &m.body,
                     ctx,
                     class_parent_vars.clone(),
                     None,
                     false,
+                    m.generator,
                 )?;
                 static_methods.push((
                     m.name.clone(),
