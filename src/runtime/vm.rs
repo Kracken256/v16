@@ -10420,6 +10420,30 @@ impl VM {
                 return true;
             }
 
+            if pre_offset.is_none() {
+                let mut proto = js_obj.prototype;
+                while let Some(proto_ptr) = proto {
+                    if proto_ptr.is_null() {
+                        break;
+                    }
+                    let proto_obj = unsafe { &*proto_ptr };
+                    if let Some(desc) = proto_obj.get_own_descriptor(atom) {
+                        if desc.get.is_none() && desc.set.is_none() && !desc.writable {
+                            if self.frames[self.frame_index].is_strict_frame {
+                                let msg = format!(
+                                    "Cannot assign to read only property '{}'",
+                                    ctx.get_atom_str(atom)
+                                );
+                                self.set_pending_type_error(ctx, &msg);
+                            }
+                            return false;
+                        }
+                        break;
+                    }
+                    proto = proto_obj.prototype;
+                }
+            }
+
             if pre_offset.is_none() && !js_obj.extensible() {
                 if self.frames[self.frame_index].is_strict_frame {
                     let msg = format!(
