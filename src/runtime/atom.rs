@@ -67,7 +67,7 @@ impl AtomTable {
         );
 
         if let Ok(array_idx) = s.parse::<usize>() {
-            if array_idx < 1_000_000 {
+            if array_idx < 1_000_000 && array_idx.to_string() == s {
                 self.index_atoms.insert(idx, array_idx);
             }
         }

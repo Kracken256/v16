@@ -4851,6 +4851,16 @@ impl VM {
                             } else {
                                 JSValue::undefined()
                             }
+                        } else if js_obj.is_dense_array() {
+                            if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                                let arr = unsafe {
+                                    &*(obj_val.get_ptr()
+                                        as *const crate::object::array_obj::JSArrayObject)
+                                };
+                                arr.elements.get(index).copied().unwrap_or(JSValue::undefined())
+                            } else {
+                                js_obj.get(atom).unwrap_or(JSValue::undefined())
+                            }
                         } else {
                             js_obj.get(atom).unwrap_or(JSValue::undefined())
                         }
@@ -8576,6 +8586,16 @@ impl VM {
         if let Some(v) = js_obj.get(atom) {
             return Ok(v);
         }
+        if js_obj.is_dense_array() {
+            if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                let array = unsafe {
+                    &*(obj.get_ptr() as *const crate::object::array_obj::JSArrayObject)
+                };
+                if let Some(v) = array.elements.get(index).copied() {
+                    return Ok(v);
+                }
+            }
+        }
         let mut current = js_obj.prototype;
         let mut depth = 0u32;
         while let Some(proto_ptr) = current {
@@ -9167,6 +9187,17 @@ impl VM {
         if obj_val.is_object_like() {
             let ptr = obj_val.get_ptr();
             let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
+            if js_obj.is_dense_array() {
+                if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                    let array = unsafe {
+                        &*(ptr as *const crate::object::array_obj::JSArrayObject)
+                    };
+                    if let Some(v) = array.elements.get(index).copied() {
+                        self.set_reg(dst, v);
+                        return Some(v);
+                    }
+                }
+            }
             let ic_table_ptr = if ic_pc == usize::MAX {
                 std::ptr::null_mut()
             } else {
