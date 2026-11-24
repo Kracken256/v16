@@ -8091,6 +8091,7 @@ impl CodeGenerator {
         body: &ClassBody,
         ctx: &mut JSContext,
     ) -> Result<crate::runtime::atom::Atom, String> {
+        self.reserved_slots.insert(class_slot);
         let has_super = super_class.is_some();
 
         let ctor_method = body.elements.iter().find(|e| {
