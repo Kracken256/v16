@@ -62,7 +62,52 @@ fn is_strict_reserved_word(name: &str) -> bool {
     )
 }
 
+fn is_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+    )
+}
+
 fn check_binding_identifier(name: &str, ctx: Ctx) -> Result<(), String> {
+    if is_reserved_word(name) {
+        return Err(format!("SyntaxError: '{}' is a reserved word", name));
+    }
     if ctx.in_async && name == "await" {
         return Err(
             "SyntaxError: 'await' is not allowed as a binding identifier in async functions"
@@ -93,6 +138,9 @@ fn check_binding_identifier(name: &str, ctx: Ctx) -> Result<(), String> {
 }
 
 fn check_identifier_reference(name: &str, ctx: Ctx) -> Result<(), String> {
+    if is_reserved_word(name) {
+        return Err(format!("SyntaxError: '{}' is a reserved word", name));
+    }
     if ctx.in_async && name == "await" {
         return Err(
             "SyntaxError: 'await' is not allowed as an identifier reference in async functions"
@@ -115,6 +163,9 @@ fn check_identifier_reference(name: &str, ctx: Ctx) -> Result<(), String> {
 }
 
 fn check_label_identifier(name: &str, ctx: Ctx) -> Result<(), String> {
+    if is_reserved_word(name) {
+        return Err(format!("SyntaxError: '{}' is a reserved word", name));
+    }
     if ctx.in_async && name == "await" {
         return Err(
             "SyntaxError: 'await' is not allowed as a label in async functions".to_string(),
@@ -961,6 +1012,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                         .to_string(),
                 );
             }
+            validate_update_target(&u.argument, ctx)?;
             validate_expression(&u.argument, ctx)
         }
         Expression::BinaryExpression(b) => {
@@ -1085,22 +1137,67 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
 }
 
 
+fn expression_contains_optional_chain(expr: &Expression) -> bool {
+    match expr {
+        Expression::OptionalMemberExpression(_) => true,
+        Expression::MemberExpression(m) => expression_contains_optional_chain(&m.object),
+        Expression::CallExpression(c) => expression_contains_optional_chain(&c.callee),
+        _ => false,
+    }
+}
+
+fn validate_update_target(arg: &Expression, ctx: Ctx) -> Result<(), String> {
+    match arg {
+        Expression::Identifier(name) => {
+            if ctx.strict && (name.name == "eval" || name.name == "arguments") {
+                return Err(
+                    "SyntaxError: Assignment to 'eval' or 'arguments' in strict mode".to_string(),
+                );
+            }
+            Ok(())
+        }
+        Expression::MemberExpression(m) => {
+            if expression_contains_optional_chain(&m.object) {
+                return Err(
+                    "SyntaxError: Invalid update expression: optional chain is not an assignment target"
+                        .to_string(),
+                );
+            }
+            Ok(())
+        }
+        Expression::CallExpression(_) => {
+            if ctx.strict {
+                return Err(
+                    "SyntaxError: Invalid update expression: call expression is not an assignment target"
+                        .to_string(),
+                );
+            }
+            Ok(())
+        }
+        _ => Err(
+            "SyntaxError: Invalid update expression: not a valid assignment target".to_string(),
+        ),
+    }
+}
+
 fn validate_assignment_target(t: &AssignmentTarget, ctx: Ctx) -> Result<(), String> {
-    match t {
+        match t {
+        AssignmentTarget::Identifier(name) => check_identifier_reference(name, ctx),
         AssignmentTarget::MemberExpression(m) => {
+            if expression_contains_optional_chain(&m.object) {
+                return Err(
+                    "SyntaxError: Invalid assignment target: optional chain".to_string(),
+                );
+            }
             validate_expression(&m.object, ctx)?;
             if let MemberProperty::Computed(p) = &m.property {
                 validate_expression(p, ctx)?;
             }
             Ok(())
         }
-        AssignmentTarget::OptionalMemberExpression(m) => {
-            validate_expression(&m.object, ctx)?;
-            if let MemberProperty::Computed(p) = &m.property {
-                validate_expression(p, ctx)?;
-            }
-            Ok(())
-        }
+        AssignmentTarget::OptionalMemberExpression(_) => Err(
+            "SyntaxError: Invalid assignment target: optional chain".to_string(),
+        ),
         AssignmentTarget::ComputedMember(obj, prop) => {
             validate_expression(obj, ctx)?;
             validate_expression(prop, ctx)
@@ -1109,6 +1206,25 @@ fn validate_assignment_target(t: &AssignmentTarget, ctx: Ctx) -> Result<(), Stri
             validate_assignment_target(&ap.left, ctx)?;
             validate_expression(&ap.right, ctx)
         }
+        AssignmentTarget::ObjectPattern(op) => validate_object_pattern(op, ctx),
+        AssignmentTarget::ArrayPattern(ap) => {
+            for el in &ap.elements {
+                if let Some(e) = el {
+                    match e {
+                        PatternElement::Pattern(t) => validate_assignment_target(t, ctx)?,
+                        PatternElement::RestElement(rest) => {
+                            validate_assignment_target(&rest.argument, ctx)?
+                        }
+                        PatternElement::AssignmentPattern(ap) => {
+                            validate_assignment_target(&ap.left, ctx)?;
+                            validate_expression(&ap.right, ctx)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        AssignmentTarget::RestElement(rest) => validate_assignment_target(&rest.argument, ctx),
         _ => Ok(()),
     }
 }

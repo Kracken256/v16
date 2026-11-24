@@ -365,7 +365,7 @@ impl Parser {
                     }
                     continue;
                 }
-                let (key, computed, shorthand) = self.parse_property_key()?;
+            let (key, computed, shorthand) = self.parse_property_key()?;
                 let value = if self.at_punct(":") {
                     self.advance();
                     binding_to_target(self.parse_binding_pattern()?)
@@ -2442,6 +2442,7 @@ impl Parser {
                 is_generator = true;
             }
 
+            let key_escaped = self.current.as_ref().map_or(false, |t| t.had_escape);
             let (key, computed, shorthand) = self.parse_property_key()?;
 
             if self.at_punct("(") && !shorthand {
@@ -2470,7 +2471,7 @@ impl Parser {
                 continue;
             }
 
-            if !computed {
+            if !computed && !key_escaped {
                 let accessor = match &key {
                     PropertyKey::Identifier(name) if name == "get" || name == "set" => {
                         Some(name.clone())

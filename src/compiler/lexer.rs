@@ -28,6 +28,7 @@ pub struct Token {
     pub line: u32,
     pub column: u32,
     pub line_terminator_before: bool,
+    pub had_escape: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +158,8 @@ impl Lexer {
                 value,
                 line: self.line,
                 column: self.column,
-            line_terminator_before: false,
+                line_terminator_before: false,
+                had_escape: false,
             });
         }
 
@@ -350,10 +352,7 @@ impl Lexer {
 
         if self.source[self.pos] == '0'
             && self.pos + 1 < self.source.len()
-            && matches!(
-                self.source[self.pos + 1],
-                'x' | 'X' | 'o' | 'O' | 'b' | 'B'
-            )
+            && matches!(self.source[self.pos + 1], 'x' | 'X' | 'o' | 'O' | 'b' | 'B')
         {
             let radix = self.source[self.pos + 1];
             self.advance();
@@ -386,7 +385,8 @@ impl Lexer {
                 value,
                 line: self.line,
                 column: self.column,
-            line_terminator_before: false,
+                line_terminator_before: false,
+                had_escape: false,
             };
         }
 
@@ -467,6 +467,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape: false,
         }
     }
 
@@ -656,6 +657,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape: false,
         }
     }
 
@@ -678,12 +680,14 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape: false,
         }
     }
 
     fn read_identifier(&mut self) -> Token {
         let start = self.pos;
         let mut value = String::new();
+        let mut had_escape = false;
         while self.pos < self.source.len() {
             let c = self.source[self.pos];
             if Self::is_identifier_part(c) {
@@ -692,6 +696,7 @@ impl Lexer {
             } else if c == '\\' {
                 if let Some(ch) = self.read_identifier_escape() {
                     value.push(ch);
+                    had_escape = true;
                 } else {
                     break;
                 }
@@ -702,7 +707,7 @@ impl Lexer {
         if value.is_empty() {
             value = self.source[start..self.pos].iter().collect();
         }
-        let token_type = if Self::is_keyword(&value) {
+        let token_type = if !had_escape && Self::is_keyword(&value) {
             TokenType::Keyword
         } else {
             TokenType::Identifier
@@ -713,6 +718,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape,
         }
     }
 
@@ -782,6 +788,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape: false,
         }
     }
 
@@ -802,7 +809,8 @@ impl Lexer {
                     value: String::new(),
                     line: self.line,
                     column: self.column,
-            line_terminator_before: false,
+                    line_terminator_before: false,
+                    had_escape: false,
                 });
             }
 
@@ -817,10 +825,7 @@ impl Lexer {
                         self.advance();
                         break;
                     }
-                    if matches!(
-                        self.source[self.pos],
-                        '\n' | '\r' | '\u{2028}' | '\u{2029}'
-                    ) {
+                    if matches!(self.source[self.pos], '\n' | '\r' | '\u{2028}' | '\u{2029}') {
                         self.pending_line_terminator = true;
                     }
                     self.advance();
@@ -830,7 +835,8 @@ impl Lexer {
                     value: String::new(),
                     line: self.line,
                     column: self.column,
-            line_terminator_before: false,
+                    line_terminator_before: false,
+                    had_escape: false,
                 });
             }
 
@@ -845,6 +851,7 @@ impl Lexer {
                         line: self.line,
                         column: self.column,
                         line_terminator_before: false,
+                        had_escape: false,
                     };
                 }
 
@@ -854,7 +861,8 @@ impl Lexer {
                     value: "/".to_string(),
                     line: self.line,
                     column: self.column,
-            line_terminator_before: false,
+                    line_terminator_before: false,
+                    had_escape: false,
                 };
             }
 
@@ -909,7 +917,8 @@ impl Lexer {
                 value: format!("{}/{}", pattern, flags),
                 line: self.line,
                 column: self.column,
-            line_terminator_before: false,
+                line_terminator_before: false,
+                had_escape: false,
             };
         }
         self.last_token_kind = LastTokenKind::RegexPrefix;
@@ -919,6 +928,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape: false,
         }
     }
 
@@ -1095,6 +1105,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape: false,
         }
     }
 
@@ -1382,6 +1393,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            had_escape: false,
         })
     }
 
