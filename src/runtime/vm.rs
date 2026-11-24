@@ -156,6 +156,8 @@ pub struct VM {
 
     pub pending_function_ptr: Option<usize>,
 
+    pub pending_this: Option<JSValue>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -202,6 +204,7 @@ impl VM {
             last_uncaught: None,
             pending_saved_args: None,
             pending_function_ptr: None,
+            pending_this: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -2025,8 +2028,7 @@ impl VM {
                 for (i, arg) in args.iter().enumerate() {
                     snapshot[i + 1] = *arg;
                 }
-                let has_params = (args.len() as u32) < rb.param_count as u32;
-                let (result_snapshot, result_pc, result_done, result_send_reg) = if has_params {
+                let (result_snapshot, result_pc, result_done, result_send_reg) = {
                     let mut generator_vm = crate::runtime::vm::VM::new();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
                     let step = generator_vm.execute_generator_step(
@@ -2054,8 +2056,6 @@ impl VM {
                             (snapshot, 0, false, None)
                         }
                     }
-                } else {
-                    (snapshot, 0, false, None)
                 };
                 let mut gen_obj = crate::object::object::JSObject::new();
                 gen_obj.set_is_generator(true);
@@ -2480,16 +2480,18 @@ impl VM {
                 self.registers.resize(needed, JSValue::undefined());
             }
             let global_val = ctx.global();
+            let pending_this = self.pending_this.take();
+            let frame_this = pending_this.unwrap_or(global_val);
             if !preserve_registers {
                 for i in 0..needed {
                     self.registers[i] = if i == 0 {
-                        global_val
+                        frame_this
                     } else {
                         JSValue::undefined()
                     };
                 }
             } else {
-                self.registers[0] = global_val;
+                self.registers[0] = frame_this;
             }
 
             let saved_args = self.pending_saved_args.take();
@@ -2503,7 +2505,7 @@ impl VM {
             frame.constants_len = bytecode.effective_const_len();
             frame.return_pc = 0;
             frame.function_ptr = self.pending_function_ptr.take();
-            frame.this_value = global_val;
+            frame.this_value = frame_this;
             frame.saved_args.clear();
             if let Some(args) = saved_args {
                 frame.saved_args = args;
@@ -7725,6 +7727,7 @@ impl VM {
 
         self.pending_saved_args = Some(saved_args.to_vec());
         self.pending_function_ptr = func_ptr;
+        self.pending_this = registers_snapshot.first().copied();
 
         let needed = bytecode.locals_count as usize;
         if needed > self.registers.len() {
