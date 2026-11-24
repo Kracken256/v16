@@ -9,6 +9,7 @@ test262.tar.bz2
 /*.log
 /*.json
 /*.md
+!/AGENTS.md
 /*.js
 perf.data*
 .boa_history
