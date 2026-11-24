@@ -427,6 +427,14 @@ fn run_test_mode(
 }
 
 fn main() {
+    let child = std::thread::Builder::new()
+        .stack_size(1024 * 1024 * 1024)
+        .spawn(runner_main)
+        .expect("failed to spawn runner thread");
+    child.join().expect("runner thread panicked");
+}
+
+fn runner_main() {
     let args: Vec<String> = std::env::args().collect();
     let trace_tests = std::env::var("PIPA_T262_TRACE")
         .ok()

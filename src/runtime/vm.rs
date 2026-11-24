@@ -8,6 +8,10 @@ use crate::value::JSValue;
 const GC_CHECK_INTERVAL: u64 = 16384;
 const INTERRUPT_POLL_EVERY_MASK: usize = 0xFFF;
 
+thread_local! {
+    static RUST_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 const PRIM_STRING_SHAPE_ID: usize = usize::MAX - 10;
 const PRIM_NUMBER_SHAPE_ID: usize = usize::MAX - 11;
 
@@ -2334,6 +2338,43 @@ impl VM {
     }
 
     fn execute_inner(
+        &mut self,
+        ctx: &mut JSContext,
+        bytecode: &Bytecode,
+        preserve_registers: bool,
+        start_pc: usize,
+        setup_frame: bool,
+    ) -> Result<ExecutionOutcome, String> {
+        let depth = RUST_CALL_DEPTH.with(|d| {
+            let v = d.get() + 1;
+            d.set(v);
+            v
+        });
+        if depth > 2000 {
+            RUST_CALL_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+            let mut err = crate::object::object::JSObject::new();
+            err.set(
+                ctx.intern("name"),
+                JSValue::new_string(ctx.intern("RangeError")),
+            );
+            err.set(
+                ctx.intern("message"),
+                JSValue::new_string(ctx.intern("Maximum call stack size exceeded")),
+            );
+            if let Some(proto) = ctx.get_range_error_prototype() {
+                err.prototype = Some(proto);
+            }
+            let ptr = Box::into_raw(Box::new(err)) as usize;
+            ctx.runtime_mut().gc_heap_mut().track(ptr);
+            self.pending_throw = Some(JSValue::new_object(ptr));
+            return Err("RangeError: Maximum call stack size exceeded".to_string());
+        }
+        let result = self.execute_inner_impl(ctx, bytecode, preserve_registers, start_pc, setup_frame);
+        RUST_CALL_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        result
+    }
+
+    fn execute_inner_impl(
         &mut self,
         ctx: &mut JSContext,
         bytecode: &Bytecode,
