@@ -139,6 +139,8 @@ pub enum Opcode {
     DefinePrivateAccessor = 191,
 
     SetMethodProp = 192,
+    DefineClassPrototype = 208,
+    DefineClassAccessor = 209,
 
     Pos = 193,
     DefineGlobal = 194,
@@ -307,6 +309,8 @@ impl Opcode {
             190 => Some(Opcode::DefineAccessor),
             191 => Some(Opcode::DefinePrivateAccessor),
             192 => Some(Opcode::SetMethodProp),
+            208 => Some(Opcode::DefineClassPrototype),
+            209 => Some(Opcode::DefineClassAccessor),
             193 => Some(Opcode::Pos),
             194 => Some(Opcode::DefineGlobal),
             195 => Some(Opcode::DeleteGlobal),
@@ -441,6 +445,8 @@ impl Opcode {
             Opcode::DefineAccessor => 9,
             Opcode::DefinePrivateAccessor => 9,
             Opcode::SetMethodProp => 7,
+            Opcode::DefineClassPrototype => 5,
+            Opcode::DefineClassAccessor => 9,
             Opcode::Pos => 5,
             Opcode::DefineGlobal => 7,
             Opcode::DeleteGlobal => 7,
@@ -515,6 +521,7 @@ pub struct NestedBytecode {
     pub param_count: u16,
     pub uses_arguments: bool,
     pub is_strict: bool,
+    pub function_kind: u8,
     pub var_name_to_slot: std::rc::Rc<Vec<(u32, u16)>>,
     pub line_number_table: Option<std::sync::Arc<crate::compiler::location::LineNumberTable>>,
 
@@ -1006,6 +1013,18 @@ impl Bytecode {
                     let key = read_u16(3);
                     let val = read_u16(5);
                     write!(operands, " r{}, r{}, r{}", obj, key, val).unwrap();
+                }
+                Opcode::DefineClassPrototype => {
+                    let ctor = read_u16(1);
+                    let proto = read_u16(3);
+                    write!(operands, " r{}, r{}", ctor, proto).unwrap();
+                }
+                Opcode::DefineClassAccessor => {
+                    let obj = read_u16(1);
+                    let key = read_u16(3);
+                    let getter = read_u16(5);
+                    let setter = read_u16(7);
+                    write!(operands, " r{}, r{}, r{}, r{}", obj, key, getter, setter).unwrap();
                 }
                 Opcode::Pos => {
                     let dst = read_u16(1);

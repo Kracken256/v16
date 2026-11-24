@@ -649,6 +649,7 @@ impl CodeGenerator {
         dst: u16,
         is_generator: bool,
         is_async: bool,
+        function_kind: u8,
     ) {
         if is_generator && is_async {
             self.emit(Opcode::NewAsyncGeneratorFunction);
@@ -662,6 +663,7 @@ impl CodeGenerator {
         self.emit_u16(bytecode.param_count);
         self.emit_u8(if bytecode.uses_arguments { 1 } else { 0 });
         self.emit_u8(if bytecode.is_strict { 1 } else { 0 });
+        self.emit_u8(function_kind);
         let locals_bytes = (bytecode.locals_count as u16).to_le_bytes();
         self.code.extend_from_slice(&locals_bytes);
         self.emit_u32(bytecode.code.len() as u32);
@@ -1662,6 +1664,7 @@ impl CodeGenerator {
                         func.generator,
                         func.is_async,
                         false,
+                        false,
                     )?;
                     if slot != reg {
                         self.emit(Opcode::Move);
@@ -2158,6 +2161,7 @@ impl CodeGenerator {
                     ctx,
                     func.generator,
                     func.is_async,
+                    false,
                     false,
                 )?;
                 if slot != reg {
@@ -4414,6 +4418,7 @@ impl CodeGenerator {
                 func.generator,
                 func.is_async,
                 false,
+                false,
             ),
             Expression::ArrowFunction(arrow) => {
                 let body = match &arrow.body {
@@ -4433,6 +4438,7 @@ impl CodeGenerator {
                     false,
                     arrow.is_async,
                     true,
+                    false,
                 )
             }
             Expression::ClassExpression(ce) => {
@@ -4852,6 +4858,7 @@ impl CodeGenerator {
                 func.generator,
                 func.is_async,
                 false,
+                false,
             ),
             Expression::ArrowFunction(arrow) => {
                 let body = match &arrow.body {
@@ -4871,6 +4878,7 @@ impl CodeGenerator {
                     false,
                     arrow.is_async,
                     true,
+                    false,
                 )
             }
             Expression::This => Ok(0),
@@ -7146,6 +7154,29 @@ impl CodeGenerator {
         Ok(dst)
     }
 
+    fn gen_property_function_value(
+        &mut self,
+        value: &Expression,
+        is_method: bool,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        if is_method {
+            if let Expression::FunctionExpression(func) = value {
+                return self.gen_function_expression(
+                    &func.params,
+                    &func.body,
+                    func.name.as_deref(),
+                    ctx,
+                    func.generator,
+                    func.is_async,
+                    false,
+                    true,
+                );
+            }
+        }
+        self.gen_expression(value, ctx)
+    }
+
     fn gen_object_expression(
         &mut self,
         obj: &ObjectExpression,
@@ -7161,6 +7192,7 @@ impl CodeGenerator {
                     key,
                     value,
                     shorthand,
+                    method,
                     getter,
                     setter,
                     ..
@@ -7171,7 +7203,7 @@ impl CodeGenerator {
                         );
                     }
                     if *getter || *setter {
-                        let func_reg = self.gen_expression(value, ctx)?;
+                        let func_reg = self.gen_property_function_value(value, *method, ctx)?;
                         let key_reg = match key {
                             PropertyKey::Identifier(name)
                             | PropertyKey::Literal(Literal::String(name, _)) => {
@@ -7203,7 +7235,7 @@ impl CodeGenerator {
                     match key {
                         PropertyKey::Identifier(name)
                         | PropertyKey::Literal(Literal::String(name, _)) => {
-                            let val = self.gen_expression(value, ctx)?;
+                            let val = self.gen_property_function_value(value, *method, ctx)?;
                             let atom = ctx.intern(name);
                             self.emit(Opcode::SetNamedProp);
                             self.emit_u16(dst);
@@ -7232,7 +7264,7 @@ impl CodeGenerator {
                                 PropertyKey::Computed(expr) => self.gen_expression(expr, ctx)?,
                                 _ => self.alloc_register(),
                             };
-                            let val = self.gen_expression(value, ctx)?;
+                            let val = self.gen_property_function_value(value, *method, ctx)?;
                             self.emit(Opcode::SetField);
                             self.emit_u16(dst);
                             self.emit_u16(key_reg);
@@ -7263,9 +7295,12 @@ impl CodeGenerator {
         is_generator: bool,
         is_async: bool,
         is_arrow: bool,
+        is_method: bool,
     ) -> Result<u16, String> {
         let mut nested_codegen = self.nested_codegen();
         nested_codegen.is_arrow = is_arrow;
+        let has_prototype = is_generator || (!is_arrow && !is_method && !is_async);
+        let function_kind = if has_prototype { 1 } else { 0 };
         let mut parent_vars: FxHashMap<String, ParentVar> = FxHashMap::default();
         for (scope_idx, scope) in self.scope_stack.iter().enumerate() {
             if self
@@ -7344,6 +7379,7 @@ impl CodeGenerator {
             dst,
             is_generator,
             is_async,
+            function_kind,
         );
         Ok(dst)
     }
@@ -7664,6 +7700,7 @@ impl CodeGenerator {
             ctor_reg,
             false,
             false,
+            3,
         );
 
         if let Some(super_expr) = super_class {
@@ -7766,6 +7803,7 @@ impl CodeGenerator {
                 method_reg,
                 is_gen,
                 is_async,
+                if is_gen { 1 } else { 0 },
             );
             match kind {
                 MethodKind::Get if is_private => {
@@ -7783,14 +7821,14 @@ impl CodeGenerator {
                     self.emit_u16(method_reg);
                 }
                 MethodKind::Get => {
-                    self.emit(Opcode::DefineAccessor);
+                    self.emit(Opcode::DefineClassAccessor);
                     self.emit_u16(proto_reg);
                     self.emit_u16(key);
                     self.emit_u16(method_reg);
                     self.emit_u16(u16::MAX);
                 }
                 MethodKind::Set => {
-                    self.emit(Opcode::DefineAccessor);
+                    self.emit(Opcode::DefineClassAccessor);
                     self.emit_u16(proto_reg);
                     self.emit_u16(key);
                     self.emit_u16(u16::MAX);
@@ -7869,6 +7907,7 @@ impl CodeGenerator {
                 method_reg,
                 is_gen,
                 is_async,
+                if is_gen { 1 } else { 0 },
             );
             match kind {
                 MethodKind::Get if is_private => {
@@ -7886,14 +7925,14 @@ impl CodeGenerator {
                     self.emit_u16(method_reg);
                 }
                 MethodKind::Get => {
-                    self.emit(Opcode::DefineAccessor);
+                    self.emit(Opcode::DefineClassAccessor);
                     self.emit_u16(class_slot);
                     self.emit_u16(key);
                     self.emit_u16(method_reg);
                     self.emit_u16(u16::MAX);
                 }
                 MethodKind::Set => {
-                    self.emit(Opcode::DefineAccessor);
+                    self.emit(Opcode::DefineClassAccessor);
                     self.emit_u16(class_slot);
                     self.emit_u16(key);
                     self.emit_u16(u16::MAX);
@@ -7922,9 +7961,8 @@ impl CodeGenerator {
         self.emit(Opcode::LoadConst);
         self.emit_u16(proto_key);
         self.emit_u32(proto_key_idx);
-        self.emit(Opcode::SetProp);
+        self.emit(Opcode::DefineClassPrototype);
         self.emit_u16(class_slot);
-        self.emit_u16(proto_key);
         self.emit_u16(proto_reg);
         self.free_register(proto_key);
         self.free_register(proto_reg);
@@ -7981,7 +8019,15 @@ impl CodeGenerator {
 
         for (block_bc, block_upvalues) in static_blocks {
             let block_reg = self.alloc_register();
-            self.emit_embedded_function(&block_bc, &block_upvalues, 0, block_reg, false, false);
+            self.emit_embedded_function(
+                &block_bc,
+                &block_upvalues,
+                0,
+                block_reg,
+                false,
+                false,
+                0,
+            );
             self.emit(Opcode::Call);
             self.emit_u16(block_reg);
             self.emit_u16(block_reg);

@@ -6445,7 +6445,8 @@ impl VM {
                     self.set_reg(dst, self.frames[self.frame_index].super_ctor);
                 }
 
-                Opcode::DefineAccessor => {
+                Opcode::DefineAccessor | Opcode::DefineClassAccessor => {
+                    let class_accessor = op == Opcode::DefineClassAccessor;
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
                     let getter_reg = self.read_u16_pc();
@@ -6455,6 +6456,10 @@ impl VM {
                     if obj_val.is_object_like() {
                         let prop_key = if key_val.is_string() {
                             key_val
+                        } else if key_val.is_symbol() {
+                            JSValue::new_string(crate::runtime::atom::Atom(
+                                0x40000000 | key_val.get_symbol_id(),
+                            ))
                         } else {
                             let prim = self.ordinary_to_primitive(&key_val, "string", ctx);
                             if self.pending_throw.is_some() {
@@ -6495,7 +6500,13 @@ impl VM {
                             let existing = obj.get_own_accessor_entry(atom);
                             let final_getter = getter.or_else(|| existing.and_then(|e| e.get));
                             let final_setter = setter.or_else(|| existing.and_then(|e| e.set));
-                            obj.define_accessor(atom, final_getter, final_setter);
+                            if class_accessor {
+                                obj.define_accessor_flags(
+                                    atom, final_getter, final_setter, false, true,
+                                );
+                            } else {
+                                obj.define_accessor(atom, final_getter, final_setter);
+                            }
                         } else if self.pending_throw.is_none() {
                             self.set_pending_type_error(ctx, "Invalid property key");
                         }
@@ -6526,6 +6537,43 @@ impl VM {
                     }
                 }
 
+                Opcode::DefineClassPrototype => {
+                    let ctor_reg = self.read_u16_pc();
+                    let proto_reg = self.read_u16_pc();
+                    let ctor_val = self.get_reg(ctor_reg);
+                    let proto_val = self.get_reg(proto_reg);
+                    if ctor_val.is_object_like() && proto_val.is_object_like() {
+                        let ctor_obj =
+                            unsafe { JSValue::object_from_ptr_mut(ctor_val.get_ptr()) };
+                        let proto_obj =
+                            unsafe { JSValue::object_from_ptr_mut(proto_val.get_ptr()) };
+                        let proto_desc = crate::object::object::PropertyDescriptor {
+                            value: Some(proto_val),
+                            writable: false,
+                            enumerable: false,
+                            configurable: false,
+                            get: None,
+                            set: None,
+                        };
+                        ctor_obj.define_property(ctx.common_atoms.prototype, proto_desc);
+                        let ctor_desc = crate::object::object::PropertyDescriptor {
+                            value: Some(ctor_val),
+                            writable: true,
+                            enumerable: false,
+                            configurable: true,
+                            get: None,
+                            set: None,
+                        };
+                        proto_obj.define_property(ctx.common_atoms.constructor, ctor_desc);
+                        let func = unsafe {
+                            &mut *(ctor_val.get_ptr()
+                                as *mut crate::object::function::JSFunction)
+                        };
+                        func.cached_prototype_ptr =
+                            proto_val.get_ptr() as *mut crate::object::object::JSObject;
+                    }
+                }
+
                 Opcode::SetMethodProp => {
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
@@ -6545,7 +6593,15 @@ impl VM {
                         } else {
                             self.int_atom(key_val.get_int() as usize, ctx)
                         };
-                        js_obj.set_cached_non_enumerable(atom, value, ctx.shape_cache_mut());
+                        let desc = crate::object::object::PropertyDescriptor {
+                            value: Some(value),
+                            writable: true,
+                            enumerable: false,
+                            configurable: true,
+                            get: None,
+                            set: None,
+                        };
+                        js_obj.define_property(atom, desc);
                     }
                     self.set_reg(obj_reg, obj_val);
                 }
@@ -7114,6 +7170,7 @@ impl VM {
                         param_count,
                         uses_arguments,
                         is_strict,
+                        function_kind,
                         func_var_name_to_slot,
                         upvalue_descs,
                         line_number_table_opt,
@@ -7129,6 +7186,7 @@ impl VM {
                             nb.param_count,
                             nb.uses_arguments,
                             nb.is_strict,
+                            nb.function_kind,
                             nb.var_name_to_slot.clone(),
                             uvdescs,
                             nb.line_number_table.clone(),
@@ -7138,6 +7196,7 @@ impl VM {
                         let param_count = self.read_u16_pc();
                         let uses_arguments = self.read_u8() != 0;
                         let is_strict = self.read_u8() != 0;
+                        let function_kind = self.read_u8();
                         let locals_count = self.read_u16_pc() as u32;
                         let bytecode_len = self.read_u32();
                         let mut fb_code = Vec::with_capacity(bytecode_len as usize);
@@ -7257,6 +7316,7 @@ impl VM {
                                             param_count,
                                             uses_arguments,
                                             is_strict,
+                                            function_kind,
                                             var_name_to_slot: func_var_name_to_slot.clone(),
                                             line_number_table: line_number_table_opt.clone(),
                                             parent_bytecode_span,
@@ -7293,6 +7353,7 @@ impl VM {
                             param_count,
                             uses_arguments,
                             is_strict,
+                            function_kind,
                             func_var_name_to_slot,
                             upvalue_descs,
                             line_number_table_opt,
@@ -7428,11 +7489,22 @@ impl VM {
                         func.upvalues_mut().upvalue_cells.insert(atom, cell);
                     }
 
-                    if func_name_atom != 0 {
-                        let name_atom = crate::runtime::atom::Atom(func_name_atom);
-                        func.name = name_atom;
-                        let name_str = JSValue::new_string(name_atom);
-                        func.base.set(ctx.common_atoms.name, name_str);
+                    let display_name = if func_name_atom != 0 {
+                        crate::runtime::atom::Atom(func_name_atom)
+                    } else {
+                        ctx.intern("")
+                    };
+                    func.name = display_name;
+                    {
+                        let name_desc = crate::object::object::PropertyDescriptor {
+                            value: Some(JSValue::new_string(display_name)),
+                            writable: false,
+                            enumerable: false,
+                            configurable: true,
+                            get: None,
+                            set: None,
+                        };
+                        func.base.define_property(ctx.common_atoms.name, name_desc);
                     }
 
                     {
@@ -7447,17 +7519,16 @@ impl VM {
                         func.base.define_property(ctx.common_atoms.length, length_desc);
                     }
 
-                    let is_closure = !upvalue_descs.is_empty();
+                    let has_prototype = function_kind & 1 != 0;
+                    let is_class_constructor = function_kind & 2 != 0;
 
                     let proto_atom = ctx.common_atoms.prototype;
                     let func_ptr = Box::into_raw(Box::new(func)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track_function(func_ptr);
                     let unboxed_func =
                         unsafe { &mut *(func_ptr as *mut crate::object::function::JSFunction) };
-                    if !is_closure {
+                    if has_prototype && !is_class_constructor {
                         let mut proto_obj = crate::object::object::JSObject::new();
-                        // Per spec, the prototype property of a function is
-                        // a new object with Object.prototype as its prototype.
                         if let Some(obj_pp) = ctx.get_object_prototype() {
                             proto_obj.prototype = Some(obj_pp);
                         }
@@ -7467,11 +7538,25 @@ impl VM {
                         unsafe {
                             let proto_obj_mut =
                                 &mut *(proto_ptr as *mut crate::object::object::JSObject);
-                            proto_obj_mut.set(ctx.common_atoms.constructor, func_value);
+                            let ctor_desc = crate::object::object::PropertyDescriptor {
+                                value: Some(func_value),
+                                writable: true,
+                                enumerable: false,
+                                configurable: true,
+                                get: None,
+                                set: None,
+                            };
+                            proto_obj_mut.define_property(ctx.common_atoms.constructor, ctor_desc);
                         }
-                        unboxed_func
-                            .base
-                            .set(proto_atom, JSValue::new_object(proto_ptr));
+                        let proto_desc = crate::object::object::PropertyDescriptor {
+                            value: Some(JSValue::new_object(proto_ptr)),
+                            writable: true,
+                            enumerable: false,
+                            configurable: false,
+                            get: None,
+                            set: None,
+                        };
+                        unboxed_func.base.define_property(proto_atom, proto_desc);
                         unboxed_func.cached_prototype_ptr =
                             proto_ptr as *mut crate::object::object::JSObject;
                     }
