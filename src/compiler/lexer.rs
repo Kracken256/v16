@@ -638,13 +638,42 @@ impl Lexer {
                             h4.to_digit(16),
                         ) {
                             let code = (a << 12) | (b << 8) | (c << 4) | d;
-                            if let Some(decoded) = char::from_u32(code) {
-                                value.push(decoded);
+                            self.advance();
+                            self.advance();
+                            self.advance();
+                            self.advance();
+                            let mut combined_pair = false;
+                            if (0xD800..=0xDBFF).contains(&code) && self.pos + 6 < self.source.len()
+                            {
+                                if self.source[self.pos + 1] == '\\'
+                                    && self.source[self.pos + 2] == 'u'
+                                {
+                                    if let (Some(a2), Some(b2), Some(c2), Some(d2)) = (
+                                        self.source[self.pos + 3].to_digit(16),
+                                        self.source[self.pos + 4].to_digit(16),
+                                        self.source[self.pos + 5].to_digit(16),
+                                        self.source[self.pos + 6].to_digit(16),
+                                    ) {
+                                        let low = (a2 << 12) | (b2 << 8) | (c2 << 4) | d2;
+                                        if (0xDC00..=0xDFFF).contains(&low) {
+                                            let cp =
+                                                0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                                            if let Some(ch) = char::from_u32(cp) {
+                                                value.push(ch);
+                                            }
+                                            for _ in 0..6 {
+                                                self.advance();
+                                            }
+                                            combined_pair = true;
+                                        }
+                                    }
+                                }
                             }
-                            self.advance();
-                            self.advance();
-                            self.advance();
-                            self.advance();
+                            if !combined_pair {
+                                if let Some(decoded) = char::from_u32(code) {
+                                    value.push(decoded);
+                                }
+                            }
                         } else {
                             value.push('u');
                         }
@@ -1284,13 +1313,44 @@ impl Lexer {
                                 h4.to_digit(16),
                             ) {
                                 let code = (a << 12) | (b << 8) | (c << 4) | d;
-                                if let Some(decoded) = char::from_u32(code) {
-                                    value.push(decoded);
+                                self.advance();
+                                self.advance();
+                                self.advance();
+                                self.advance();
+                                let mut combined_pair = false;
+                                if (0xD800..=0xDBFF).contains(&code)
+                                    && self.pos + 6 < self.source.len()
+                                {
+                                    if self.source[self.pos + 1] == '\\'
+                                        && self.source[self.pos + 2] == 'u'
+                                    {
+                                        if let (Some(a2), Some(b2), Some(c2), Some(d2)) = (
+                                            self.source[self.pos + 3].to_digit(16),
+                                            self.source[self.pos + 4].to_digit(16),
+                                            self.source[self.pos + 5].to_digit(16),
+                                            self.source[self.pos + 6].to_digit(16),
+                                        ) {
+                                            let low = (a2 << 12) | (b2 << 8) | (c2 << 4) | d2;
+                                            if (0xDC00..=0xDFFF).contains(&low) {
+                                                let cp = 0x10000
+                                                    + ((code - 0xD800) << 10)
+                                                    + (low - 0xDC00);
+                                                if let Some(ch) = char::from_u32(cp) {
+                                                    value.push(ch);
+                                                }
+                                                for _ in 0..6 {
+                                                    self.advance();
+                                                }
+                                                combined_pair = true;
+                                            }
+                                        }
+                                    }
                                 }
-                                self.advance();
-                                self.advance();
-                                self.advance();
-                                self.advance();
+                                if !combined_pair {
+                                    if let Some(decoded) = char::from_u32(code) {
+                                        value.push(decoded);
+                                    }
+                                }
                             } else {
                                 value.push('u');
                             }
