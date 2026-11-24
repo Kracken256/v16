@@ -1133,87 +1133,11 @@ impl VM {
                     };
 
                     let saved_frame_index = self.frame_index;
-
-                    let snapshot_this = if !js_func.is_strict()
-                        && (this_val.is_undefined() || this_val.is_null())
-                    {
-                        ctx.global()
-                    } else {
-                        this_val
-                    };
-                    let min_slots = 1 + args.len();
-                    let snapshot_len = (rb.locals_count as usize).max(min_slots);
-                    let mut snapshot = vec![JSValue::undefined(); snapshot_len];
-                    snapshot[0] = snapshot_this;
-                    for (i, arg) in args.iter().enumerate() {
-                        snapshot[i + 1] = *arg;
-                    }
-
-                    // The parameter prologue always runs when the generator is
-                    // invoked; an initial `Yield` emitted by the compiler stops
-                    // execution before the body starts.  The step must run on an
-                    // isolated VM so it cannot clobber the caller's frame,
-                    // registers or program counter.
-                    let (result_snapshot, result_pc, result_done, result_send_reg) = {
-                        let mut generator_vm = crate::runtime::vm::VM::new();
-                        ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
-                        let step = generator_vm.execute_generator_step(
-                            ctx,
-                            rb,
-                            &snapshot,
-                            0,
-                            JSValue::undefined(),
-                            None,
-                            args,
-                            Some(func_val.get_ptr()),
-                        );
-                        let uncaught = generator_vm.last_uncaught.take();
-                        ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
-                        drop(generator_vm);
-                        match step {
-                            Ok((_val, new_snapshot, new_pc, done, src)) => {
-                                (new_snapshot, new_pc, done, src)
-                            }
-                            Err(e) => {
-                                if let Some(exc) = uncaught {
-                                    self.last_caught_exception = Some(exc.clone());
-                                    self.pending_throw = Some(exc);
-                                    return Ok(false);
-                                }
-                                if e.contains("SyntaxError") || e.contains("Uncaught") {
-                                    return Err(e);
-                                }
-                                (snapshot, 0, false, None)
-                            }
-                        }
-                    };
-
-                    let mut gen_obj = crate::object::object::JSObject::new();
-                    gen_obj.set_is_generator(true);
-                    let async_gen_proto = if js_func.is_async() {
-                        ctx.get_async_generator_prototype()
-                    } else {
-                        ctx.get_generator_prototype()
-                    };
-                    if let Some(proto_ptr) = async_gen_proto {
-                        gen_obj.prototype = Some(proto_ptr);
-                    }
-                    gen_obj.set_generator_state(crate::object::object::GeneratorState {
-                        bytecode: Box::new(rb.clone()),
-                        snapshot: result_snapshot,
-                        pc: result_pc,
-                        done: result_done,
-                        send_reg: result_send_reg,
-                        argc: args.len() as u32,
-                        saved_args: args.to_vec(),
-                        func_ptr: Some(func_val.get_ptr()),
-                    });
-                    let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
-                    ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
-                    self.set_reg(dst, JSValue::new_object(gen_ptr));
-
+                    let generator = self.instantiate_generator_object(ctx, rb, func_val, this_val, args)?;
                     self.frame_index = saved_frame_index;
-
+                    if let Some(gen_val) = generator {
+                        self.set_reg(dst, gen_val);
+                    }
                     return Ok(false);
                 }
 
@@ -6999,41 +6923,20 @@ impl VM {
                         let js_func = func_val.as_function();
                         if let Some(ref rb) = js_func.bytecode {
                             if js_func.is_generator() {
-                                let mut snapshot =
-                                    vec![JSValue::undefined(); rb.locals_count as usize];
-                                if !snapshot.is_empty() {
-                                    snapshot[0] = this_val;
-                                    for (i, arg) in args.iter().enumerate() {
-                                        if i + 1 < snapshot.len() {
-                                            snapshot[i + 1] = *arg;
+                                match self.instantiate_generator_object(
+                                    ctx, rb, func_val, this_val, &args,
+                                )? {
+                                    Some(gen_val) => self.set_reg(dst, gen_val),
+                                    None => {
+                                        if let Some(exc) = self.pending_throw.take() {
+                                            match self.dispatch_throw_value(ctx, exc) {
+                                                ThrowDispatch::Caught => continue,
+                                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                            }
                                         }
                                     }
                                 }
-                                let mut gen_obj = crate::object::object::JSObject::new();
-                                gen_obj.set_is_generator(true);
-                                let gen_proto = if js_func.is_async() {
-                                    ctx.get_async_generator_prototype()
-                                } else {
-                                    ctx.get_generator_prototype()
-                                };
-                                if let Some(proto_ptr) = gen_proto {
-                                    gen_obj.prototype = Some(proto_ptr);
-                                }
-                                gen_obj.set_generator_state(
-                                    crate::object::object::GeneratorState {
-                                        bytecode: Box::new(rb.clone()),
-                                        snapshot,
-                                        pc: 0,
-                                        done: false,
-                                        send_reg: None,
-                                        argc: args.len() as u32,
-                                        saved_args: args.to_vec(),
-                                        func_ptr: Some(ptr),
-                                    },
-                                );
-                                let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
-                                ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
-                                self.set_reg(dst, JSValue::new_object(gen_ptr));
                                 continue;
                             }
                             let return_pc = self.pc;
@@ -7987,8 +7890,12 @@ impl VM {
             self.pending_throw = Some(exc);
         }
 
+        let saved_vm_ptr = ctx.get_register_vm_ptr();
+        ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
         let result = self.execute_inner(ctx, &state.bytecode, true, state.pc, true);
+        ctx.set_register_vm_ptr(saved_vm_ptr);
         self.async_step = false;
+        let stale_exc = ctx.pending_exception.take();
 
         let snapshot = self.registers.clone();
         let pc = self.pc;
@@ -8013,13 +7920,96 @@ impl VM {
                 let uncaught = self
                     .last_uncaught
                     .take()
-                    .or_else(|| self.pending_throw.take());
+                    .or_else(|| self.pending_throw.take())
+                    .or_else(|| self.last_caught_exception.take())
+                    .or(stale_exc);
                 match uncaught {
                     Some(v) => Ok(AsyncStepResult::Threw(v)),
                     None => Ok(AsyncStepResult::Fatal(e)),
                 }
             }
         }
+    }
+
+    fn instantiate_generator_object(
+        &mut self,
+        ctx: &mut JSContext,
+        rb: &Bytecode,
+        func_val: JSValue,
+        this_val: JSValue,
+        args: &[JSValue],
+    ) -> Result<Option<JSValue>, String> {
+        let js_func = unsafe { JSValue::function_from_ptr(func_val.get_ptr()) };
+
+        let snapshot_this = if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null())
+        {
+            ctx.global()
+        } else {
+            this_val
+        };
+        let min_slots = 1 + args.len();
+        let snapshot_len = (rb.locals_count as usize).max(min_slots);
+        let mut snapshot = vec![JSValue::undefined(); snapshot_len];
+        snapshot[0] = snapshot_this;
+        for (i, arg) in args.iter().enumerate() {
+            snapshot[i + 1] = *arg;
+        }
+
+        let (result_snapshot, result_pc, result_done, result_send_reg) = {
+            let mut generator_vm = crate::runtime::vm::VM::new();
+            ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
+            let step = generator_vm.execute_generator_step(
+                ctx,
+                rb,
+                &snapshot,
+                0,
+                JSValue::undefined(),
+                None,
+                args,
+                Some(func_val.get_ptr()),
+            );
+            let uncaught = generator_vm.last_uncaught.take();
+            ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
+            drop(generator_vm);
+            match step {
+                Ok((_val, new_snapshot, new_pc, done, src)) => (new_snapshot, new_pc, done, src),
+                Err(e) => {
+                    if let Some(exc) = uncaught {
+                        self.last_caught_exception = Some(exc.clone());
+                        self.pending_throw = Some(exc);
+                        return Ok(None);
+                    }
+                    if e.contains("SyntaxError") || e.contains("Uncaught") {
+                        return Err(e);
+                    }
+                    (snapshot, 0, false, None)
+                }
+            }
+        };
+
+        let mut gen_obj = crate::object::object::JSObject::new();
+        gen_obj.set_is_generator(true);
+        let gen_proto = if js_func.is_async() {
+            ctx.get_async_generator_prototype()
+        } else {
+            ctx.get_generator_prototype()
+        };
+        if let Some(proto_ptr) = gen_proto {
+            gen_obj.prototype = Some(proto_ptr);
+        }
+        gen_obj.set_generator_state(crate::object::object::GeneratorState {
+            bytecode: Box::new(rb.clone()),
+            snapshot: result_snapshot,
+            pc: result_pc,
+            done: result_done,
+            send_reg: result_send_reg,
+            argc: args.len() as u32,
+            saved_args: args.to_vec(),
+            func_ptr: Some(func_val.get_ptr()),
+        });
+        let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
+        Ok(Some(JSValue::new_object(gen_ptr)))
     }
 
     pub fn execute_generator_step(
@@ -8063,13 +8053,17 @@ impl VM {
             }
         }
 
+        let saved_vm_ptr = ctx.get_register_vm_ptr();
+        ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
         let result = match self.execute_inner(ctx, bytecode, true, start_pc, true) {
             Ok(r) => r,
             Err(e) => {
+                ctx.set_register_vm_ptr(saved_vm_ptr);
                 self.last_uncaught = self.pending_throw.take();
                 return Err(e);
             }
         };
+        ctx.set_register_vm_ptr(saved_vm_ptr);
         match result {
             ExecutionOutcome::Complete(val) => Ok((
                 val,
