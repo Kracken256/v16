@@ -5712,29 +5712,35 @@ impl VM {
                     let key_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
-                    let result = if (obj_val.is_object() || obj_val.is_function())
-                        && key_val.is_string()
-                    {
-                        let js_obj = obj_val.as_object();
+                    if !(obj_val.is_object() || obj_val.is_function()) {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot use 'in' operator to search for a property in a non-object",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
+                    let js_obj = obj_val.as_object();
+                    let result = if key_val.is_string() {
                         let atom = key_val.get_atom();
-                        js_obj.has_property(atom)
-                    } else if (obj_val.is_object() || obj_val.is_function()) && key_val.is_int() {
-                        let js_obj = obj_val.as_object();
+                        js_obj.has_property(atom) || ctx.array_index_has_own(&obj_val, atom)
+                    } else if key_val.is_int() {
                         let atom = self.int_atom(key_val.get_int() as usize, ctx);
-                        js_obj.has_property(atom)
-                    } else if (obj_val.is_object() || obj_val.is_function()) && key_val.is_float() {
-                        let js_obj = obj_val.as_object();
-                        let s = VM::js_to_string(&key_val, ctx);
-                        let atom = s.get_atom();
-                        js_obj.has_property(atom)
-                    } else if (obj_val.is_object() || obj_val.is_function()) && key_val.is_symbol()
-                    {
-                        let js_obj = obj_val.as_object();
+                        js_obj.has_property(atom) || ctx.array_index_has_own(&obj_val, atom)
+                    } else if key_val.is_symbol() {
                         let sym_key =
                             crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
                         js_obj.has_property(sym_key)
                     } else {
-                        false
+                        let s = VM::js_to_string(&key_val, ctx);
+                        let atom = s.get_atom();
+                        js_obj.has_property(atom) || ctx.array_index_has_own(&obj_val, atom)
                     };
                     self.set_reg(dst, JSValue::bool(result));
                 }
@@ -10333,7 +10339,21 @@ impl VM {
             return JSValue::new_string(ctx.intern(&v.get_int().to_string()));
         }
         if v.is_float() {
-            return JSValue::new_string(ctx.intern(&v.get_float().to_string()));
+            let number = v.get_float();
+            let text = if number.is_nan() {
+                "NaN".to_string()
+            } else if number.is_infinite() {
+                if number.is_sign_negative() {
+                    "-Infinity".to_string()
+                } else {
+                    "Infinity".to_string()
+                }
+            } else if number == number.floor() && number.abs() < 1e15 {
+                format!("{}", number as i64)
+            } else {
+                crate::builtins::string::js_float_to_string(number)
+            };
+            return JSValue::new_string(ctx.intern(&text));
         }
         if v.is_bool() {
             return JSValue::new_string(ctx.intern(&v.get_bool().to_string()));
