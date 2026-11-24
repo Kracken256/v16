@@ -9023,7 +9023,12 @@ impl VM {
                     let arr = unsafe {
                         &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
                     };
-                    let length = arr.len();
+                    let length = arr
+                        .header
+                        .get(ctx.common_atoms.length)
+                        .map(|v| v.get_int().max(0) as usize)
+                        .unwrap_or(0)
+                        .max(arr.len());
                     if idx < length {
                         let value = arr.get(idx).unwrap_or(JSValue::undefined());
                         iter_obj.set_cached(
