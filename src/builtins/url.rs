@@ -285,3 +285,147 @@ pub fn global_decodeuricomponent(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
         Err(()) => JSValue::undefined(),
     }
 }
+
+fn coerce_to_string(ctx: &mut JSContext, value: &JSValue) -> Result<String, ()> {
+    if value.is_string() {
+        return Ok(ctx.get_atom_str(value.get_atom()).to_string());
+    }
+    if value.is_int() {
+        return Ok(value.get_int().to_string());
+    }
+    if value.is_float() {
+        return Ok(crate::builtins::string::js_float_to_string(value.get_float()));
+    }
+    if value.is_bool() {
+        return Ok(if value.get_bool() { "true" } else { "false" }.to_string());
+    }
+    if value.is_null() {
+        return Ok("null".to_string());
+    }
+    if value.is_undefined() {
+        return Ok("undefined".to_string());
+    }
+    if value.is_bigint() {
+        return Ok(value.as_object().get_bigint_value().to_string());
+    }
+    if value.is_symbol() {
+        crate::builtins::global::throw_type_error(
+            ctx,
+            "Cannot convert a Symbol value to a string",
+        );
+        return Err(());
+    }
+    if value.is_object() || value.is_function() {
+        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+            let prim = {
+                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+                vm.ordinary_to_primitive(value, "string", ctx)
+            };
+            if ctx.pending_exception.is_some() {
+                return Err(());
+            }
+            let pending = {
+                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+                vm.pending_throw.is_some()
+            };
+            if pending {
+                return Err(());
+            }
+            if prim.is_object() || prim.is_function() {
+                crate::builtins::global::throw_type_error(
+                    ctx,
+                    "Cannot convert object to primitive value",
+                );
+                return Err(());
+            }
+            return coerce_to_string(ctx, &prim);
+        }
+        return Err(());
+    }
+    Err(())
+}
+
+fn escape_unescaped(unit: u16) -> bool {
+    matches!(unit,
+        0x41..=0x5A | 0x61..=0x7A | 0x30..=0x39
+        | 0x40 | 0x2A | 0x5F | 0x2B | 0x2D | 0x2E | 0x2F)
+}
+
+pub fn global_escape(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let input = if args.is_empty() {
+        "undefined".to_string()
+    } else {
+        match coerce_to_string(ctx, &args[0]) {
+            Ok(s) => s,
+            Err(()) => return JSValue::undefined(),
+        }
+    };
+    let mut out = String::new();
+    for unit in input.encode_utf16() {
+        if escape_unescaped(unit) {
+            out.push(char::from_u32(unit as u32).unwrap_or('\u{FFFD}'));
+        } else if unit < 256 {
+            out.push_str(&format!("%{:02X}", unit));
+        } else {
+            out.push_str(&format!("%u{:04X}", unit));
+        }
+    }
+    JSValue::new_string(ctx.intern(&out))
+}
+
+fn is_hex_unit(unit: u16) -> bool {
+    matches!(unit, 0x30..=0x39 | 0x41..=0x46 | 0x61..=0x66)
+}
+
+fn hex_unit_val(unit: u16) -> u16 {
+    match unit {
+        0x30..=0x39 => unit - 0x30,
+        0x41..=0x46 => unit - 0x41 + 10,
+        0x61..=0x66 => unit - 0x61 + 10,
+        _ => 0,
+    }
+}
+
+pub fn global_unescape(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let input = if args.is_empty() {
+        "undefined".to_string()
+    } else {
+        match coerce_to_string(ctx, &args[0]) {
+            Ok(s) => s,
+            Err(()) => return JSValue::undefined(),
+        }
+    };
+    let units: Vec<u16> = input.encode_utf16().collect();
+    let len = units.len();
+    let mut out: Vec<u16> = Vec::with_capacity(len);
+    let mut k = 0usize;
+    while k < len {
+        let c = units[k];
+        if c == 0x25 {
+            if k + 5 < len
+                && units[k + 1] == 0x75
+                && is_hex_unit(units[k + 2])
+                && is_hex_unit(units[k + 3])
+                && is_hex_unit(units[k + 4])
+                && is_hex_unit(units[k + 5])
+            {
+                let v = (hex_unit_val(units[k + 2]) << 12)
+                    | (hex_unit_val(units[k + 3]) << 8)
+                    | (hex_unit_val(units[k + 4]) << 4)
+                    | hex_unit_val(units[k + 5]);
+                out.push(v);
+                k += 6;
+                continue;
+            }
+            if k + 2 < len && is_hex_unit(units[k + 1]) && is_hex_unit(units[k + 2]) {
+                let v = (hex_unit_val(units[k + 1]) << 4) | hex_unit_val(units[k + 2]);
+                out.push(v);
+                k += 3;
+                continue;
+            }
+        }
+        out.push(c);
+        k += 1;
+    }
+    JSValue::new_string(ctx.intern(&String::from_utf16_lossy(&out)))
+}

@@ -25,6 +25,7 @@ use crate::builtins::symbol;
 use crate::builtins::typedarray;
 use crate::builtins::url::{
     global_decodeuri, global_decodeuricomponent, global_encodeuri, global_encodeuricomponent,
+    global_escape, global_unescape,
 };
 use crate::builtins::weakref;
 #[cfg(feature = "fetch")]
@@ -115,6 +116,9 @@ pub fn init_globals(ctx: &mut JSContext) {
 
     ctx.register_builtin("btoa", HostFunction::new("btoa", 1, global_btoa));
     ctx.register_builtin("atob", HostFunction::new("atob", 1, global_atob));
+
+    ctx.register_builtin("escape", HostFunction::new("escape", 1, global_escape));
+    ctx.register_builtin("unescape", HostFunction::new("unescape", 1, global_unescape));
 
     ctx.register_builtin(
         "encodeURI",
@@ -3302,6 +3306,17 @@ fn init_global_funcs(ctx: &mut JSContext) {
             global_obj,
             ctx.intern("atob"),
             create_builtin_function(ctx, "atob"),
+        );
+
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("escape"),
+            create_builtin_function(ctx, "escape"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("unescape"),
+            create_builtin_function(ctx, "unescape"),
         );
 
         set_non_enumerable(
