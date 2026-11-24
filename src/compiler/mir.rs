@@ -269,7 +269,7 @@ impl SsaBuilder {
     fn build_literal(&mut self, lit: &Literal) -> ValueId {
         let value = match lit {
             Literal::Number(n) => MirConst::NumberBits(n.to_bits()),
-            Literal::String(s, _) => MirConst::String(s.clone()),
+            Literal::String(s, _, _) => MirConst::String(s.clone()),
             Literal::Boolean(b) => MirConst::Boolean(*b),
             Literal::Null => MirConst::Null,
             Literal::Undefined => MirConst::Undefined,

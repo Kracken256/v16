@@ -2289,9 +2289,17 @@ impl Parser {
 
         if self.cur_type() == Some(TokenType::String) {
             let val = self.cur_value().to_string();
+            let has_escape = self.current.as_ref().map_or(false, |t| t.had_escape);
+            let had_legacy_escape = self
+                .current
+                .as_ref()
+                .map_or(false, |t| t.had_legacy_escape);
             self.advance();
-            let has_escape = self.lexer.last_string_had_escape;
-            return Ok(Expression::Literal(Literal::String(val, has_escape)));
+            return Ok(Expression::Literal(Literal::String(
+                val,
+                has_escape,
+                had_legacy_escape,
+            )));
         }
 
         if self.at_keyword("true") {
@@ -2697,10 +2705,14 @@ impl Parser {
         }
         if self.cur_type() == Some(TokenType::String) {
             let val = self.cur_value().to_string();
+            let has_escape = self.current.as_ref().map_or(false, |t| t.had_escape);
+            let had_legacy_escape = self
+                .current
+                .as_ref()
+                .map_or(false, |t| t.had_legacy_escape);
             self.advance();
-            let has_escape = self.lexer.last_string_had_escape;
             return Ok((
-                PropertyKey::Literal(Literal::String(val, has_escape)),
+                PropertyKey::Literal(Literal::String(val, has_escape, had_legacy_escape)),
                 false,
                 false,
             ));
@@ -3011,20 +3023,20 @@ fn parse_number_literal(raw: &str) -> NumberLit {
                 .map(|n| n as f64)
                 .unwrap_or(0.0),
         )
-    } else if raw.len() > 1 && raw.as_bytes()[0] == b'0' && raw.as_bytes()[1].is_ascii_digit() {
+    } else if raw.len() > 1
+        && raw.as_bytes()[0] == b'0'
+        && raw.as_bytes()[1].is_ascii_digit()
+        && !raw.contains('.')
+        && !raw.contains('e')
+        && !raw.contains('E')
+    {
         let chars: Vec<char> = raw.chars().collect();
-        if chars[1] == '8' || chars[1] == '9' {
-            let clean: String = raw.chars().filter(|&c| c != '_').collect();
-            NumberLit::Normal(clean.parse::<f64>().unwrap_or(0.0))
-        } else if chars[1..]
-            .iter()
-            .all(|&c| c == '_' || (c.is_ascii_digit() && c <= '7'))
-        {
-            let clean: String = raw[1..].chars().filter(|&c| c != '_').collect();
+        if chars[1..].iter().all(|&c| c.is_ascii_digit() && c <= '7') {
+            let clean: String = raw[1..].chars().collect();
             NumberLit::LegacyOctal(i64::from_str_radix(&clean, 8).unwrap_or(0))
         } else {
             let clean: String = raw.chars().filter(|&c| c != '_').collect();
-            NumberLit::Normal(clean.parse::<f64>().unwrap_or(0.0))
+            NumberLit::LegacyOctal(clean.parse::<i64>().unwrap_or(0))
         }
     } else {
         let clean: String = raw.chars().filter(|&c| c != '_').collect();

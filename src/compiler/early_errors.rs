@@ -217,7 +217,7 @@ fn has_use_strict_directive(body: &[ASTNode]) -> bool {
     for stmt in body {
         match stmt {
             ASTNode::ExpressionStatement(es) => {
-                if let Expression::Literal(Literal::String(s, has_escape)) = &es.expression {
+                if let Expression::Literal(Literal::String(s, has_escape, _)) = &es.expression {
                     if !has_escape && s == "use strict" {
                         return true;
                     }
@@ -855,7 +855,7 @@ fn validate_object_pattern(op: &ObjectPattern, ctx: Ctx) -> Result<(), String> {
 fn class_element_name(key: &PropertyKey) -> Option<String> {
     match key {
         PropertyKey::Identifier(name) => Some(name.clone()),
-        PropertyKey::Literal(Literal::String(name, _)) => Some(name.clone()),
+        PropertyKey::Literal(Literal::String(name, _, _)) => Some(name.clone()),
         PropertyKey::PrivateIdentifier(name) => {
             Some(name.trim_start_matches('#').to_string())
         }
@@ -1028,11 +1028,28 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
     match expr {
         Expression::Identifier(id) => check_identifier_reference(&id.name, ctx),
         Expression::PrivateIdentifier(_)
-        | Expression::Literal(_)
         | Expression::This
         | Expression::Super
         | Expression::RegExpLiteral(_)
         | Expression::MetaProperty(_) => Ok(()),
+        Expression::Literal(literal) => {
+            if ctx.strict {
+                match literal {
+                    Literal::LegacyOctal(_) => {
+                        return Err(
+                            "SyntaxError: Legacy octal literal in strict mode code".to_string()
+                        );
+                    }
+                    Literal::String(_, _, true) => {
+                        return Err(
+                            "SyntaxError: Legacy octal escape in strict mode code".to_string()
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
         Expression::ArrayExpression(arr) => {
             for el in &arr.elements {
                 if let Some(e) = el {

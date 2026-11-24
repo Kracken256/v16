@@ -11,6 +11,7 @@ pub enum TokenType {
     Regex,
     Hashbang,
     PrivateIdentifier,
+    Error,
 
     NoSubstitutionTemplate,
 
@@ -29,6 +30,8 @@ pub struct Token {
     pub column: u32,
     pub line_terminator_before: bool,
     pub had_escape: bool,
+    pub had_legacy_escape: bool,
+    pub invalid_escape: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +67,7 @@ pub struct Lexer {
     cached_peek: Option<PeekCache>,
 
     pub last_string_had_escape: bool,
+    pub error: Option<String>,
 
     pending_line_terminator: bool,
 }
@@ -78,11 +82,15 @@ impl Lexer {
             last_token_kind: LastTokenKind::None,
             cached_peek: None,
             last_string_had_escape: false,
+            error: None,
             pending_line_terminator: false,
         }
     }
 
     pub fn next_token(&mut self) -> Option<Token> {
+        if let Some(message) = self.error.take() {
+            return Some(self.error_token(message));
+        }
         if let Some(cache) = self.cached_peek.take() {
             if cache.pre_pos == self.pos
                 && cache.pre_line == self.line
@@ -97,7 +105,39 @@ impl Lexer {
             }
         }
 
-        self.next_token_uncached()
+        let result = self.next_token_uncached();
+        if let Some(message) = self.error.take() {
+            return Some(self.error_token(message));
+        }
+        result
+    }
+
+    fn fail(&mut self, message: &str) {
+        if self.error.is_none() {
+            self.error = Some(message.to_string());
+        }
+    }
+
+    fn error_token(&self, message: String) -> Token {
+        Token {
+            token_type: TokenType::Error,
+            value: message,
+            line: self.line,
+            column: self.column,
+            line_terminator_before: false,
+            had_escape: false,
+            had_legacy_escape: false,
+            invalid_escape: false,
+        }
+    }
+
+    fn check_number_end(&mut self) {
+        if self.pos < self.source.len() {
+            let c = self.source[self.pos];
+            if Self::is_identifier_start(c) || c.is_ascii_digit() || c == '\\' {
+                self.fail("Identifier directly after number");
+            }
+        }
     }
 
     fn next_token_uncached(&mut self) -> Option<Token> {
@@ -160,6 +200,8 @@ impl Lexer {
                 column: self.column,
                 line_terminator_before: false,
                 had_escape: false,
+                had_legacy_escape: false,
+                invalid_escape: false,
             });
         }
 
@@ -373,7 +415,13 @@ impl Lexer {
                 self.advance();
             }
             let value: String = self.source[start..value_end].iter().collect();
-            let valid = valid_digit_run(&digits);
+            let mut valid = valid_digit_run(&digits);
+            if is_bigint && !valid {
+                valid = false;
+            }
+            if valid {
+                self.check_number_end();
+            }
             return Token {
                 token_type: if !valid {
                     TokenType::Punctuator
@@ -387,6 +435,8 @@ impl Lexer {
                 column: self.column,
                 line_terminator_before: false,
                 had_escape: false,
+                had_legacy_escape: false,
+                invalid_escape: false,
             };
         }
 
@@ -454,6 +504,21 @@ impl Lexer {
         if has_exp && !valid_digit_run(&exp_part) {
             valid = false;
         }
+        let int_bytes = int_part.as_bytes();
+        if int_bytes.len() > 1 && int_bytes[0] == b'0' {
+            if int_part.contains('_') {
+                valid = false;
+            } else if is_bigint {
+                valid = false;
+            } else if has_dot || has_exp {
+                if !int_part.bytes().any(|c| c == b'8' || c == b'9') {
+                    valid = false;
+                }
+            }
+        }
+        if valid {
+            self.check_number_end();
+        }
 
         Token {
             token_type: if !valid {
@@ -468,6 +533,8 @@ impl Lexer {
             column: self.column,
             line_terminator_before: false,
             had_escape: false,
+            had_legacy_escape: false,
+            invalid_escape: false,
         }
     }
 
@@ -478,11 +545,25 @@ impl Lexer {
     }
 
     fn read_string(&mut self, quote: char) -> Token {
+        let token_line = self.line;
+        let token_column = self.column;
         self.last_string_had_escape = false;
         self.advance();
         let mut value = String::new();
-        while self.pos < self.source.len() && self.source[self.pos] != quote {
+        let mut had_escape = false;
+        let mut had_legacy_escape = false;
+        let mut terminated = false;
+        while self.pos < self.source.len() {
             let ch = self.source[self.pos];
+            if ch == quote {
+                self.advance();
+                terminated = true;
+                break;
+            }
+            if ch == '\n' || ch == '\r' {
+                self.fail("Unterminated string literal");
+                break;
+            }
             if ch != '\\' {
                 value.push(ch);
                 self.advance();
@@ -491,9 +572,11 @@ impl Lexer {
 
             self.advance();
             if self.pos >= self.source.len() {
+                self.fail("Unterminated string literal");
                 break;
             }
 
+            had_escape = true;
             self.last_string_had_escape = true;
             let esc = self.source[self.pos];
             match esc {
@@ -510,6 +593,7 @@ impl Lexer {
                 'f' => value.push('\x0c'),
                 'v' => value.push('\x0b'),
                 '0'..='7' => {
+                    had_legacy_escape = true;
                     let first_val = esc as u32 - '0' as u32;
                     if first_val == 0
                         && (self.pos + 1 >= self.source.len()
@@ -543,6 +627,10 @@ impl Lexer {
                         }
                     }
                 }
+                '8' | '9' => {
+                    had_legacy_escape = true;
+                    value.push(esc);
+                }
                 '\\' => value.push('\\'),
                 '\'' => value.push('\''),
                 '"' => value.push('"'),
@@ -559,35 +647,40 @@ impl Lexer {
                             self.advance();
                             self.advance();
                         } else {
-                            value.push('x');
+                            self.fail("Invalid hexadecimal escape sequence");
                         }
                     } else {
-                        value.push('x');
+                        self.fail("Invalid hexadecimal escape sequence");
                     }
                 }
                 'u' => {
                     if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == '{' {
                         let mut code: u32 = 0;
+                        let mut digits = 0;
+                        let mut overflow = false;
                         let mut i = self.pos + 2;
                         while i < self.source.len() && self.source[i] != '}' {
                             if let Some(d) = self.source[i].to_digit(16) {
-                                code = code.wrapping_mul(16).wrapping_add(d);
+                                code = code.saturating_mul(16).saturating_add(d);
+                                if code > 0x10FFFF {
+                                    overflow = true;
+                                }
+                                digits += 1;
                                 i += 1;
                             } else {
                                 break;
                             }
                         }
-                        if i < self.source.len() && self.source[i] == '}' {
+                        if i < self.source.len() && self.source[i] == '}' && digits > 0 && !overflow {
                             if let Some(decoded) = char::from_u32(code) {
                                 value.push(decoded);
                             }
-
                             let steps = i - self.pos;
                             for _ in 0..steps {
                                 self.advance();
                             }
                         } else {
-                            value.push('u');
+                            self.fail("Invalid Unicode escape sequence");
                         }
                     } else if self.pos + 4 < self.source.len() {
                         let h1 = self.source[self.pos + 1];
@@ -638,26 +731,28 @@ impl Lexer {
                                 }
                             }
                         } else {
-                            value.push('u');
+                            self.fail("Invalid Unicode escape sequence");
                         }
                     } else {
-                        value.push('u');
+                        self.fail("Invalid Unicode escape sequence");
                     }
                 }
                 _ => value.push(esc),
             }
             self.advance();
         }
-        if self.pos < self.source.len() {
-            self.advance();
+        if !terminated && self.error.is_none() {
+            self.fail("Unterminated string literal");
         }
         Token {
             token_type: TokenType::String,
             value,
-            line: self.line,
-            column: self.column,
+            line: token_line,
+            column: token_column,
             line_terminator_before: false,
-            had_escape: false,
+            had_escape,
+            had_legacy_escape,
+            invalid_escape: false,
         }
     }
 
@@ -681,6 +776,8 @@ impl Lexer {
             column: self.column,
             line_terminator_before: false,
             had_escape: false,
+            had_legacy_escape: false,
+            invalid_escape: false,
         }
     }
 
@@ -719,6 +816,8 @@ impl Lexer {
             column: self.column,
             line_terminator_before: false,
             had_escape,
+            had_legacy_escape: false,
+            invalid_escape: false,
         }
     }
 
@@ -789,6 +888,8 @@ impl Lexer {
             column: self.column,
             line_terminator_before: false,
             had_escape: false,
+            had_legacy_escape: false,
+            invalid_escape: false,
         }
     }
 
@@ -811,6 +912,8 @@ impl Lexer {
                     column: self.column,
                     line_terminator_before: false,
                     had_escape: false,
+                    had_legacy_escape: false,
+                    invalid_escape: false,
                 });
             }
 
@@ -837,6 +940,8 @@ impl Lexer {
                     column: self.column,
                     line_terminator_before: false,
                     had_escape: false,
+                    had_legacy_escape: false,
+                    invalid_escape: false,
                 });
             }
 
@@ -852,6 +957,8 @@ impl Lexer {
                         column: self.column,
                         line_terminator_before: false,
                         had_escape: false,
+                        had_legacy_escape: false,
+                        invalid_escape: false,
                     };
                 }
 
@@ -863,6 +970,8 @@ impl Lexer {
                     column: self.column,
                     line_terminator_before: false,
                     had_escape: false,
+                    had_legacy_escape: false,
+                    invalid_escape: false,
                 };
             }
 
@@ -919,6 +1028,8 @@ impl Lexer {
                 column: self.column,
                 line_terminator_before: false,
                 had_escape: false,
+                had_legacy_escape: false,
+                invalid_escape: false,
             };
         }
         self.last_token_kind = LastTokenKind::RegexPrefix;
@@ -929,6 +1040,8 @@ impl Lexer {
             column: self.column,
             line_terminator_before: false,
             had_escape: false,
+            had_legacy_escape: false,
+            invalid_escape: false,
         }
     }
 
@@ -1106,6 +1219,8 @@ impl Lexer {
             column: self.column,
             line_terminator_before: false,
             had_escape: false,
+            had_legacy_escape: false,
+            invalid_escape: false,
         }
     }
 
@@ -1236,7 +1351,18 @@ impl Lexer {
                     'b' => value.push('\x08'),
                     'f' => value.push('\x0c'),
                     'v' => value.push('\x0b'),
-                    '0' => value.push('\0'),
+                    '0' => {
+                        if self.pos + 1 < self.source.len()
+                            && self.source[self.pos + 1].is_ascii_digit()
+                        {
+                            self.fail("Octal escape sequences are not allowed in template literals");
+                        } else {
+                            value.push('\0');
+                        }
+                    }
+                    '1'..='9' => {
+                        self.fail("Octal escape sequences are not allowed in template literals");
+                    }
                     '\\' => value.push('\\'),
                     '\'' => value.push('\''),
                     '"' => value.push('"'),
@@ -1270,10 +1396,10 @@ impl Lexer {
                                 self.advance();
                                 self.advance();
                             } else {
-                                value.push('x');
+                                self.fail("Invalid hexadecimal escape sequence");
                             }
                         } else {
-                            value.push('x');
+                            self.fail("Invalid hexadecimal escape sequence");
                         }
                     }
                     'u' => {
@@ -1286,10 +1412,22 @@ impl Lexer {
                                 self.advance();
                             }
 
-                            if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                                if let Some(ch) = char::from_u32(code) {
-                                    value.push(ch);
+                            if self.pos < self.source.len()
+                                && !hex.is_empty()
+                                && hex.bytes().all(|c| c.is_ascii_hexdigit())
+                            {
+                                match u32::from_str_radix(&hex, 16) {
+                                    Ok(code) if code <= 0x10FFFF => {
+                                        if let Some(ch) = char::from_u32(code) {
+                                            value.push(ch);
+                                        }
+                                        self.advance();
+                                    }
+                                    _ => self
+                                        .fail("Invalid Unicode escape sequence"),
                                 }
+                            } else {
+                                self.fail("Invalid Unicode escape sequence");
                             }
                         } else if self.pos + 4 < self.source.len() {
                             let h1 = self.source[self.pos + 1];
@@ -1342,10 +1480,10 @@ impl Lexer {
                                     }
                                 }
                             } else {
-                                value.push('u');
+                                self.fail("Invalid Unicode escape sequence");
                             }
                         } else {
-                            value.push('u');
+                            self.fail("Invalid Unicode escape sequence");
                         }
                     }
                     _ => value.push(esc),
@@ -1394,6 +1532,8 @@ impl Lexer {
             column: self.column,
             line_terminator_before: false,
             had_escape: false,
+            had_legacy_escape: false,
+            invalid_escape: false,
         })
     }
 

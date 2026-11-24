@@ -319,7 +319,7 @@ impl CodeGenerator {
             Literal::Null | Literal::Undefined => Some(false),
             Literal::Number(n) => Some(*n != 0.0 && !n.is_nan()),
             Literal::LegacyOctal(n) => Some(*n != 0),
-            Literal::String(s, _) => Some(!s.is_empty()),
+            Literal::String(s, _, _) => Some(!s.is_empty()),
             Literal::BigInt(_) => None,
         }
     }
@@ -853,7 +853,7 @@ impl CodeGenerator {
         for stmt in &body.body {
             match stmt {
                 ASTNode::ExpressionStatement(es) => {
-                    if let Expression::Literal(Literal::String(s, has_escape)) = &es.expression {
+                    if let Expression::Literal(Literal::String(s, has_escape, _)) = &es.expression {
                         if !has_escape && s == "use strict" {
                             return true;
                         }
@@ -2427,10 +2427,12 @@ impl CodeGenerator {
             let mut arguments = vec![Argument::Expression(Expression::Literal(Literal::String(
                 decl.source.clone(),
                 false,
+                false,
             )))];
             if let Some(name) = binding {
                 arguments.push(Argument::Expression(Expression::Literal(Literal::String(
                     name.to_string(),
+                    false,
                     false,
                 ))));
             }
@@ -2671,7 +2673,7 @@ impl CodeGenerator {
                             } else {
                                 match key {
                                     PropertyKey::Identifier(k)
-                                    | PropertyKey::Literal(Literal::String(k, _)) => {
+                                    | PropertyKey::Literal(Literal::String(k, _, _)) => {
                                         let idx = self.intern_and_add_const(ctx, k);
                                         let kreg = self.alloc_register();
                                         self.emit(Opcode::LoadConst);
@@ -5049,7 +5051,7 @@ impl CodeGenerator {
                             self.emit_u32(idx);
                         }
                     }
-                    Literal::String(s, _) => {
+                    Literal::String(s, _, _) => {
                         let idx = self.intern_and_add_const(ctx, s);
                         self.emit(Opcode::LoadConst);
                         self.emit_u16(r);
@@ -6976,7 +6978,7 @@ impl CodeGenerator {
                     } else {
                         match key {
                             PropertyKey::Identifier(k)
-                            | PropertyKey::Literal(Literal::String(k, _)) => {
+                            | PropertyKey::Literal(Literal::String(k, _, _)) => {
                                 let idx = self.intern_and_add_const(ctx, k);
                                 let kreg = self.alloc_register();
                                 self.emit(Opcode::LoadConst);
@@ -7827,7 +7829,7 @@ impl CodeGenerator {
                         let func_reg = self.gen_property_function_value(value, *method, ctx)?;
                         let key_reg = match key {
                             PropertyKey::Identifier(name)
-                            | PropertyKey::Literal(Literal::String(name, _)) => {
+                            | PropertyKey::Literal(Literal::String(name, _, _)) => {
                                 let atom = ctx.intern(name);
                                 let idx = self.add_constant(JSValue::new_string(atom));
                                 let k = self.alloc_register();
@@ -7855,7 +7857,7 @@ impl CodeGenerator {
                     }
                     match key {
                         PropertyKey::Identifier(name)
-                        | PropertyKey::Literal(Literal::String(name, _)) => {
+                        | PropertyKey::Literal(Literal::String(name, _, _)) => {
                             let val = self.gen_property_function_value(value, *method, ctx)?;
                             let atom = ctx.intern(name);
                             self.emit(Opcode::SetNamedProp);
@@ -8068,7 +8070,7 @@ impl CodeGenerator {
                         (MemberProperty::PrivateIdentifier(n.clone()), false)
                     }
                     PropertyKey::Identifier(n) => (MemberProperty::Identifier(n.clone()), false),
-                    PropertyKey::Literal(Literal::String(s, _)) => {
+                    PropertyKey::Literal(Literal::String(s, _, _)) => {
                         (MemberProperty::Identifier(s.clone()), false)
                     }
                     PropertyKey::PrivateIdentifier(n) => {
@@ -8211,7 +8213,7 @@ impl CodeGenerator {
                 }
                 let can_handle = match &m.name {
                     PropertyKey::Identifier(_)
-                    | PropertyKey::Literal(Literal::String(_, _))
+                    | PropertyKey::Literal(Literal::String(_, _, _))
                     | PropertyKey::Literal(Literal::Number(_))
                     | PropertyKey::PrivateIdentifier(_)
                     | PropertyKey::Computed(_) => true,
@@ -8259,7 +8261,7 @@ impl CodeGenerator {
                 }
                 let can_handle = match &m.name {
                     PropertyKey::Identifier(_)
-                    | PropertyKey::Literal(Literal::String(_, _))
+                    | PropertyKey::Literal(Literal::String(_, _, _))
                     | PropertyKey::Literal(Literal::Number(_))
                     | PropertyKey::PrivateIdentifier(_)
                     | PropertyKey::Computed(_) => true,
@@ -8374,7 +8376,7 @@ impl CodeGenerator {
         {
             let key = self.alloc_register();
             let method_name_atom = match &method_key {
-                PropertyKey::Identifier(n) | PropertyKey::Literal(Literal::String(n, _)) => {
+                PropertyKey::Identifier(n) | PropertyKey::Literal(Literal::String(n, _, _)) => {
                     let method_atom = ctx.atom_table_mut().intern(n.as_str());
                     let method_idx = self.add_constant(JSValue::new_string(method_atom));
                     self.emit(Opcode::LoadConst);
@@ -8478,7 +8480,7 @@ impl CodeGenerator {
         {
             let key = self.alloc_register();
             let method_name_atom = match &method_key {
-                PropertyKey::Identifier(n) | PropertyKey::Literal(Literal::String(n, _)) => {
+                PropertyKey::Identifier(n) | PropertyKey::Literal(Literal::String(n, _, _)) => {
                     let method_atom = ctx.atom_table_mut().intern(n.as_str());
                     let method_idx = self.add_constant(JSValue::new_string(method_atom));
                     self.emit(Opcode::LoadConst);
@@ -8612,7 +8614,7 @@ impl CodeGenerator {
                 } else {
                     let field_name = match &p.name {
                         PropertyKey::Identifier(n) => n.clone(),
-                        PropertyKey::Literal(Literal::String(s, _)) => s.clone(),
+                        PropertyKey::Literal(Literal::String(s, _, _)) => s.clone(),
                         PropertyKey::PrivateIdentifier(n) => n.clone(),
                         _ => {
                             self.free_register(val_reg);
