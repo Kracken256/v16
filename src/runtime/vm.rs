@@ -4994,12 +4994,25 @@ impl VM {
                                     proto = pobj.prototype;
                                 }
                                 if let Some(setter) = setter_found {
-                                    let _ = self.call_function_with_this(
-                                        ctx,
-                                        setter,
-                                        obj_val,
-                                        &[value],
-                                    );
+                                    if self
+                                        .call_function_with_this(ctx, setter, obj_val, &[value])
+                                        .is_err()
+                                    {
+                                        let caught = self.last_caught_exception.take();
+                                        let host = ctx.pending_exception.take();
+                                        let exc = caught
+                                            .or(host)
+                                            .or_else(|| self.pending_throw.take());
+                                        if let Some(exc) = exc {
+                                            match self.dispatch_throw_value(ctx, exc) {
+                                                ThrowDispatch::Caught => continue,
+                                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                                ThrowDispatch::AsyncComplete(o) => {
+                                                    return Ok(o)
+                                                }
+                                            }
+                                        }
+                                    }
                                 } else if idx > 100_000 {
                                     let len_atom = ctx.common_atoms.length;
                                     let old_len = arr
@@ -5401,15 +5414,17 @@ impl VM {
                     let obj_reg = self.read_u16_pc();
                     let val_reg = self.read_u16_pc();
                     let atom = crate::runtime::atom::Atom(self.read_u32_pc());
-                    if self.set_named_prop_fast(ctx, obj_reg, val_reg, atom, instr_pc) {
-                        continue;
-                    }
+                    let fast =
+                        self.set_named_prop_fast(ctx, obj_reg, val_reg, atom, instr_pc);
                     if let Some(exc) = self.pending_throw.take() {
                         match self.dispatch_throw_value(ctx, exc) {
                             ThrowDispatch::Caught => continue,
                             ThrowDispatch::Uncaught(e) => return Err(e),
-                            ThrowDispatch::AsyncComplete(_) => continue,
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
                         }
+                    }
+                    if fast {
+                        continue;
                     }
                 }
 
@@ -10044,9 +10059,21 @@ impl VM {
             };
             if has_accessor {
                 if let Some(setter_fn) = setter {
-                    let _ = self.call_function_with_this(ctx, setter_fn, obj_val, &[value]);
+                    if self
+                        .call_function_with_this(ctx, setter_fn, obj_val, &[value])
+                        .is_err()
+                    {
+                        let caught = self.last_caught_exception.take();
+                        let host = ctx.pending_exception.take();
+                        let exc = caught
+                            .or(host)
+                            .or_else(|| self.pending_throw.take());
+                        if let Some(exc) = exc {
+                            self.pending_throw = Some(exc);
+                        }
+                    }
                 }
-                return false;
+                return true;
             }
 
             if pre_offset.is_none() && !js_obj.extensible() {
