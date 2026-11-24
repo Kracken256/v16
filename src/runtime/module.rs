@@ -204,7 +204,11 @@ impl Default for ModuleRegistry {
 pub fn resolve_specifier(specifier: &str, base_path: &str) -> String {
     if specifier.starts_with("./") || specifier.starts_with("../") {
         let base = std::path::Path::new(base_path);
-        let base_dir = base.parent().unwrap_or(std::path::Path::new("."));
+        let base_dir = if base.is_dir() {
+            base
+        } else {
+            base.parent().unwrap_or(std::path::Path::new("."))
+        };
         let resolved = base_dir.join(specifier);
         let canonical = std::fs::canonicalize(&resolved).unwrap_or(resolved);
         canonical.to_string_lossy().to_string()
@@ -242,6 +246,8 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
     {
         if let Some(current) = ctx.get_current_module() {
             resolve_specifier(specifier, current)
+        } else if let Some(base) = ctx.get_script_base_path() {
+            resolve_specifier(specifier, base)
         } else {
             let cwd = std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())

@@ -1309,6 +1309,19 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                             }
                         }
                     }
+                } else if reaction.target_promise.is_object() {
+                    let target_val = reaction.target_promise;
+                    let pending = {
+                        let t = target_val.as_object();
+                        t.is_promise() && get_promise_state(ctx, t).is_pending()
+                    };
+                    if pending {
+                        if reaction.is_reject {
+                            reject_promise(ctx, target_val.as_object_mut(), argument);
+                        } else {
+                            resolve_promise_value(ctx, vm, target_val, argument);
+                        }
+                    }
                 }
             }
             Microtask::UserCallback(callback, args) => {
@@ -1388,7 +1401,8 @@ pub fn settle_async_result(ctx: &mut JSContext, promise: JSValue, value: JSValue
     }
 }
 
-fn handle_all_settled_reaction(ctx: &mut JSContext, vm: &mut crate::runtime::vm::VM, reaction: &Reaction, argument: JSValue) {    let idx = reaction.handler.get_int() as usize;
+fn handle_all_settled_reaction(ctx: &mut JSContext, vm: &mut crate::runtime::vm::VM, reaction: &Reaction, argument: JSValue) {
+    let idx = reaction.handler.get_int() as usize;
     let target = reaction.target_promise;
     if !target.is_object() {
         return;

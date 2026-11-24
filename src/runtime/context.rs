@@ -303,6 +303,7 @@ pub struct JSContext {
     microtask_queue: MicrotaskQueue,
 
     current_module_specifier: Option<String>,
+    script_base_path: Option<String>,
     import_meta_object: Option<usize>,
 
     event_loop: EventLoop,
@@ -381,6 +382,7 @@ impl JSContext {
             pending_callback: None,
             microtask_queue: MicrotaskQueue::new(),
             current_module_specifier: None,
+            script_base_path: None,
             import_meta_object: None,
             event_loop: EventLoop::new(),
             running_event_loop: None,
@@ -908,6 +910,14 @@ impl JSContext {
 
     pub fn get_current_module(&self) -> Option<&str> {
         self.current_module_specifier.as_deref()
+    }
+
+    pub fn set_script_base_path(&mut self, path: Option<String>) {
+        self.script_base_path = path;
+    }
+
+    pub fn get_script_base_path(&self) -> Option<&str> {
+        self.script_base_path.as_deref()
     }
 
     pub fn get_symbol_registry_ptr(&self) -> Option<usize> {
