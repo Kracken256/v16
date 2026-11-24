@@ -1302,7 +1302,9 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                                     let exc = vm
                                         .last_caught_exception
                                         .take()
+                                        .or_else(|| ctx.pending_exception.take())
                                         .unwrap_or_else(JSValue::undefined);
+                                    ctx.pending_exception = None;
                                     let target = target_val.as_object_mut();
                                     reject_promise(ctx, target, exc);
                                 }

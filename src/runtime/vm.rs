@@ -7585,8 +7585,15 @@ impl VM {
                                     crate::builtins::symbol::get_symbol_async_iterator(ctx),
                                     obj,
                                 );
-                            }
-                            if iter_fn.is_none() {
+                                if iter_fn.as_ref().map_or(true, |v| {
+                                    v.is_undefined() || v.is_null()
+                                }) {
+                                    iter_fn = lookup(
+                                        crate::builtins::symbol::get_symbol_iterator(ctx),
+                                        obj,
+                                    );
+                                }
+                            } else if iter_fn.is_none() {
                                 iter_fn = lookup(
                                     crate::builtins::symbol::get_symbol_iterator(ctx),
                                     obj,
@@ -7673,6 +7680,22 @@ impl VM {
                     let send_val = self.get_reg(send_reg);
                     if let Err(e) =
                         self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), false)
+                    {
+                        if self.pending_throw.is_some() {
+                            continue;
+                        }
+                        return Err(e);
+                    }
+                }
+                Opcode::IteratorNextSendAwait => {
+                    let dst_val = self.read_u16_pc();
+                    let dst_done = self.read_u16_pc();
+                    let iter_reg = self.read_u16_pc();
+                    let send_reg = self.read_u16_pc();
+                    let iter_val = self.get_reg(iter_reg);
+                    let send_val = self.get_reg(send_reg);
+                    if let Err(e) =
+                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), true)
                     {
                         if self.pending_throw.is_some() {
                             continue;

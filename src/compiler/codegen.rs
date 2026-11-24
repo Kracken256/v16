@@ -198,6 +198,7 @@ pub struct CodeGenerator {
     pub(crate) is_eval: bool,
     is_arrow: bool,
     in_static_method: bool,
+    in_async_generator: bool,
     pending_label: Option<String>,
     all_var_names: Vec<(String, u16)>,
 }
@@ -261,6 +262,7 @@ impl CodeGenerator {
             is_eval: false,
             is_arrow: false,
             in_static_method: false,
+            in_async_generator: false,
             pending_label: None,
             all_var_names: Vec::new(),
         }
@@ -1367,6 +1369,7 @@ impl CodeGenerator {
             function_name,
             return_last_expr,
             false,
+            false,
         )
     }
 
@@ -1380,7 +1383,9 @@ impl CodeGenerator {
         function_name: Option<&str>,
         return_last_expr: bool,
         is_generator: bool,
+        is_async: bool,
     ) -> Result<(Bytecode, Vec<(u32, u16)>), String> {
+        self.in_async_generator = is_generator && is_async;
         let has_use_strict = Self::has_use_strict_directive(body);
         self.is_strict = self.is_strict || has_use_strict;
         let is_simple_params = params.iter().all(|p| matches!(p, Parameter::Identifier(_)));
@@ -4498,7 +4503,11 @@ impl CodeGenerator {
         };
 
         let iter_reg = self.alloc_register();
-        self.emit(Opcode::GetIterator);
+        if self.in_async_generator {
+            self.emit(Opcode::GetAsyncIterator);
+        } else {
+            self.emit(Opcode::GetIterator);
+        }
         self.emit_u16(iter_reg);
         self.emit_u16(iterable_reg);
         self.free_register(iterable_reg);
@@ -4509,7 +4518,11 @@ impl CodeGenerator {
         self.emit_u16(value_reg);
 
         let loop_start = self.code.len();
-        self.emit(Opcode::IteratorNextSend);
+        if self.in_async_generator {
+            self.emit(Opcode::IteratorNextSendAwait);
+        } else {
+            self.emit(Opcode::IteratorNextSend);
+        }
         self.emit_u16(value_reg);
         self.emit_u16(done_reg);
         self.emit_u16(iter_reg);
@@ -7313,6 +7326,7 @@ impl CodeGenerator {
                 name,
                 false,
                 is_generator,
+                is_async,
             )
             .map_err(|e| format!("nested function compile error: {}", e))?;
 
@@ -7558,6 +7572,7 @@ impl CodeGenerator {
                     None,
                     false,
                     m.generator,
+                    m.is_async,
                 )?;
                 instance_methods.push((
                     m.name.clone(),
@@ -7606,6 +7621,7 @@ impl CodeGenerator {
                     None,
                     false,
                     m.generator,
+                    m.is_async,
                 )?;
                 static_methods.push((
                     m.name.clone(),

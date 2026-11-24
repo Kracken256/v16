@@ -652,10 +652,17 @@ fn runner_main() {
         let mut test_error = String::new();
         let mut mode_labels = Vec::new();
 
+        let test_file_path = if test_dir_path.is_file() {
+            test_dir_path.to_path_buf()
+        } else {
+            Path::new(&test_dir).join(test_path.trim_start_matches('/'))
+        };
+
         for &force_strict in modes.iter() {
             let mut rt = JSRuntime::new();
             let mut ctx = rt.new_context();
             inject_test262_globals(&mut ctx);
+            ctx.set_script_base_path(Some(test_file_path.to_string_lossy().to_string()));
 
             let label = if modes.len() > 1 {
                 if force_strict { " (strict)" } else { " (non-strict)" }
