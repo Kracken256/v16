@@ -1611,7 +1611,7 @@ impl VM {
         }
     }
 
-    fn take_pending_exception(&mut self, ctx: &mut JSContext) -> Option<JSValue> {
+    pub fn take_pending_exception(&mut self, ctx: &mut JSContext) -> Option<JSValue> {
         let caught = self.last_caught_exception.take();
         let host = ctx.pending_exception.take();
         let pending = self.pending_throw.take();
