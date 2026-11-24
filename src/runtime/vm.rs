@@ -6223,19 +6223,27 @@ impl VM {
                     let src = self.read_u16_pc();
                     let dst_val = self.get_reg(dst);
                     let src_val = self.get_reg(src);
-                    if (dst_val.is_object() || dst_val.is_function())
-                        && (src_val.is_object() || src_val.is_function())
-                    {
-                        let keys: Vec<crate::runtime::atom::Atom> = {
-                            let src_obj = src_val.as_object();
-                            src_obj
-                                .own_properties_including_symbols()
-                                .into_iter()
-                                .map(|(atom, _)| atom)
-                                .collect()
-                        };
+                    if dst_val.is_object() || dst_val.is_function() {
+                        let keys = self.own_enumerable_keys_in_order(ctx, src_val);
                         for atom in keys {
-                            let value = self.get_prop_value(ctx, src_val, atom)?;
+                            let value = match self.get_copy_value(ctx, src_val, atom) {
+                                Ok(value) => value,
+                                Err(e) => {
+                                    let caught = self.last_caught_exception.take();
+                                    let host = ctx.pending_exception.take();
+                                    let exc = caught
+                                        .or(host)
+                                        .or_else(|| self.pending_throw.take());
+                                    if let Some(exc) = exc {
+                                        match self.dispatch_throw_value(ctx, exc) {
+                                            ThrowDispatch::Caught => continue,
+                                            ThrowDispatch::Uncaught(e) => return Err(e),
+                                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                        }
+                                    }
+                                    return Err(e);
+                                }
+                            };
                             let dst_obj = dst_val.as_object_mut();
                             dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
                         }
@@ -6248,9 +6256,7 @@ impl VM {
                     let dst_val = self.get_reg(dst);
                     let src_val = self.get_reg(src);
                     let keys_val = self.get_reg(keys_reg);
-                    if (dst_val.is_object() || dst_val.is_function())
-                        && (src_val.is_object() || src_val.is_function())
-                    {
+                    if dst_val.is_object() || dst_val.is_function() {
                         let mut excluded = std::collections::HashSet::new();
                         if keys_val.is_object() {
                             let keys_obj = keys_val.as_object();
@@ -6308,19 +6314,29 @@ impl VM {
                                 }
                             }
                         }
-                        let entries: Vec<crate::runtime::atom::Atom> = {
-                            let src_obj = src_val.as_object();
-                            src_obj
-                                .own_properties_including_symbols()
-                                .into_iter()
-                                .map(|(atom, _)| atom)
-                                .collect()
-                        };
+                        let entries = self.own_enumerable_keys_in_order(ctx, src_val);
                         for atom in entries {
                             if excluded.contains(&atom) {
                                 continue;
                             }
-                            let value = self.get_prop_value(ctx, src_val, atom)?;
+                            let value = match self.get_copy_value(ctx, src_val, atom) {
+                                Ok(value) => value,
+                                Err(e) => {
+                                    let caught = self.last_caught_exception.take();
+                                    let host = ctx.pending_exception.take();
+                                    let exc = caught
+                                        .or(host)
+                                        .or_else(|| self.pending_throw.take());
+                                    if let Some(exc) = exc {
+                                        match self.dispatch_throw_value(ctx, exc) {
+                                            ThrowDispatch::Caught => continue,
+                                            ThrowDispatch::Uncaught(e) => return Err(e),
+                                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                        }
+                                    }
+                                    return Err(e);
+                                }
+                            };
                             let dst_obj = dst_val.as_object_mut();
                             dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
                         }
@@ -8651,6 +8667,115 @@ impl VM {
 
     /// Reads a property, invoking accessor getters and propagating their
     /// exceptions through the pending-throw machinery.
+    fn property_key_index(name: &str) -> Option<u64> {
+        if name.is_empty() || (name.len() > 1 && name.starts_with('0')) {
+            return None;
+        }
+        let value: u64 = name.parse().ok()?;
+        if value < 4_294_967_295 && value.to_string() == name {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn own_enumerable_keys_in_order(
+        &mut self,
+        ctx: &mut JSContext,
+        src_val: JSValue,
+    ) -> Vec<crate::runtime::atom::Atom> {
+        let mut integer_keys: Vec<(u64, crate::runtime::atom::Atom)> = Vec::new();
+        let mut string_keys = Vec::new();
+        let mut symbol_keys = Vec::new();
+
+        if src_val.is_string() {
+            let text = ctx.get_atom_str(src_val.get_atom()).to_string();
+            for index in 0..text.chars().count() {
+                integer_keys.push((index as u64, ctx.int_atom_mut(index)));
+            }
+            return integer_keys.into_iter().map(|(_, atom)| atom).collect();
+        }
+
+        if !(src_val.is_object() || src_val.is_function()) {
+            return Vec::new();
+        }
+
+        let js_obj = unsafe { JSValue::object_from_ptr(src_val.get_ptr()) };
+        if js_obj.is_dense_array() {
+            let array = unsafe {
+                &*(src_val.get_ptr() as *const crate::object::array_obj::JSArrayObject)
+            };
+            for index in 0..array.elements.len() {
+                integer_keys.push((index as u64, ctx.int_atom_mut(index)));
+            }
+        }
+
+        let mut sequence = if js_obj.has_property_order() {
+            js_obj.property_order_keys()
+        } else {
+            Vec::new()
+        };
+        js_obj.for_each_property(|atom, _, _| {
+            if !sequence.contains(&atom) {
+                sequence.push(atom);
+            }
+        });
+        for (atom, _) in js_obj.accessor_keys() {
+            if !sequence.contains(&atom) {
+                sequence.push(atom);
+            }
+        }
+
+        for atom in sequence {
+            let Some(descriptor) = js_obj.get_own_descriptor(atom) else {
+                continue;
+            };
+            if !descriptor.enumerable {
+                continue;
+            }
+            if atom.0 & 0x40000000 != 0 {
+                if !symbol_keys.contains(&atom) {
+                    symbol_keys.push(atom);
+                }
+                continue;
+            }
+            let name = ctx.get_atom_str(atom);
+            if let Some(index) = VM::property_key_index(name) {
+                if !integer_keys.iter().any(|(i, _)| *i == index) {
+                    integer_keys.push((index, atom));
+                }
+            } else if !string_keys.contains(&atom) {
+                string_keys.push(atom);
+            }
+        }
+
+        integer_keys.sort_by_key(|(index, _)| *index);
+        let mut result: Vec<crate::runtime::atom::Atom> =
+            integer_keys.into_iter().map(|(_, atom)| atom).collect();
+        result.extend(string_keys);
+        result.extend(symbol_keys);
+        result
+    }
+
+    fn get_copy_value(
+        &mut self,
+        ctx: &mut JSContext,
+        src_val: JSValue,
+        atom: crate::runtime::atom::Atom,
+    ) -> Result<JSValue, String> {
+        if src_val.is_string() {
+            let name = ctx.get_atom_str(atom).to_string();
+            if let Ok(index) = name.parse::<usize>() {
+                let text = ctx.get_atom_str(src_val.get_atom()).to_string();
+                if let Some(ch) = text.chars().nth(index) {
+                    return Ok(JSValue::new_string(ctx.intern(&ch.to_string())));
+                }
+            }
+            return Ok(JSValue::undefined());
+        }
+        self.get_prop_value(ctx, src_val, atom)
+    }
+
     fn get_prop_value(
         &mut self,
         ctx: &mut JSContext,

@@ -6952,6 +6952,8 @@ impl CodeGenerator {
         value_reg: u16,
         ctx: &mut JSContext,
     ) -> Result<(), String> {
+        self.emit(Opcode::CheckObjectCoercible);
+        self.emit_u16(value_reg);
         let iter_reg = self.alloc_register();
         self.emit(Opcode::GetIterator);
         self.emit_u16(iter_reg);
@@ -7059,6 +7061,8 @@ impl CodeGenerator {
         value_reg: u16,
         ctx: &mut JSContext,
     ) -> Result<(), String> {
+        self.emit(Opcode::CheckObjectCoercible);
+        self.emit_u16(value_reg);
         let has_rest = obj
             .properties
             .iter()
