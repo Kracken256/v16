@@ -21,6 +21,26 @@ pub struct GeneratorState {
 
     pub func_ptr: Option<usize>,
 }
+
+pub struct AsyncState {
+    pub bytecode: Box<crate::compiler::opcode::Bytecode>,
+
+    pub snapshot: Vec<JSValue>,
+
+    pub pc: usize,
+
+    pub done: bool,
+
+    pub send_reg: Option<u16>,
+
+    pub saved_args: Vec<JSValue>,
+
+    pub func_ptr: Option<usize>,
+
+    pub handlers: Vec<crate::runtime::vm::ExceptionHandler>,
+
+    pub pending_throw: Option<JSValue>,
+}
 use std::ptr::NonNull;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -443,6 +463,8 @@ pub struct ObjectExtra {
 
     pub generator_state: Option<Box<GeneratorState>>,
 
+    pub async_state: Option<Box<AsyncState>>,
+
     pub mapped_args_frame_index: usize,
     pub mapped_args_param_count: u32,
 }
@@ -493,6 +515,7 @@ impl JSObject {
                 array_buffer_data: None,
                 typed_array_kind: None,
                 generator_state: None,
+                async_state: None,
                 mapped_args_frame_index: 0,
                 mapped_args_param_count: 0,
             })
@@ -731,6 +754,28 @@ impl JSObject {
     #[inline]
     pub fn take_generator_state(&mut self) -> Option<Box<GeneratorState>> {
         self.extra.as_mut().and_then(|e| e.generator_state.take())
+    }
+
+    #[inline]
+    pub fn get_async_state(&self) -> Option<&AsyncState> {
+        self.extra.as_ref().and_then(|e| e.async_state.as_deref())
+    }
+
+    #[inline]
+    pub fn get_async_state_mut(&mut self) -> Option<&mut AsyncState> {
+        self.extra
+            .as_mut()
+            .and_then(|e| e.async_state.as_deref_mut())
+    }
+
+    #[inline]
+    pub fn set_async_state(&mut self, state: AsyncState) {
+        self.ensure_extra().async_state = Some(Box::new(state));
+    }
+
+    #[inline]
+    pub fn take_async_state(&mut self) -> Option<Box<AsyncState>> {
+        self.extra.as_mut().and_then(|e| e.async_state.take())
     }
 
     #[inline]

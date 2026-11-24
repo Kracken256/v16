@@ -553,6 +553,15 @@ impl GcHeap {
                     self.mark_value(v);
                 }
             }
+
+            if let Some(state) = obj.get_async_state() {
+                for v in &state.snapshot {
+                    self.mark_value(v);
+                }
+                if let Some(exc) = &state.pending_throw {
+                    self.mark_value(exc);
+                }
+            }
         }
     }
 

@@ -94,12 +94,194 @@ pub enum ExecutionOutcome {
     Yield(JSValue),
 }
 
+pub enum AsyncStepResult {
+    Complete(JSValue, Vec<JSValue>, usize, Vec<ExceptionHandler>),
+    Suspended(JSValue, u16, Vec<JSValue>, usize, Vec<ExceptionHandler>),
+    Threw(JSValue),
+    Fatal(String),
+}
+
 enum ThrowDispatch {
     Caught,
 
     Uncaught(String),
 
     AsyncComplete(ExecutionOutcome),
+}
+
+pub fn start_async_call(
+    ctx: &mut JSContext,
+    js_func: &crate::object::function::JSFunction,
+    func_ptr: usize,
+    this_val: JSValue,
+    args: &[JSValue],
+) -> Result<JSValue, String> {
+    let rb = match js_func.bytecode {
+        Some(ref rb) => rb,
+        None => return Ok(JSValue::undefined()),
+    };
+    let this = if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null()) {
+        ctx.global()
+    } else {
+        this_val
+    };
+    let min_slots = 1 + args.len();
+    let snapshot_len = (rb.locals_count as usize).max(min_slots);
+    let mut snapshot = vec![JSValue::undefined(); snapshot_len];
+    snapshot[0] = this;
+    for (i, arg) in args.iter().enumerate() {
+        snapshot[i + 1] = *arg;
+    }
+
+    let promise = crate::builtins::promise::new_pending_promise(ctx);
+
+    let mut holder = crate::object::object::JSObject::new();
+    let promise_atom = ctx.intern("__v16_promise__");
+    holder.set(promise_atom, promise);
+    holder.set_async_state(crate::object::object::AsyncState {
+        bytecode: Box::new(rb.clone()),
+        snapshot,
+        pc: 0,
+        done: false,
+        send_reg: None,
+        saved_args: args.to_vec(),
+        func_ptr: Some(func_ptr),
+        handlers: Vec::new(),
+        pending_throw: None,
+    });
+    let holder_ptr = Box::into_raw(Box::new(holder)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(holder_ptr);
+    let holder_val = JSValue::new_object(holder_ptr);
+
+    let async_atom = ctx.intern("__v16_async__");
+    if promise.is_object() {
+        promise.as_object_mut().set(async_atom, holder_val);
+    }
+
+    ctx.runtime_mut().gc_heap_mut().extra_roots.push(holder_val);
+
+    drive_async_state(ctx, holder_val);
+
+    Ok(promise)
+}
+
+pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
+    if !holder_val.is_object() {
+        return;
+    }
+    let holder_ptr = holder_val.get_ptr();
+    let holder = unsafe { &mut *(holder_ptr as *mut crate::object::object::JSObject) };
+    let mut state = match holder.take_async_state() {
+        Some(s) => s,
+        None => return,
+    };
+    if state.done {
+        holder.set_async_state(*state);
+        return;
+    }
+
+    let mut step_vm = VM::new();
+    ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
+    let outcome = step_vm.execute_async_step(ctx, &state);
+    ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
+
+    let promise_atom = ctx.intern("__v16_promise__");
+    let awaiting_atom = ctx.intern("__v16_awaiting__");
+    let promise = holder.get(promise_atom).unwrap_or(JSValue::undefined());
+
+    let mut finished = false;
+    match outcome {
+        Ok(AsyncStepResult::Complete(value, snapshot, pc, handlers)) => {
+            state.snapshot = snapshot;
+            state.pc = pc;
+            state.handlers = handlers;
+            state.done = true;
+            holder.set(awaiting_atom, JSValue::null());
+            crate::builtins::promise::settle_async_result(ctx, promise, value, false);
+            finished = true;
+        }
+        Ok(AsyncStepResult::Suspended(p, src, snapshot, pc, handlers)) => {
+            state.snapshot = snapshot;
+            state.pc = pc;
+            state.handlers = handlers;
+            state.send_reg = Some(src);
+            state.pending_throw = None;
+            holder.set(awaiting_atom, p);
+            crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, false);
+            crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, true);
+        }
+        Ok(AsyncStepResult::Threw(value)) => {
+            state.done = true;
+            holder.set(awaiting_atom, JSValue::null());
+            crate::builtins::promise::settle_async_result(ctx, promise, value, true);
+            finished = true;
+        }
+        Ok(AsyncStepResult::Fatal(msg)) | Err(msg) => {
+            state.done = true;
+            holder.set(awaiting_atom, JSValue::null());
+            let err = make_async_error(ctx, &msg);
+            crate::builtins::promise::settle_async_result(ctx, promise, err, true);
+            finished = true;
+        }
+    }
+    holder.set_async_state(*state);
+
+    if finished {
+        let roots = &mut ctx.runtime_mut().gc_heap_mut().extra_roots;
+        let holder_bits = holder_val.raw_bits();
+        roots.retain(|v| v.raw_bits() != holder_bits);
+    }
+}
+
+pub fn resume_async_state(
+    ctx: &mut JSContext,
+    holder_val: JSValue,
+    argument: JSValue,
+    is_reject: bool,
+) {
+    if !holder_val.is_object() {
+        return;
+    }
+    let holder = unsafe { &mut *(holder_val.get_ptr() as *mut crate::object::object::JSObject) };
+    let mut state = match holder.take_async_state() {
+        Some(s) => s,
+        None => return,
+    };
+    if state.done {
+        holder.set_async_state(*state);
+        return;
+    }
+    if let Some(reg) = state.send_reg {
+        let idx = reg as usize;
+        if idx < state.snapshot.len() {
+            state.snapshot[idx] = if is_reject {
+                JSValue::undefined()
+            } else {
+                argument
+            };
+        }
+    }
+    state.pending_throw = if is_reject { Some(argument) } else { None };
+    holder.set_async_state(*state);
+    drive_async_state(ctx, holder_val);
+}
+
+fn make_async_error(ctx: &mut JSContext, msg: &str) -> JSValue {
+    let mut err = crate::object::object::JSObject::new();
+    err.set(
+        ctx.intern("name"),
+        JSValue::new_string(ctx.intern("Error")),
+    );
+    err.set(
+        ctx.intern("message"),
+        JSValue::new_string(ctx.intern(msg)),
+    );
+    if let Some(proto) = ctx.get_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
 }
 
 pub struct VM {
@@ -158,6 +340,12 @@ pub struct VM {
 
     pub pending_this: Option<JSValue>,
 
+    pub pending_handlers: Option<Vec<ExceptionHandler>>,
+
+    pub async_step: bool,
+
+    pub await_suspend: Option<(JSValue, u16)>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -205,6 +393,9 @@ impl VM {
             pending_saved_args: None,
             pending_function_ptr: None,
             pending_this: None,
+            pending_handlers: None,
+            async_step: false,
+            await_suspend: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -904,6 +1095,26 @@ impl VM {
                 let return_pc = self.pc;
                 let caller_base = self.cached_registers_base;
                 let uses_arguments = js_func.uses_arguments();
+
+                if js_func.is_async() && !js_func.is_generator() {
+                    let mut args_buf = [JSValue::undefined(); 16];
+                    let mut args_vec = Vec::new();
+                    let args: &[JSValue] = if argc as usize <= 16 {
+                        for (i, r) in arg_regs.iter().enumerate() {
+                            args_buf[i] = self.registers[caller_base + *r as usize];
+                        }
+                        &args_buf[..argc as usize]
+                    } else {
+                        args_vec.reserve(argc as usize);
+                        for r in arg_regs {
+                            args_vec.push(self.registers[caller_base + *r as usize]);
+                        }
+                        &args_vec
+                    };
+                    let promise = start_async_call(ctx, js_func, ptr, this_val, args)?;
+                    self.set_reg(dst, promise);
+                    return Ok(false);
+                }
 
                 if js_func.is_generator() {
                     let mut args_buf = [JSValue::undefined(); 16];
@@ -2013,6 +2224,10 @@ impl VM {
         }
 
         if let Some(ref rb) = js_func.bytecode {
+            if js_func.is_async() && !js_func.is_generator() {
+                let promise = start_async_call(ctx, js_func, ptr, this_value, args)?;
+                return Ok(promise);
+            }
             if js_func.is_generator() {
                 let snapshot_this = if !js_func.is_strict()
                     && (this_value.is_undefined() || this_value.is_null())
@@ -2526,7 +2741,7 @@ impl VM {
             };
 
             self.frame_index = 0;
-            self.exception_handlers.clear();
+            self.exception_handlers = self.pending_handlers.take().unwrap_or_default();
             self.frames[0].is_strict_frame = bytecode.is_strict;
         }
         self.pc = start_pc;
@@ -2646,6 +2861,15 @@ impl VM {
                 Opcode::Await => {
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
+                    if self.async_step {
+                        let promise = if crate::builtins::promise::is_promise(&val) {
+                            val
+                        } else {
+                            ctx.call_builtin("promise_resolve", &[val])
+                        };
+                        self.await_suspend = Some((promise, src));
+                        return Ok(ExecutionOutcome::Yield(JSValue::undefined()));
+                    }
                     if crate::builtins::promise::is_promise(&val) {
                         let ptr = val.get_ptr();
                         let promise_obj =
@@ -7726,6 +7950,73 @@ impl VM {
                         JSValue::undefined()
                     };
                     self.set_reg(dst, value);
+                }
+            }
+        }
+    }
+
+    pub fn execute_async_step(
+        &mut self,
+        ctx: &mut JSContext,
+        state: &crate::object::object::AsyncState,
+    ) -> Result<AsyncStepResult, String> {
+        self.ctx_ptr = ctx;
+        self.async_step = true;
+        self.await_suspend = None;
+        self.last_uncaught = None;
+        self.pending_saved_args = Some(state.saved_args.clone());
+        self.pending_function_ptr = state.func_ptr;
+        self.pending_this = state.snapshot.first().copied();
+        self.pending_handlers = Some(state.handlers.clone());
+
+        let needed = state.bytecode.locals_count as usize;
+        if needed > self.registers.len() {
+            self.registers.resize(needed, JSValue::undefined());
+        }
+        for (i, val) in state.snapshot.iter().enumerate() {
+            if i < self.registers.len() {
+                self.registers[i] = *val;
+            }
+        }
+        for i in state.snapshot.len()..needed {
+            if i < self.registers.len() {
+                self.registers[i] = JSValue::undefined();
+            }
+        }
+        if let Some(exc) = state.pending_throw.clone() {
+            self.pending_throw = Some(exc);
+        }
+
+        let result = self.execute_inner(ctx, &state.bytecode, true, state.pc, true);
+        self.async_step = false;
+
+        let snapshot = self.registers.clone();
+        let pc = self.pc;
+        let handlers = self.exception_handlers.clone();
+
+        match result {
+            Ok(ExecutionOutcome::Complete(val)) => {
+                Ok(AsyncStepResult::Complete(val, snapshot, pc, handlers))
+            }
+            Ok(ExecutionOutcome::Yield(_)) => match self.await_suspend.take() {
+                Some((promise, src)) => {
+                    Ok(AsyncStepResult::Suspended(promise, src, snapshot, pc, handlers))
+                }
+                None => Ok(AsyncStepResult::Complete(
+                    JSValue::undefined(),
+                    snapshot,
+                    pc,
+                    handlers,
+                )),
+            },
+            Err(e) => {
+                let uncaught = self
+                    .last_uncaught
+                    .take()
+                    .or_else(|| self.pending_throw.take());
+                match uncaught {
+                    Some(v) => Ok(AsyncStepResult::Threw(v)),
+                    None => Ok(AsyncStepResult::Fatal(e)),
                 }
             }
         }

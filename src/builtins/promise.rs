@@ -1206,6 +1206,18 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                     continue;
                 }
                 let handler = reaction.handler;
+                let is_async_pump = handler.is_string()
+                    && reaction.target_promise.is_object()
+                    && ctx.get_atom_str(handler.get_atom()) == ASYNC_PUMP_HANDLER;
+                if is_async_pump {
+                    crate::runtime::vm::resume_async_state(
+                        ctx,
+                        reaction.target_promise,
+                        argument,
+                        reaction.is_reject,
+                    );
+                    continue;
+                }
                 if handler.is_int() && reaction.target_promise.is_object() {
                     let target = reaction.target_promise.as_object_mut();
                     if target.is_promise() && get_promise_state(ctx, target) == PromiseState::Pending {
@@ -1308,8 +1320,75 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
     }
 }
 
-fn handle_all_settled_reaction(ctx: &mut JSContext, vm: &mut crate::runtime::vm::VM, reaction: &Reaction, argument: JSValue) {
-    let idx = reaction.handler.get_int() as usize;
+pub const ASYNC_PUMP_HANDLER: &str = "__v16_async_pump__";
+
+pub fn new_pending_promise(ctx: &mut JSContext) -> JSValue {
+    let promise = create_promise(ctx);
+    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
+pub fn schedule_async_resume(
+    ctx: &mut JSContext,
+    promise: JSValue,
+    holder: JSValue,
+    is_reject: bool,
+) {
+    if !promise.is_object() {
+        return;
+    }
+    let promise = promise.as_object_mut();
+    if !promise.is_promise() {
+        return;
+    }
+    let pump = JSValue::new_string(ctx.intern(ASYNC_PUMP_HANDLER));
+    let reactions_atom = intern_str(ctx, PROMISE_REACTIONS_SLOT);
+    let reaction = Reaction {
+        handler: pump,
+        is_reject,
+        is_all_settled: false,
+        is_finally: false,
+        target_promise: holder,
+    };
+    match get_promise_state(ctx, promise) {
+        PromiseState::Fulfilled => {
+            if !is_reject {
+                let result = get_promise_result(ctx, promise);
+                ctx.microtask_enqueue(Microtask::Reaction(reaction, result));
+            }
+        }
+        PromiseState::Rejected => {
+            if is_reject {
+                let reason = get_promise_result(ctx, promise);
+                ctx.microtask_enqueue(Microtask::Reaction(reaction, reason));
+            }
+        }
+        PromiseState::Pending => {
+            let mut reactions = get_promise_reactions(ctx, promise);
+            reactions.push(reaction);
+            let reactions_arr = create_reaction_array(ctx, reactions);
+            promise.set(reactions_atom, reactions_arr);
+        }
+    }
+}
+
+pub fn settle_async_result(ctx: &mut JSContext, promise: JSValue, value: JSValue, is_reject: bool) {
+    if !promise.is_object() {
+        return;
+    }
+    if is_reject {
+        let promise_obj = promise.as_object_mut();
+        if promise_obj.is_promise() && get_promise_state(ctx, promise_obj).is_pending() {
+            reject_promise(ctx, promise_obj, value);
+        }
+    } else {
+        let mut vm = crate::runtime::vm::VM::new();
+        resolve_promise_value(ctx, &mut vm, promise, value);
+    }
+}
+
+fn handle_all_settled_reaction(ctx: &mut JSContext, vm: &mut crate::runtime::vm::VM, reaction: &Reaction, argument: JSValue) {    let idx = reaction.handler.get_int() as usize;
     let target = reaction.target_promise;
     if !target.is_object() {
         return;
