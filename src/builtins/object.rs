@@ -1440,7 +1440,13 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
     result.set(length_atom, JSValue::new_int(symbols.len() as i64));
 
     for (i, sym) in symbols.iter().enumerate() {
-        result.set(ctx.int_atom_mut(i), *sym);
+        let symbol_id = sym.0 & 0x3FFFFFFF;
+        let description = ctx
+            .runtime()
+            .symbol_description(symbol_id)
+            .unwrap_or(crate::builtins::symbol::NO_DESCRIPTION);
+        let value = JSValue::new_symbol_with_id(description, symbol_id);
+        result.set(ctx.int_atom_mut(i), value);
     }
 
     let result_ptr = Box::into_raw(Box::new(result)) as usize;

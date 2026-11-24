@@ -1,4 +1,4 @@
-use super::atom::AtomTable;
+use super::atom::{Atom, AtomTable};
 use super::context::JSContext;
 use super::gc::GcHeap;
 use super::module::ModuleRegistry;
@@ -15,6 +15,7 @@ pub struct JSRuntime {
     module_registry: ModuleRegistry,
     next_symbol_id: u32,
     symbol_registry: Option<usize>,
+    symbol_descriptions: crate::util::FxHashMap<u32, Atom>,
 
     pub argv: Vec<String>,
 }
@@ -29,6 +30,7 @@ impl JSRuntime {
             module_registry: ModuleRegistry::new(),
             next_symbol_id: 1,
             symbol_registry: None,
+            symbol_descriptions: crate::util::FxHashMap::default(),
             argv: Vec::new(),
         }
     }
@@ -90,6 +92,14 @@ impl JSRuntime {
         let id = self.next_symbol_id;
         self.next_symbol_id += 1;
         id
+    }
+
+    pub fn register_symbol_description(&mut self, id: u32, description: Atom) {
+        self.symbol_descriptions.insert(id, description);
+    }
+
+    pub fn symbol_description(&self, id: u32) -> Option<Atom> {
+        self.symbol_descriptions.get(&id).copied()
     }
 
     pub fn symbol_registry(&self) -> Option<usize> {

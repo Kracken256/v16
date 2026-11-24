@@ -39,6 +39,7 @@ fn create_symbol(ctx: &mut JSContext, description: Option<Atom>) -> JSValue {
         ctx.mark_symbol_atom(desc);
     }
     let id = ctx.runtime_mut().next_symbol_id();
+    ctx.runtime_mut().register_symbol_description(id, desc);
     JSValue::new_symbol_with_id(desc, id)
 }
 

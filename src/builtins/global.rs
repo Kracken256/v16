@@ -1230,8 +1230,12 @@ fn reflect_own_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
     for atom in &symbol_keys {
-        let sym_id = atom.0 & 0x7FFFFFFF;
-        let sym = JSValue::new_symbol_with_id(crate::builtins::symbol::NO_DESCRIPTION, sym_id);
+        let sym_id = atom.0 & 0x3FFFFFFF;
+        let description = ctx
+            .runtime()
+            .symbol_description(sym_id)
+            .unwrap_or(crate::builtins::symbol::NO_DESCRIPTION);
+        let sym = JSValue::new_symbol_with_id(description, sym_id);
         result.set(ctx.int_atom_mut(idx), sym);
         idx += 1;
     }

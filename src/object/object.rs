@@ -2118,16 +2118,12 @@ impl JSObject {
         result
     }
 
-    pub fn symbol_keys(&self) -> Vec<JSValue> {
+    pub fn symbol_keys(&self) -> Vec<crate::runtime::atom::Atom> {
         let mut result = Vec::new();
         for i in 0..self.props.len() {
             let slot = self.props.get(i).expect("valid index");
             if slot.attrs != ATTR_DELETED && slot.atom.0 & 0x40000000 != 0 {
-                let symbol_id = slot.atom.0 & 0x3FFFFFFF;
-                result.push(JSValue::new_symbol_with_id(
-                    crate::runtime::atom::Atom(0),
-                    symbol_id,
-                ));
+                result.push(slot.atom);
             }
         }
         result
