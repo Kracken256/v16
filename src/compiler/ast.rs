@@ -92,6 +92,7 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub struct Identifier {
     pub name: String,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +273,8 @@ pub struct AssignmentExpression {
     pub op: AssignOp,
     pub left: AssignmentTarget,
     pub right: Box<Expression>,
+    pub parenthesized: bool,
+    pub lhs_parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]

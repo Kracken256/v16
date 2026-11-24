@@ -2537,6 +2537,7 @@ impl CodeGenerator {
             Expression::CallExpression(CallExpression {
                 callee: Box::new(Expression::Identifier(Identifier {
                     name: "__v16_import__".to_string(),
+                    parenthesized: false,
                 })),
                 arguments,
             })
@@ -5312,6 +5313,7 @@ impl CodeGenerator {
                 let template_object = Expression::CallExpression(CallExpression {
                     callee: Box::new(Expression::Identifier(Identifier {
                         name: "__v16_template_object__".to_string(),
+                        parenthesized: false,
                     })),
                     arguments: vec![
                         Argument::Expression(Expression::Literal(Literal::Number(
@@ -5484,6 +5486,7 @@ impl CodeGenerator {
                 let call = Expression::CallExpression(CallExpression {
                     callee: Box::new(Expression::Identifier(Identifier {
                         name: "__v16_import_meta__".to_string(),
+                        parenthesized: false,
                     })),
                     arguments: Vec::new(),
                 });
@@ -6578,6 +6581,11 @@ impl CodeGenerator {
                             self.emit(Opcode::GetGlobal);
                             self.emit_u16(tmp);
                             self.emit_u32(global_idx);
+                            if !self.suppress_ref_error {
+                                self.emit(Opcode::CheckRef);
+                                self.emit_u16(tmp);
+                                self.emit_u32(global_idx);
+                            }
                             tmp
                         }
                     };
@@ -6634,7 +6642,11 @@ impl CodeGenerator {
                         _ => unreachable!(),
                     };
 
-                    let rhs = self.gen_expression(&assign.right, ctx)?;
+                    let rhs = if assign.lhs_parenthesized {
+                        self.gen_expression(&assign.right, ctx)?
+                    } else {
+                        self.gen_expression_with_assign_name(&assign.right, name, ctx)?
+                    };
                     if current != rhs {
                         self.emit(Opcode::Move);
                         self.emit_u16(current);
@@ -6684,7 +6696,11 @@ impl CodeGenerator {
                     return Ok(current);
                 }
 
-                let val = self.gen_expression_with_assign_name(&assign.right, name, ctx)?;
+                let val = if assign.lhs_parenthesized {
+                    self.gen_expression(&assign.right, ctx)?
+                } else {
+                    self.gen_expression_with_assign_name(&assign.right, name, ctx)?
+                };
                 match self.resolve_var(name, ctx) {
                     Some(VarLocation::Local(slot)) => {
                         // Check TDZ for let/const variables on assignment
@@ -6794,10 +6810,15 @@ impl CodeGenerator {
                 }
             }
             AssignmentTarget::MemberExpression(member) => {
+                if matches!(
+                    assign.op,
+                    AssignOp::LogicalAndAssign
+                        | AssignOp::LogicalOrAssign
+                        | AssignOp::NullishAssign
+                ) {
+                    return self.gen_logical_member_assignment(member, assign, ctx);
+                }
                 let obj = self.gen_expression(&member.object, ctx)?;
-                let val = self.gen_expression(&assign.right, ctx)?;
-
-                let mut result_reg = val;
                 match &member.property {
                     MemberProperty::Identifier(name) => {
                         let atom = ctx.intern(name);
@@ -6913,6 +6934,141 @@ impl CodeGenerator {
                 Ok(val)
             }
         }
+    }
+
+    fn gen_logical_member_assignment(
+        &mut self,
+        member: &MemberExpression,
+        assign: &AssignmentExpression,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        let obj = self.gen_expression(&member.object, ctx)?;
+        let reference = match &member.property {
+            MemberProperty::Identifier(name) => {
+                self.emit(Opcode::CheckObjectCoercible);
+                self.emit_u16(obj);
+                DestructuringReference::Named {
+                    object: obj,
+                    atom: ctx.intern(name),
+                }
+            }
+            MemberProperty::Computed(expr) => {
+                let key = self.gen_expression(expr, ctx)?;
+                self.emit(Opcode::CheckObjectCoercible);
+                self.emit_u16(obj);
+                self.emit(Opcode::ToPropertyKey);
+                self.emit_u16(key);
+                DestructuringReference::Computed { object: obj, key }
+            }
+            MemberProperty::PrivateIdentifier(name) => {
+                self.emit(Opcode::CheckObjectCoercible);
+                self.emit_u16(obj);
+                let key_idx = self.intern_and_add_const(ctx, name);
+                let key = self.alloc_register();
+                self.emit(Opcode::LoadConst);
+                self.emit_u16(key);
+                self.emit_u32(key_idx);
+                DestructuringReference::Private { object: obj, key }
+            }
+        };
+
+        let old = self.alloc_register();
+        match &reference {
+            DestructuringReference::Named { object, atom } => {
+                self.emit(Opcode::GetNamedProp);
+                self.emit_u16(old);
+                self.emit_u16(*object);
+                self.emit_u32(atom.0);
+            }
+            DestructuringReference::Computed { object, key } => {
+                self.emit(Opcode::GetField);
+                self.emit_u16(old);
+                self.emit_u16(*object);
+                self.emit_u16(*key);
+            }
+            DestructuringReference::Private { object, key } => {
+                self.emit(Opcode::GetPrivate);
+                self.emit_u16(old);
+                self.emit_u16(*object);
+                self.emit_u16(*key);
+            }
+            DestructuringReference::Identifier { .. } => {}
+        }
+
+        let mut assign_jumps = Vec::new();
+        match assign.op {
+            AssignOp::LogicalAndAssign => {
+                self.emit(Opcode::JumpIf);
+                self.emit_u16(old);
+                assign_jumps.push(self.code.len());
+                self.emit_i32(0);
+            }
+            AssignOp::LogicalOrAssign => {
+                self.emit(Opcode::JumpIfNot);
+                self.emit_u16(old);
+                assign_jumps.push(self.code.len());
+                self.emit_i32(0);
+            }
+            AssignOp::NullishAssign => {
+                let null_reg = self.alloc_register();
+                self.emit(Opcode::LoadNull);
+                self.emit_u16(null_reg);
+                let cmp_reg = self.alloc_register();
+                self.emit(Opcode::StrictEq);
+                self.emit_u16(cmp_reg);
+                self.emit_u16(old);
+                self.emit_u16(null_reg);
+                self.emit(Opcode::JumpIf);
+                self.emit_u16(cmp_reg);
+                assign_jumps.push(self.code.len());
+                self.emit_i32(0);
+                let undef_reg = self.alloc_register();
+                self.emit(Opcode::LoadUndefined);
+                self.emit_u16(undef_reg);
+                self.emit(Opcode::StrictEq);
+                self.emit_u16(cmp_reg);
+                self.emit_u16(old);
+                self.emit_u16(undef_reg);
+                self.emit(Opcode::JumpIf);
+                self.emit_u16(cmp_reg);
+                assign_jumps.push(self.code.len());
+                self.emit_i32(0);
+                self.free_register(undef_reg);
+                self.free_register(cmp_reg);
+                self.free_register(null_reg);
+            }
+            _ => {}
+        }
+
+        self.emit(Opcode::Jump);
+        let skip_patch = self.code.len();
+        self.emit_i32(0);
+
+        let assign_pos = self.code.len();
+        for patch in assign_jumps {
+            self.patch_jump(patch, assign_pos);
+        }
+
+        let rhs = self.gen_expression(&assign.right, ctx)?;
+        self.gen_store_destructuring_reference(reference, rhs, ctx)?;
+        let result = self.alloc_register();
+        self.emit(Opcode::Move);
+        self.emit_u16(result);
+        self.emit_u16(rhs);
+        self.free_register(rhs);
+        self.emit(Opcode::Jump);
+        let done_patch = self.code.len();
+        self.emit_i32(0);
+
+        let old_pos = self.code.len();
+        self.patch_jump(skip_patch, old_pos);
+        self.emit(Opcode::Move);
+        self.emit_u16(result);
+        self.emit_u16(old);
+        let done_pos = self.code.len();
+        self.patch_jump(done_patch, done_pos);
+        self.free_register(old);
+        Ok(result)
     }
 
     fn gen_destructuring_reference(
@@ -8519,6 +8675,8 @@ impl CodeGenerator {
                             computed,
                         }),
                         right: Box::new(value),
+                        parenthesized: false,
+                        lhs_parenthesized: false,
                     }),
                 }))
             })
@@ -8606,6 +8764,7 @@ impl CodeGenerator {
                         callee: Box::new(Expression::Super),
                         arguments: vec![Argument::Spread(Expression::Identifier(Identifier {
                             name: "arguments".to_string(),
+                            parenthesized: false,
                         }))],
                     }),
                 });

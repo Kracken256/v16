@@ -1714,11 +1714,17 @@ impl Parser {
             if self.at_punct(op_str) {
                 self.advance();
                 let right = self.parse_assignment_expression()?;
+                let lhs_parenthesized = matches!(
+                    &expr,
+                    Expression::Identifier(id) if id.parenthesized
+                );
                 let left = expr_to_target(expr)?;
                 return Ok(Expression::AssignmentExpression(AssignmentExpression {
                     op: op.clone(),
                     left,
                     right: Box::new(right),
+                    parenthesized: false,
+                    lhs_parenthesized,
                 }));
             }
         }
@@ -2288,8 +2294,11 @@ impl Parser {
             self.advance();
             let mut expr = self.with_allow_in(Self::parse_expression)?;
             self.expect(")")?;
-            if let Expression::YieldExpression(y) = &mut expr {
-                y.parenthesized = true;
+            match &mut expr {
+                Expression::YieldExpression(y) => y.parenthesized = true,
+                Expression::AssignmentExpression(a) => a.parenthesized = true,
+                Expression::Identifier(id) => id.parenthesized = true,
+                _ => {}
             }
             return Ok(expr);
         }
@@ -2322,6 +2331,7 @@ impl Parser {
                     return Ok(Expression::CallExpression(CallExpression {
                         callee: Box::new(Expression::Identifier(Identifier {
                             name: "import".to_string(),
+                            parenthesized: false,
                         })),
                         arguments: vec![Argument::Expression(arg)],
                     }));
@@ -2348,6 +2358,7 @@ impl Parser {
                 return Ok(Expression::CallExpression(CallExpression {
                     callee: Box::new(Expression::Identifier(Identifier {
                         name: "import".to_string(),
+                        parenthesized: false,
                     })),
                     arguments,
                 }));
@@ -2401,18 +2412,21 @@ impl Parser {
             self.advance();
             return Ok(Expression::Identifier(Identifier {
                 name: "undefined".to_string(),
+                parenthesized: false,
             }));
         }
         if self.cur_type() == Some(TokenType::Identifier) && self.cur_value() == "NaN" {
             self.advance();
             return Ok(Expression::Identifier(Identifier {
                 name: "NaN".to_string(),
+                parenthesized: false,
             }));
         }
         if self.cur_type() == Some(TokenType::Identifier) && self.cur_value() == "Infinity" {
             self.advance();
             return Ok(Expression::Identifier(Identifier {
                 name: "Infinity".to_string(),
+                parenthesized: false,
             }));
         }
         if self.at_keyword("this") {
@@ -2459,7 +2473,7 @@ impl Parser {
         if self.at_keyword("yield") && !self.in_generator {
             let name = self.cur_value().to_string();
             self.advance();
-            return Ok(Expression::Identifier(Identifier { name }));
+            return Ok(Expression::Identifier(Identifier { name, parenthesized: false }));
         }
 
         if self.at_keyword("yield") {
@@ -2511,7 +2525,7 @@ impl Parser {
                         return Err(self.error(&format!("Unexpected reserved word '{}'", name)));
                     }
                     self.advance();
-                    return Ok(Expression::Identifier(Identifier { name }));
+                    return Ok(Expression::Identifier(Identifier { name, parenthesized: false }));
                 }
             }
         }
@@ -2763,7 +2777,7 @@ impl Parser {
                 };
                 properties.push(Property::Property {
                     key,
-                    value: Box::new(Expression::Identifier(Identifier { name })),
+                    value: Box::new(Expression::Identifier(Identifier { name, parenthesized: false })),
                     computed: false,
                     shorthand: true,
                     method: false,
@@ -2781,6 +2795,8 @@ impl Parser {
                     op: AssignOp::Assign,
                     left: AssignmentTarget::Identifier(name),
                     right: Box::new(default),
+                    parenthesized: false,
+                    lhs_parenthesized: false,
                 });
                 properties.push(Property::Property {
                     key,
@@ -3140,6 +3156,9 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
             }))
         }
         Expression::AssignmentExpression(a) => {
+            if a.parenthesized {
+                return Err("SyntaxError: invalid assignment target".to_string());
+            }
             Ok(AssignmentTarget::AssignmentPattern(AssignmentPattern {
                 left: Box::new(a.left),
                 right: a.right,
