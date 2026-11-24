@@ -119,8 +119,9 @@ fn typed_array_from_args(
         if obj.obj_type() == ObjectType::TypedArray {
             let src_len = obj
                 .get(ctx.intern("length"))
-                .map(|v| v.get_int() as usize)
-                .unwrap_or(0);
+                .map(|v| crate::builtins::string::js_to_length(&v) as usize)
+                .unwrap_or(0)
+                .min((1usize << 29) / kind.bytes_per_element());
 
             let bytes_per_element = kind.bytes_per_element();
             let buffer = create_array_buffer(ctx, src_len * bytes_per_element);
@@ -130,8 +131,9 @@ fn typed_array_from_args(
         }
 
         let len = obj.get(ctx.common_atoms.length)
-            .map(|v| v.get_int() as usize)
-            .unwrap_or(0);
+            .map(|v| crate::builtins::string::js_to_length(&v) as usize)
+            .unwrap_or(0)
+            .min((1usize << 29) / kind.bytes_per_element());
 
         let bytes_per_element = kind.bytes_per_element();
         let buffer = create_array_buffer(ctx, len * bytes_per_element);
@@ -160,7 +162,17 @@ fn typed_array_from_args(
     }
 
     if first_arg.is_int() || first_arg.is_float() {
-        let length = first_arg.get_int() as usize;
+        let n = match crate::builtins::global::js_to_number_value(ctx, first_arg) {
+            Ok(n) => n,
+            Err(()) => return Ok(JSValue::undefined()),
+        };
+        let i = if n.is_nan() { 0.0 } else { n.trunc() };
+        let max_len = (1usize << 29) / kind.bytes_per_element();
+        if i < 0.0 || i > max_len as f64 {
+            array_buffer_range_error(ctx, "Invalid typed array length");
+            return Ok(JSValue::undefined());
+        }
+        let length = i as usize;
         let bytes_per_element = kind.bytes_per_element();
         let buffer = create_array_buffer(ctx, length * bytes_per_element);
         return create_typed_array(ctx, kind, buffer, 0, Some(length));
