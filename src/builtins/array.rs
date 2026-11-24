@@ -1240,6 +1240,37 @@ fn array_is_array(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 }
 
+fn get_property_with_getter(
+    ctx: &mut JSContext,
+    obj_val: JSValue,
+    prop: crate::runtime::atom::Atom,
+) -> Result<JSValue, String> {
+    if obj_val.is_object_like() {
+        let mut current = Some(obj_val.get_ptr() as *mut JSObject);
+        let mut depth = 0u32;
+        while let Some(ptr) = current {
+            let obj = unsafe { &*ptr };
+            if let Some(entry) = obj.get_own_accessor_entry(prop) {
+                if let Some(getter) = entry.get {
+                    if getter.is_function() {
+                        return call_callback_with_this(ctx, getter, obj_val, &[]);
+                    }
+                }
+                return Ok(JSValue::undefined());
+            }
+            if let Some(v) = obj.get_own(prop) {
+                return Ok(v);
+            }
+            current = obj.prototype;
+            depth += 1;
+            if depth > 1000 {
+                break;
+            }
+        }
+    }
+    Ok(JSValue::undefined())
+}
+
 fn array_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let ctor = args.first().copied().unwrap_or(JSValue::undefined());
     let source = args.get(1).copied().unwrap_or(JSValue::undefined());
@@ -1268,61 +1299,74 @@ fn array_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let obj = source.as_object();
 
     let sym_iter_atom = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
-    if let Some(iter_val) = obj.get(sym_iter_atom) {
-        if iter_val.is_function() {
-            match call_callback_with_this(ctx, iter_val, source, &[]) {
-                Ok(iterator) => {
-                    if iterator.is_object_like() {
-                        let iter_obj = iterator.as_object();
-                        let next_fn = iter_obj.get(ctx.intern("next"));
-                        if let Some(next_val) = next_fn {
-                            if next_val.is_function() {
-                                loop {
-                                    match call_callback_with_this(ctx, next_val, iterator, &[]) {
-                                        Ok(result) => {
-                                            if result.is_object_like() {
-                                                let robj = result.as_object();
-                                                let done = robj
-                                                    .get(ctx.intern("done"))
-                                                    .map(|v| v.is_truthy())
-                                                    .unwrap_or(false);
-                                                if done {
-                                                    break;
-                                                }
-                                                let value = robj
-                                                    .get(ctx.intern("value"))
-                                                    .unwrap_or(JSValue::undefined());
-                                                if let Some(mf) = map_fn {
-                                                    let mapped = call_callback_with_this(
-                                                        ctx,
-                                                        mf,
-                                                        map_fn_this,
-                                                        &[
-                                                            value,
-                                                            JSValue::new_int(items.len() as i64),
-                                                        ],
-                                                    );
-                                                    match mapped {
-                                                        Ok(v) => items.push(v),
-                                                        Err(_) => return JSValue::undefined(),
-                                                    }
-                                                } else {
-                                                    items.push(value);
-                                                }
-                                            } else {
-                                                break;
-                                            }
+    let iter_val = match get_property_with_getter(ctx, source, sym_iter_atom) {
+        Ok(v) => v,
+        Err(_) => return JSValue::undefined(),
+    };
+    if iter_val.is_function() {
+        match call_callback_with_this(ctx, iter_val, source, &[]) {
+            Ok(iterator) => {
+                if iterator.is_object_like() {
+                    let next_atom = ctx.intern("next");
+                    let next_val = match get_property_with_getter(ctx, iterator, next_atom) {
+                        Ok(v) => v,
+                        Err(_) => return JSValue::undefined(),
+                    };
+                    if next_val.is_function() {
+                        let done_atom = ctx.intern("done");
+                        let value_atom = ctx.intern("value");
+                        loop {
+                            match call_callback_with_this(ctx, next_val, iterator, &[]) {
+                                Ok(result) => {
+                                    if result.is_object_like() {
+                                        let done = match get_property_with_getter(
+                                            ctx,
+                                            result,
+                                            done_atom,
+                                        ) {
+                                            Ok(v) => v.is_truthy(),
+                                            Err(_) => return JSValue::undefined(),
+                                        };
+                                        if done {
+                                            break;
                                         }
-                                        Err(_) => return JSValue::undefined(),
+                                        let value = match get_property_with_getter(
+                                            ctx,
+                                            result,
+                                            value_atom,
+                                        ) {
+                                            Ok(v) => v,
+                                            Err(_) => return JSValue::undefined(),
+                                        };
+                                        if let Some(mf) = map_fn {
+                                            let mapped = call_callback_with_this(
+                                                ctx,
+                                                mf,
+                                                map_fn_this,
+                                                &[
+                                                    value,
+                                                    JSValue::new_int(items.len() as i64),
+                                                ],
+                                            );
+                                            match mapped {
+                                                Ok(v) => items.push(v),
+                                                Err(_) => return JSValue::undefined(),
+                                            }
+                                        } else {
+                                            items.push(value);
+                                        }
+                                    } else {
+                                        break;
                                     }
                                 }
+                                Err(_) => return JSValue::undefined(),
                             }
                         }
                     }
-                    return create_array_obj_from_ctor_iter(ctx, ctor, &items);
                 }
-                Err(_) => return JSValue::undefined(),
+                return create_array_obj_from_ctor_iter(ctx, ctor, &items);
             }
+            Err(_) => return JSValue::undefined(),
         }
     }
 
