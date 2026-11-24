@@ -521,12 +521,10 @@ fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return promise::create_rejected_promise(ctx, err_msg);
     }
 
-    let specifier = if args[0].is_string() {
-        ctx.get_atom_str(args[0].get_atom()).to_string()
-    } else {
-        let err_msg = JSValue::new_string(ctx.intern("Error: import requires a string specifier"));
-        return promise::create_rejected_promise(ctx, err_msg);
-    };
+    let specifier = to_property_key_string(ctx, &args[0]);
+    if let Some(exc) = ctx.pending_exception.take() {
+        return promise::create_rejected_promise(ctx, exc);
+    }
 
     match crate::runtime::module::load_and_evaluate_module(ctx, &specifier) {
         Ok(ns_ptr) => {

@@ -1180,7 +1180,9 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             Ok(())
         }
         Expression::CallExpression(c) => {
-            validate_expression(&c.callee, ctx)?;
+            if !is_import_call(expr) {
+                validate_expression(&c.callee, ctx)?;
+            }
             for a in &c.arguments {
                 validate_argument(a, ctx)?;
             }
