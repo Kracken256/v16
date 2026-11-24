@@ -157,6 +157,7 @@ pub enum Opcode {
     DefineGlobal = 194,
     DeleteGlobal = 195,
     ThrowReferenceError = 196,
+    ThrowConstAssignment = 221,
     SetGlobalVar = 197,
     InitGlobalVar = 198,
     IteratorNextSend = 202,
@@ -337,6 +338,7 @@ impl Opcode {
             194 => Some(Opcode::DefineGlobal),
             195 => Some(Opcode::DeleteGlobal),
             196 => Some(Opcode::ThrowReferenceError),
+            221 => Some(Opcode::ThrowConstAssignment),
             197 => Some(Opcode::SetGlobalVar),
             198 => Some(Opcode::InitGlobalVar),
             158 => Some(Opcode::LtJumpIfNot),
@@ -480,6 +482,7 @@ impl Opcode {
             Opcode::DefineGlobal => 7,
             Opcode::DeleteGlobal => 7,
             Opcode::ThrowReferenceError => 5,
+            Opcode::ThrowConstAssignment => 5,
             Opcode::SetGlobalVar => 7,
             Opcode::InitGlobalVar => 7,
             Opcode::NewFunction => 1,
@@ -1130,7 +1133,7 @@ impl Bytecode {
                     let idx = read_u32(3);
                     write!(operands, " r{}, {}", dst, idx).unwrap();
                 }
-                Opcode::ThrowReferenceError => {
+                Opcode::ThrowReferenceError | Opcode::ThrowConstAssignment => {
                     let idx = read_u32(1);
                     write!(operands, " const[{}]", idx).unwrap();
                 }

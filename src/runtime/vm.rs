@@ -4604,6 +4604,29 @@ impl VM {
                     }
                     self.set_reg(dst, JSValue::bool(result));
                 }
+                Opcode::ThrowConstAssignment => {
+                    let msg_idx = self.read_u32() as usize;
+                    let msg_const = if msg_idx < self.frames[self.frame_index].constants_len {
+                        unsafe { *self.cached_const_ptr.add(msg_idx) }
+                    } else {
+                        JSValue::undefined()
+                    };
+                    let name = if msg_const.is_string() {
+                        ctx.get_atom_str(msg_const.get_atom()).to_string()
+                    } else {
+                        String::new()
+                    };
+                    let msg = format!("Assignment to constant variable '{}'", name);
+                    self.set_pending_type_error(ctx, &msg);
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                    continue;
+                }
                 Opcode::ThrowReferenceError => {
                     let msg_idx = self.read_u32() as usize;
                     let msg_const = if msg_idx < self.frames[self.frame_index].constants_len {

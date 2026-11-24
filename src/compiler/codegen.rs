@@ -654,6 +654,30 @@ impl CodeGenerator {
         self.add_constant(JSValue::new_string(atom))
     }
 
+    fn emit_throw_const_assignment(&mut self, name: &str, ctx: &mut JSContext) {
+        let idx = self.intern_and_add_const(ctx, name);
+        self.emit(Opcode::ThrowConstAssignment);
+        self.emit_u32(idx);
+    }
+
+    fn binding_is_const(&self, name: &str) -> bool {
+        if let Some(entry) = self.lookup_var(name) {
+            return entry.kind == VariableKind::Const;
+        }
+        self.parent_vars
+            .get(name)
+            .map_or(false, |parent| parent.kind == VariableKind::Const)
+    }
+
+    fn binding_needs_tdz_check(&self, name: &str) -> bool {
+        if let Some(entry) = self.lookup_var(name) {
+            return entry.kind != VariableKind::Var && !entry.initialized;
+        }
+        self.parent_vars.get(name).map_or(false, |parent| {
+            !parent.is_inherited && parent.kind != VariableKind::Var && !parent.initialized
+        })
+    }
+
     fn emit_embedded_function(
         &mut self,
         bytecode: &Bytecode,
@@ -5968,13 +5992,12 @@ impl CodeGenerator {
     ) -> Result<u16, String> {
         match &*update.argument {
             Expression::Identifier(id) => {
-                if let Some(entry) = self.lookup_var(&id.name) {
-                    if entry.kind == VariableKind::Const {
-                        return Err(format!(
-                            "TypeError: Assignment to constant variable '{}'",
-                            id.name
-                        ));
-                    }
+                if self.binding_is_const(&id.name) {
+                    self.emit_throw_const_assignment(&id.name, ctx);
+                    let dst = self.alloc_register();
+                    self.emit(Opcode::LoadUndefined);
+                    self.emit_u16(dst);
+                    return Ok(dst);
                 }
                 let with_target = if bypass_with_target || self.with_scopes.is_empty() {
                     false
@@ -6289,13 +6312,10 @@ impl CodeGenerator {
                         name
                     ));
                 }
-                if let Some(entry) = self.lookup_var(name) {
-                    if entry.kind == VariableKind::Const {
-                        return Err(format!(
-                            "TypeError: Assignment to constant variable '{}'",
-                            name
-                        ));
-                    }
+                if self.binding_is_const(name) {
+                    let val = self.gen_expression_with_assign_name(&assign.right, name, ctx)?;
+                    self.emit_throw_const_assignment(name, ctx);
+                    return Ok(val);
                 }
 
                 let with_target = if bypass_with_target || self.with_scopes.is_empty() {
@@ -6810,35 +6830,54 @@ impl CodeGenerator {
         ctx: &mut JSContext,
     ) -> Result<(), String> {
         match target {
-            AssignmentTarget::Identifier(name) => match self.resolve_var(name, ctx) {
-                Some(VarLocation::Local(slot)) => {
-                    if slot != value_reg {
-                        self.emit(Opcode::Move);
+            AssignmentTarget::Identifier(name) => {
+                if self.binding_is_const(name) {
+                    self.emit_throw_const_assignment(name, ctx);
+                    return Ok(());
+                }
+                match self.resolve_var(name, ctx) {
+                    Some(VarLocation::Local(slot)) => {
+                        if self.binding_needs_tdz_check(name) {
+                            self.emit(Opcode::CheckTdz);
+                            self.emit_u16(slot);
+                        }
+                        if slot != value_reg {
+                            self.emit(Opcode::Move);
+                            self.emit_u16(slot);
+                            self.emit_u16(value_reg);
+                        }
+                        if self.is_global_var(name) {
+                            let global_idx = self.intern_and_add_const(ctx, name);
+                            self.emit(Opcode::SetGlobal);
+                            self.emit_u32(global_idx);
+                            self.emit_u16(slot);
+                        }
+                        Ok(())
+                    }
+                    Some(VarLocation::Upvalue(slot)) => {
+                        if self.binding_needs_tdz_check(name) {
+                            let tmp = self.alloc_register();
+                            self.emit(Opcode::GetUpvalue);
+                            self.emit_u16(tmp);
+                            self.emit_u16(slot);
+                            self.emit(Opcode::CheckTdz);
+                            self.emit_u16(tmp);
+                            self.free_register(tmp);
+                        }
+                        self.emit(Opcode::SetUpvalue);
                         self.emit_u16(slot);
                         self.emit_u16(value_reg);
+                        Ok(())
                     }
-                    if self.is_global_var(name) {
+                    None => {
                         let global_idx = self.intern_and_add_const(ctx, name);
                         self.emit(Opcode::SetGlobal);
                         self.emit_u32(global_idx);
-                        self.emit_u16(slot);
+                        self.emit_u16(value_reg);
+                        Ok(())
                     }
-                    Ok(())
                 }
-                Some(VarLocation::Upvalue(slot)) => {
-                    self.emit(Opcode::SetUpvalue);
-                    self.emit_u16(slot);
-                    self.emit_u16(value_reg);
-                    Ok(())
-                }
-                None => {
-                    let global_idx = self.intern_and_add_const(ctx, name);
-                    self.emit(Opcode::SetGlobal);
-                    self.emit_u32(global_idx);
-                    self.emit_u16(value_reg);
-                    Ok(())
-                }
-            },
+            }
             AssignmentTarget::MemberExpression(member) => {
                 let obj = self.gen_expression(&member.object, ctx)?;
                 match &member.property {
