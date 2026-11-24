@@ -3937,7 +3937,11 @@ impl CodeGenerator {
 
         let iterable_reg = self.gen_expression(&stmt.right, ctx)?;
         let iter_reg = self.alloc_register();
-        self.emit(Opcode::GetIterator);
+        if stmt.is_await {
+            self.emit(Opcode::GetAsyncIterator);
+        } else {
+            self.emit(Opcode::GetIterator);
+        }
         self.emit_u16(iter_reg);
         self.emit_u16(iterable_reg);
         self.free_register(iterable_reg);
@@ -3946,7 +3950,11 @@ impl CodeGenerator {
 
         let val_reg = self.alloc_register();
         let done_reg = self.alloc_register();
-        self.emit(Opcode::IteratorNext);
+        if stmt.is_await {
+            self.emit(Opcode::IteratorNextAwait);
+        } else {
+            self.emit(Opcode::IteratorNext);
+        }
         self.emit_u16(val_reg);
         self.emit_u16(done_reg);
         self.emit_u16(iter_reg);

@@ -148,6 +148,8 @@ pub enum Opcode {
     InitGlobalVar = 198,
     IteratorNextSend = 202,
     IteratorClose = 203,
+    GetAsyncIterator = 204,
+    IteratorNextAwait = 205,
 
     LtJumpIfNot = 158,
     LtJumpIf = 159,
@@ -275,6 +277,8 @@ impl Opcode {
             151 => Some(Opcode::IteratorNext),
             202 => Some(Opcode::IteratorNextSend),
             203 => Some(Opcode::IteratorClose),
+            204 => Some(Opcode::GetAsyncIterator),
+            205 => Some(Opcode::IteratorNextAwait),
             152 => Some(Opcode::GetArguments),
             153 => Some(Opcode::GetCurrentFunction),
             154 => Some(Opcode::CallCurrent),
@@ -461,6 +465,8 @@ impl Opcode {
             Opcode::IteratorNext => 7,
             Opcode::IteratorNextSend => 9,
             Opcode::IteratorClose => 3,
+            Opcode::GetAsyncIterator => 5,
+            Opcode::IteratorNextAwait => 7,
         }
     }
 }
@@ -1062,6 +1068,17 @@ impl Bytecode {
                 Opcode::IteratorClose => {
                     let iter = read_u16(1);
                     write!(operands, " r{}", iter).unwrap();
+                }
+                Opcode::GetAsyncIterator => {
+                    let dst = read_u16(1);
+                    let src = read_u16(3);
+                    write!(operands, " r{}, r{}", dst, src).unwrap();
+                }
+                Opcode::IteratorNextAwait => {
+                    let dst_val = read_u16(1);
+                    let dst_done = read_u16(3);
+                    let iter = read_u16(5);
+                    write!(operands, " r{}, r{}, r{}", dst_val, dst_done, iter).unwrap();
                 }
             }
             writeln!(out, "{:04}  {:?}{}", pc, op, operands).unwrap();
