@@ -13,6 +13,7 @@ pub struct Parser {
     saved_line: u32,
     saved_col: u32,
     allow_in: bool,
+    in_generator: bool,
 }
 
 impl Parser {
@@ -31,6 +32,7 @@ impl Parser {
             saved_line,
             saved_col,
             allow_in: true,
+            in_generator: false,
         }
     }
 
@@ -432,6 +434,29 @@ impl Parser {
         ) && !matches!(self.cur_value(), "true" | "false" | "null")
     }
 
+    fn token_starts_assignment_expression(&self) -> bool {
+        let Some(token) = self.current.as_ref() else {
+            return false;
+        };
+        match token.token_type {
+            TokenType::Identifier
+            | TokenType::Number
+            | TokenType::BigInt
+            | TokenType::String
+            | TokenType::Regex
+            | TokenType::NoSubstitutionTemplate
+            | TokenType::TemplateHead => true,
+            TokenType::Keyword => !matches!(
+                token.value.as_str(),
+                "in" | "instanceof" | "else" | "case" | "default" | "catch" | "finally"
+            ),
+            TokenType::Punctuator => {
+                matches!(token.value.as_str(), "(" | "[" | "{" | "+" | "-" | "!" | "~" | "++" | "--")
+            }
+            _ => false,
+        }
+    }
+
     fn has_invalid_identifier_escape(&self) -> bool {
         let Some(token) = self.current.as_ref() else {
             return false;
@@ -468,7 +493,7 @@ impl Parser {
         self.expect("(")?;
         let params = self.parse_parameter_list()?;
         self.expect(")")?;
-        let body = self.parse_block_body()?;
+        let body = self.parse_function_body(generator)?;
         Ok(ASTNode::FunctionDeclaration(FunctionDeclaration {
             name,
             params,
@@ -500,7 +525,7 @@ impl Parser {
         self.expect("(")?;
         let params = self.parse_parameter_list()?;
         self.expect(")")?;
-        let body = self.parse_block_body()?;
+        let body = self.parse_function_body(generator)?;
         Ok(Expression::FunctionExpression(FunctionExpression {
             name,
             params,
@@ -563,6 +588,14 @@ impl Parser {
         let (body, lines) = self.parse_statement_list_with_lines()?;
         self.expect("}")?;
         Ok(BlockStatement { body, lines })
+    }
+
+    fn parse_function_body(&mut self, generator: bool) -> Result<BlockStatement, String> {
+        let saved = self.in_generator;
+        self.in_generator = generator;
+        let result = self.parse_block_body();
+        self.in_generator = saved;
+        result
     }
 
     fn parse_class_declaration(&mut self) -> Result<ASTNode, String> {
@@ -722,7 +755,7 @@ impl Parser {
             self.expect("(")?;
             let params = self.parse_parameter_list()?;
             self.expect(")")?;
-            let body = self.parse_block_body()?;
+            let body = self.parse_function_body(is_generator)?;
 
             let is_constructor_name =
                 matches!(&name, PropertyKey::Identifier(n) if n == "constructor");
@@ -1547,7 +1580,7 @@ impl Parser {
         self.expect("(")?;
         let params = self.parse_parameter_list()?;
         self.expect(")")?;
-        let body = self.parse_block_body()?;
+        let body = self.parse_function_body(generator)?;
         Ok(FunctionDeclaration {
             name,
             params,
@@ -1702,11 +1735,14 @@ impl Parser {
         }
         self.advance();
 
+        let saved_generator = self.in_generator;
+        self.in_generator = false;
         let body = if self.at_punct("{") {
             ArrowBody::Block(self.parse_block_body()?)
         } else {
             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
         };
+        self.in_generator = saved_generator;
 
         Ok(Some(Expression::ArrowFunction(ArrowFunction {
             params,
@@ -2386,6 +2422,12 @@ impl Parser {
             return self.parse_template_literal();
         }
 
+        if self.at_keyword("yield") && !self.in_generator {
+            let name = self.cur_value().to_string();
+            self.advance();
+            return Ok(Expression::Identifier(Identifier { name }));
+        }
+
         if self.at_keyword("yield") {
             self.advance();
             let delegate = if self.at_punct("*") {
@@ -2394,13 +2436,8 @@ impl Parser {
             } else {
                 false
             };
-            let argument = if self.is_eof()
-                || self.at_punct(";")
-                || self.at_punct("}")
-                || self.at_punct(")")
-                || self.at_punct("]")
-                || self.at_punct(",")
-                || self.has_line_terminator()
+            let argument = if self.has_line_terminator()
+                || !self.token_starts_assignment_expression()
             {
                 None
             } else {
@@ -2576,7 +2613,7 @@ impl Parser {
                 self.expect("(")?;
                 let params = self.parse_parameter_list()?;
                 self.expect(")")?;
-                let body = self.parse_block_body()?;
+                let body = self.parse_function_body(is_generator)?;
                 properties.push(Property::Property {
                     key,
                     value: Box::new(Expression::FunctionExpression(FunctionExpression {
@@ -2614,7 +2651,7 @@ impl Parser {
                             self.expect("(")?;
                             let params = self.parse_parameter_list()?;
                             self.expect(")")?;
-                            let body = self.parse_block_body()?;
+                            let body = self.parse_function_body(false)?;
 
                             if accessor_kind == "get" && !params.is_empty() {
                                 return Err(self.error("getter must not have parameters"));
