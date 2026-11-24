@@ -4899,7 +4899,10 @@ impl CodeGenerator {
             }
             Expression::RegExpLiteral(re) => {
                 if let Err(e) = crate::regexp::Regex::with_flags(&re.pattern, &re.flags) {
-                    return Err(format!("SyntaxError: {}", e));
+                    let msg = format!("{}", e);
+                    if !msg.contains("Invalid flag") {
+                        return Err(format!("SyntaxError: {}", msg));
+                    }
                 }
                 let pattern_idx = self.intern_and_add_const(ctx, &re.pattern);
                 let flags_idx = self.intern_and_add_const(ctx, &re.flags);
