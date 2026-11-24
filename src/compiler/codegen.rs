@@ -5185,6 +5185,62 @@ impl CodeGenerator {
             Expression::NewExpression(new) => self.gen_new_expression(new, ctx),
             Expression::ArrayExpression(arr) => self.gen_array_expression(arr, ctx),
             Expression::ObjectExpression(obj) => self.gen_object_expression(obj, ctx),
+            Expression::TaggedTemplateExpression(tagged) => {
+                let cooked = ArrayExpression {
+                    elements: tagged
+                        .quasi
+                        .quasis
+                        .iter()
+                        .map(|quasi| {
+                            Some(ArrayElement::Expression(Expression::Literal(
+                                if quasi.invalid_escape {
+                                    Literal::Undefined
+                                } else {
+                                    Literal::String(quasi.value.clone(), false, false)
+                                },
+                            )))
+                        })
+                        .collect(),
+                };
+                let raw = ArrayExpression {
+                    elements: tagged
+                        .quasi
+                        .quasis
+                        .iter()
+                        .map(|quasi| {
+                            Some(ArrayElement::Expression(Expression::Literal(
+                                Literal::String(quasi.raw.clone(), false, false),
+                            )))
+                        })
+                        .collect(),
+                };
+                let template_object = Expression::CallExpression(CallExpression {
+                    callee: Box::new(Expression::Identifier(Identifier {
+                        name: "__v16_template_object__".to_string(),
+                    })),
+                    arguments: vec![
+                        Argument::Expression(Expression::Literal(Literal::Number(
+                            tagged.site as f64,
+                        ))),
+                        Argument::Expression(Expression::ArrayExpression(cooked)),
+                        Argument::Expression(Expression::ArrayExpression(raw)),
+                    ],
+                });
+                let mut arguments = vec![Argument::Expression(template_object)];
+                arguments.extend(
+                    tagged
+                        .quasi
+                        .expressions
+                        .iter()
+                        .cloned()
+                        .map(Argument::Expression),
+                );
+                let call = Expression::CallExpression(CallExpression {
+                    callee: Box::new((*tagged.tag).clone()),
+                    arguments,
+                });
+                self.gen_expression(&call, ctx)
+            }
             Expression::TemplateLiteral(tpl) => {
                 let first_quasi = tpl
                     .quasis

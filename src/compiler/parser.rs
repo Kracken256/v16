@@ -1,5 +1,8 @@
 use super::ast::*;
 use crate::compiler::lexer::{Lexer, Token, TokenType};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static TAGGED_TEMPLATE_SITE: AtomicU32 = AtomicU32::new(1);
 
 pub struct Parser {
     pub lexer: Lexer,
@@ -2177,6 +2180,16 @@ impl Parser {
                     callee: Box::new(expr),
                     arguments: args,
                 });
+            } else if self.at_template_start() {
+                let quasi = match self.parse_template_literal()? {
+                    Expression::TemplateLiteral(template) => template,
+                    _ => return Err(self.error("Expected template literal")),
+                };
+                expr = Expression::TaggedTemplateExpression(TaggedTemplateExpression {
+                    tag: Box::new(expr),
+                    quasi,
+                    site: TAGGED_TEMPLATE_SITE.fetch_add(1, Ordering::Relaxed),
+                });
             } else {
                 break;
             }
@@ -2471,6 +2484,16 @@ impl Parser {
                     property: MemberProperty::Computed(Box::new(prop)),
                     computed: true,
                 }));
+            } else if self.at_template_start() {
+                let quasi = match self.parse_template_literal()? {
+                    Expression::TemplateLiteral(template) => template,
+                    _ => return Err(self.error("Expected template literal")),
+                };
+                callee = Box::new(Expression::TaggedTemplateExpression(TaggedTemplateExpression {
+                    tag: callee,
+                    quasi,
+                    site: TAGGED_TEMPLATE_SITE.fetch_add(1, Ordering::Relaxed),
+                }));
             } else {
                 break;
             }
@@ -2756,7 +2779,9 @@ impl Parser {
             TokenType::NoSubstitutionTemplate => {
                 quasis.push(TemplateElement {
                     value: tok.value,
+                    raw: tok.raw,
                     tail: true,
+                    invalid_escape: tok.invalid_escape,
                 });
 
                 self.current = self.peek_token.take();
@@ -2772,7 +2797,9 @@ impl Parser {
             TokenType::TemplateHead => {
                 quasis.push(TemplateElement {
                     value: tok.value,
+                    raw: tok.raw,
                     tail: false,
+                    invalid_escape: tok.invalid_escape,
                 });
 
                 self.current = self.peek_token.take();
@@ -2806,7 +2833,9 @@ impl Parser {
                 TokenType::TemplateTail => {
                     quasis.push(TemplateElement {
                         value: segment.value,
+                        raw: segment.raw,
                         tail: true,
+                        invalid_escape: segment.invalid_escape,
                     });
 
                     self.current = self.lexer.next_token();
@@ -2819,7 +2848,9 @@ impl Parser {
                 TokenType::TemplateMiddle => {
                     quasis.push(TemplateElement {
                         value: segment.value,
+                        raw: segment.raw,
                         tail: false,
+                        invalid_escape: segment.invalid_escape,
                     });
 
                     self.current = self.lexer.next_token();

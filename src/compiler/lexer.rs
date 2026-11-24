@@ -26,6 +26,7 @@ pub enum TokenType {
 pub struct Token {
     pub token_type: TokenType,
     pub value: String,
+    pub raw: String,
     pub line: u32,
     pub column: u32,
     pub line_terminator_before: bool,
@@ -125,6 +126,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape: false,
             had_legacy_escape: false,
             invalid_escape: false,
@@ -186,7 +188,8 @@ impl Lexer {
 
         if c == '`' {
             self.advance();
-            let (value, terminated_by_interp) = self.scan_template_segment();
+            let (value, raw, terminated_by_interp, invalid_escape) =
+                self.scan_template_segment();
             self.last_token_kind = LastTokenKind::Dividend;
             let token_type = if terminated_by_interp {
                 TokenType::TemplateHead
@@ -196,12 +199,13 @@ impl Lexer {
             return Some(Token {
                 token_type,
                 value,
+                raw,
                 line: self.line,
                 column: self.column,
                 line_terminator_before: false,
                 had_escape: false,
                 had_legacy_escape: false,
-                invalid_escape: false,
+                invalid_escape,
             });
         }
 
@@ -434,6 +438,7 @@ impl Lexer {
                 line: self.line,
                 column: self.column,
                 line_terminator_before: false,
+                raw: String::new(),
                 had_escape: false,
                 had_legacy_escape: false,
                 invalid_escape: false,
@@ -532,6 +537,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape: false,
             had_legacy_escape: false,
             invalid_escape: false,
@@ -750,6 +756,7 @@ impl Lexer {
             line: token_line,
             column: token_column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape,
             had_legacy_escape,
             invalid_escape: false,
@@ -775,6 +782,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape: false,
             had_legacy_escape: false,
             invalid_escape: false,
@@ -815,6 +823,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape,
             had_legacy_escape: false,
             invalid_escape: false,
@@ -887,6 +896,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape: false,
             had_legacy_escape: false,
             invalid_escape: false,
@@ -911,6 +921,7 @@ impl Lexer {
                     line: self.line,
                     column: self.column,
                     line_terminator_before: false,
+                    raw: String::new(),
                     had_escape: false,
                     had_legacy_escape: false,
                     invalid_escape: false,
@@ -939,6 +950,7 @@ impl Lexer {
                     line: self.line,
                     column: self.column,
                     line_terminator_before: false,
+                    raw: String::new(),
                     had_escape: false,
                     had_legacy_escape: false,
                     invalid_escape: false,
@@ -956,6 +968,7 @@ impl Lexer {
                         line: self.line,
                         column: self.column,
                         line_terminator_before: false,
+                        raw: String::new(),
                         had_escape: false,
                         had_legacy_escape: false,
                         invalid_escape: false,
@@ -969,6 +982,7 @@ impl Lexer {
                     line: self.line,
                     column: self.column,
                     line_terminator_before: false,
+                    raw: String::new(),
                     had_escape: false,
                     had_legacy_escape: false,
                     invalid_escape: false,
@@ -1027,6 +1041,7 @@ impl Lexer {
                 line: self.line,
                 column: self.column,
                 line_terminator_before: false,
+                raw: String::new(),
                 had_escape: false,
                 had_legacy_escape: false,
                 invalid_escape: false,
@@ -1039,6 +1054,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape: false,
             had_legacy_escape: false,
             invalid_escape: false,
@@ -1218,6 +1234,7 @@ impl Lexer {
             line: self.line,
             column: self.column,
             line_terminator_before: false,
+            raw: String::new(),
             had_escape: false,
             had_legacy_escape: false,
             invalid_escape: false,
@@ -1322,203 +1339,231 @@ impl Lexer {
         }
     }
 
-    fn scan_template_segment(&mut self) -> (String, bool) {
+    fn scan_template_segment(&mut self) -> (String, String, bool, bool) {
         let mut value = String::new();
+        let mut raw = String::new();
+        let mut invalid_escape = false;
         while self.pos < self.source.len() {
             let c = self.source[self.pos];
 
             if c == '$' && self.pos + 1 < self.source.len() && self.source[self.pos + 1] == '{' {
                 self.advance();
                 self.advance();
-                return (value, true);
+                return (value, raw, true, invalid_escape);
             }
 
             if c == '`' {
                 self.advance();
-                return (value, false);
+                return (value, raw, false, invalid_escape);
             }
 
-            if c == '\\' {
-                self.advance();
-                if self.pos >= self.source.len() {
-                    break;
-                }
-                let esc = self.source[self.pos];
-                match esc {
-                    'n' => value.push('\n'),
-                    'r' => value.push('\r'),
-                    't' => value.push('\t'),
-                    'b' => value.push('\x08'),
-                    'f' => value.push('\x0c'),
-                    'v' => value.push('\x0b'),
-                    '0' => {
-                        if self.pos + 1 < self.source.len()
-                            && self.source[self.pos + 1].is_ascii_digit()
-                        {
-                            self.fail("Octal escape sequences are not allowed in template literals");
-                        } else {
-                            value.push('\0');
-                        }
-                    }
-                    '1'..='9' => {
-                        self.fail("Octal escape sequences are not allowed in template literals");
-                    }
-                    '\\' => value.push('\\'),
-                    '\'' => value.push('\''),
-                    '"' => value.push('"'),
-                    '`' => value.push('`'),
-                    '$' => value.push('$'),
-                    '\n' => {
-                        self.line += 1;
-                        self.column = 1;
-                        self.pos += 1;
-                        continue;
-                    }
-                    '\r' => {
-                        self.line += 1;
-                        self.column = 1;
-                        self.pos += 1;
-
-                        if self.pos < self.source.len() && self.source[self.pos] == '\n' {
-                            self.pos += 1;
-                        }
-                        continue;
-                    }
-                    'x' => {
-                        if self.pos + 2 < self.source.len() {
-                            let h1 = self.source[self.pos + 1];
-                            let h2 = self.source[self.pos + 2];
-                            if let (Some(a), Some(b)) = (h1.to_digit(16), h2.to_digit(16)) {
-                                let code = (a << 4) | b;
-                                if let Some(ch) = char::from_u32(code) {
-                                    value.push(ch);
-                                }
-                                self.advance();
-                                self.advance();
-                            } else {
-                                self.fail("Invalid hexadecimal escape sequence");
-                            }
-                        } else {
-                            self.fail("Invalid hexadecimal escape sequence");
-                        }
-                    }
-                    'u' => {
-                        if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == '{' {
-                            self.advance();
-                            self.advance();
-                            let mut hex = String::new();
-                            while self.pos < self.source.len() && self.source[self.pos] != '}' {
-                                hex.push(self.source[self.pos]);
-                                self.advance();
-                            }
-
-                            if self.pos < self.source.len()
-                                && !hex.is_empty()
-                                && hex.bytes().all(|c| c.is_ascii_hexdigit())
-                            {
-                                match u32::from_str_radix(&hex, 16) {
-                                    Ok(code) if code <= 0x10FFFF => {
-                                        if let Some(ch) = char::from_u32(code) {
-                                            value.push(ch);
-                                        }
-                                        self.advance();
-                                    }
-                                    _ => self
-                                        .fail("Invalid Unicode escape sequence"),
-                                }
-                            } else {
-                                self.fail("Invalid Unicode escape sequence");
-                            }
-                        } else if self.pos + 4 < self.source.len() {
-                            let h1 = self.source[self.pos + 1];
-                            let h2 = self.source[self.pos + 2];
-                            let h3 = self.source[self.pos + 3];
-                            let h4 = self.source[self.pos + 4];
-                            if let (Some(a), Some(b), Some(c), Some(d)) = (
-                                h1.to_digit(16),
-                                h2.to_digit(16),
-                                h3.to_digit(16),
-                                h4.to_digit(16),
-                            ) {
-                                let code = (a << 12) | (b << 8) | (c << 4) | d;
-                                self.advance();
-                                self.advance();
-                                self.advance();
-                                self.advance();
-                                let mut combined_pair = false;
-                                if (0xD800..=0xDBFF).contains(&code)
-                                    && self.pos + 6 < self.source.len()
-                                {
-                                    if self.source[self.pos + 1] == '\\'
-                                        && self.source[self.pos + 2] == 'u'
-                                    {
-                                        if let (Some(a2), Some(b2), Some(c2), Some(d2)) = (
-                                            self.source[self.pos + 3].to_digit(16),
-                                            self.source[self.pos + 4].to_digit(16),
-                                            self.source[self.pos + 5].to_digit(16),
-                                            self.source[self.pos + 6].to_digit(16),
-                                        ) {
-                                            let low = (a2 << 12) | (b2 << 8) | (c2 << 4) | d2;
-                                            if (0xDC00..=0xDFFF).contains(&low) {
-                                                let cp = 0x10000
-                                                    + ((code - 0xD800) << 10)
-                                                    + (low - 0xDC00);
-                                                if let Some(ch) = char::from_u32(cp) {
-                                                    value.push(ch);
-                                                }
-                                                for _ in 0..6 {
-                                                    self.advance();
-                                                }
-                                                combined_pair = true;
-                                            }
-                                        }
-                                    }
-                                }
-                                if !combined_pair {
-                                    if let Some(decoded) = char::from_u32(code) {
-                                        value.push(decoded);
-                                    }
-                                }
-                            } else {
-                                self.fail("Invalid Unicode escape sequence");
-                            }
-                        } else {
-                            self.fail("Invalid Unicode escape sequence");
-                        }
-                    }
-                    _ => value.push(esc),
-                }
-                self.advance();
-                continue;
-            }
-
-            if c == '\n' {
-                value.push('\n');
-                self.pos += 1;
-                self.line += 1;
-                self.column = 1;
-                continue;
-            }
-            if c == '\r' {
-                value.push('\n');
-                self.pos += 1;
-                self.line += 1;
-                self.column = 1;
-                if self.pos < self.source.len() && self.source[self.pos] == '\n' {
+            if c != '\\' {
+                if c == '\n' {
+                    raw.push('\n');
+                    value.push('\n');
                     self.pos += 1;
+                    self.line += 1;
+                    self.column = 1;
+                    continue;
                 }
+                if c == '\r' {
+                    raw.push('\n');
+                    value.push('\n');
+                    self.pos += 1;
+                    self.line += 1;
+                    self.column = 1;
+                    if self.pos < self.source.len() && self.source[self.pos] == '\n' {
+                        self.pos += 1;
+                    }
+                    continue;
+                }
+                raw.push(c);
+                value.push(c);
+                self.advance();
                 continue;
             }
 
-            value.push(c);
+            raw.push('\\');
+            self.advance();
+            if self.pos >= self.source.len() {
+                break;
+            }
+            let esc = self.source[self.pos];
+            match esc {
+                '\n' | '\u{2028}' | '\u{2029}' => {
+                    raw.push(esc);
+                }
+                '\r' => {
+                    raw.push('\n');
+                    self.advance();
+                    if self.pos < self.source.len() && self.source[self.pos] == '\n' {
+                        self.advance();
+                    }
+                    continue;
+                }
+                'n' => {
+                    raw.push('n');
+                    value.push('\n');
+                }
+                'r' => {
+                    raw.push('r');
+                    value.push('\r');
+                }
+                't' => {
+                    raw.push('t');
+                    value.push('\t');
+                }
+                'b' => {
+                    raw.push('b');
+                    value.push('\x08');
+                }
+                'f' => {
+                    raw.push('f');
+                    value.push('\x0c');
+                }
+                'v' => {
+                    raw.push('v');
+                    value.push('\x0b');
+                }
+                '0' => {
+                    raw.push('0');
+                    if self.pos + 1 < self.source.len()
+                        && self.source[self.pos + 1].is_ascii_digit()
+                    {
+                        invalid_escape = true;
+                    } else {
+                        value.push('\0');
+                    }
+                }
+                '1'..='7' => {
+                    invalid_escape = true;
+                    raw.push(esc);
+                    let mut count = 1;
+                    while count < 3
+                        && self.pos + 1 < self.source.len()
+                        && matches!(self.source[self.pos + 1], '0'..='7')
+                    {
+                        self.advance();
+                        raw.push(self.source[self.pos]);
+                        count += 1;
+                    }
+                }
+                '8' | '9' => {
+                    invalid_escape = true;
+                    raw.push(esc);
+                }
+                '\\' => {
+                    raw.push('\\');
+                    value.push('\\');
+                }
+                '\'' => {
+                    raw.push('\'');
+                    value.push('\'');
+                }
+                '"' => {
+                    raw.push('"');
+                    value.push('"');
+                }
+                '`' => {
+                    raw.push('`');
+                    value.push('`');
+                }
+                '$' => {
+                    raw.push('$');
+                    value.push('$');
+                }
+                'x' => {
+                    raw.push('x');
+                    self.advance();
+                    if self.pos + 1 < self.source.len() {
+                        let h1 = self.source[self.pos];
+                        let h2 = self.source[self.pos + 1];
+                        if let (Some(a), Some(b)) = (h1.to_digit(16), h2.to_digit(16)) {
+                            raw.push(h1);
+                            raw.push(h2);
+                            let code = (a << 4) | b;
+                            if let Some(ch) = char::from_u32(code) {
+                                value.push(ch);
+                            }
+                            self.advance();
+                            self.advance();
+                            continue;
+                        }
+                    }
+                    invalid_escape = true;
+                    continue;
+                }
+                'u' => {
+                    raw.push('u');
+                    self.advance();
+                    if self.pos < self.source.len() && self.source[self.pos] == '{' {
+                        raw.push('{');
+                        self.advance();
+                        let mut code: u32 = 0;
+                        let mut digits = 0;
+                        let mut overflow = false;
+                        while self.pos < self.source.len()
+                            && self.source[self.pos] != '}'
+                            && self.source[self.pos].is_ascii_hexdigit()
+                        {
+                            let d = self.source[self.pos].to_digit(16).unwrap();
+                            code = code.saturating_mul(16).saturating_add(d);
+                            if code > 0x10FFFF {
+                                overflow = true;
+                            }
+                            digits += 1;
+                            raw.push(self.source[self.pos]);
+                            self.advance();
+                        }
+                        if self.pos < self.source.len()
+                            && self.source[self.pos] == '}'
+                            && digits > 0
+                            && !overflow
+                        {
+                            raw.push('}');
+                            self.advance();
+                            if let Some(ch) = char::from_u32(code) {
+                                value.push(ch);
+                            }
+                        } else {
+                            invalid_escape = true;
+                        }
+                    } else {
+                        let mut code: u32 = 0;
+                        let mut digits = 0;
+                        while digits < 4 && self.pos < self.source.len() {
+                            let Some(d) = self.source[self.pos].to_digit(16) else {
+                                break;
+                            };
+                            code = (code << 4) | d;
+                            raw.push(self.source[self.pos]);
+                            self.advance();
+                            digits += 1;
+                        }
+                        if digits == 4 {
+                            if let Some(ch) = char::from_u32(code) {
+                                value.push(ch);
+                            }
+                        } else {
+                            invalid_escape = true;
+                        }
+                    }
+                    continue;
+                }
+                _ => {
+                    raw.push(esc);
+                    value.push(esc);
+                }
+            }
             self.advance();
         }
 
-        (value, false)
+        (value, raw, false, invalid_escape)
     }
 
     pub fn scan_template_continuation(&mut self) -> Option<Token> {
-        let (value, terminated_by_interp) = self.scan_template_segment();
+        let (value, raw, terminated_by_interp, invalid_escape) =
+            self.scan_template_segment();
         let token_type = if terminated_by_interp {
             TokenType::TemplateMiddle
         } else {
@@ -1528,12 +1573,13 @@ impl Lexer {
         Some(Token {
             token_type,
             value,
+            raw,
             line: self.line,
             column: self.column,
             line_terminator_before: false,
             had_escape: false,
             had_legacy_escape: false,
-            invalid_escape: false,
+            invalid_escape,
         })
     }
 

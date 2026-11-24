@@ -169,7 +169,9 @@ pub struct TemplateLiteral {
 #[derive(Debug, Clone)]
 pub struct TemplateElement {
     pub value: String,
+    pub raw: String,
     pub tail: bool,
+    pub invalid_escape: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -387,6 +389,7 @@ pub struct SpreadElement {
 pub struct TaggedTemplateExpression {
     pub tag: Box<Expression>,
     pub quasi: TemplateLiteral,
+    pub site: u32,
 }
 
 #[derive(Debug, Clone)]

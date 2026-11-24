@@ -91,6 +91,10 @@ pub fn init_globals(ctx: &mut JSContext) {
         HostFunction::new("__v16_import__", 2, v16_import),
     );
     ctx.register_builtin(
+        "__v16_template_object__",
+        HostFunction::new("__v16_template_object__", 3, template_object),
+    );
+    ctx.register_builtin(
         "__v16_import_meta__",
         HostFunction::new("__v16_import_meta__", 0, v16_import_meta),
     );
@@ -513,6 +517,47 @@ fn js_disassemble(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     };
     JSValue::new_string(ctx.intern(&output))
+}
+
+fn freeze_template_object(ctx: &mut JSContext, value: JSValue) {
+    let obj = value.as_object_mut();
+    obj.set_extensible(false);
+    obj.set_sealed(true);
+    obj.set_frozen(true);
+    obj.seal_accessors();
+    obj.for_each_property_attrs_mut(|_atom, _val, attrs| {
+        *attrs &= !(crate::object::object::ATTR_WRITABLE | crate::object::object::ATTR_CONFIGURABLE);
+    });
+    let _ = ctx;
+}
+
+fn template_object(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let site = args.first().map(|v| v.to_number() as u32).unwrap_or(0);
+    if let Some(cached) = ctx.tagged_template_cache.get(&site) {
+        return cached.clone();
+    }
+    let cooked = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let raw = args.get(2).cloned().unwrap_or(JSValue::undefined());
+    if !cooked.is_object() || !raw.is_object() {
+        return JSValue::undefined();
+    }
+    let raw_atom = ctx.intern("raw");
+    let mut desc = PropertyDescriptor::new_data(raw.clone());
+    desc.writable = false;
+    desc.enumerable = false;
+    desc.configurable = false;
+    cooked
+        .as_object_mut()
+        .define_property_ext(raw_atom, desc, true, true, true);
+    freeze_template_object(ctx, cooked.clone());
+    freeze_template_object(ctx, raw.clone());
+    ctx.tagged_template_cache.insert(site, cooked.clone());
+    ctx.runtime_mut()
+        .gc_heap_mut()
+        .extra_roots
+        .push(cooked.clone());
+    ctx.runtime_mut().gc_heap_mut().extra_roots.push(raw);
+    cooked
 }
 
 fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -3401,6 +3446,11 @@ fn init_global_funcs(ctx: &mut JSContext) {
             global_obj,
             ctx.intern("__v16_import__"),
             create_builtin_function(ctx, "__v16_import__"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("__v16_template_object__"),
+            create_builtin_function(ctx, "__v16_template_object__"),
         );
         set_non_enumerable(
             global_obj,

@@ -1123,6 +1123,11 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             validate_class_body(&c.body, strict_ctx, c.super_class.is_some())
         }
         Expression::TemplateLiteral(t) => {
+            if t.quasis.iter().any(|q| q.invalid_escape) {
+                return Err(
+                    "SyntaxError: invalid escape sequence in template literal".to_string()
+                );
+            }
             for e in &t.expressions {
                 validate_expression(e, ctx)?;
             }
