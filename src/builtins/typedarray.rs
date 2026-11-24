@@ -169,12 +169,56 @@ fn typed_array_from_args(
     Err("Invalid TypedArray constructor argument".to_string())
 }
 
+fn array_buffer_range_error(ctx: &mut JSContext, msg: &str) {
+    let mut err = JSObject::new();
+    if let Some(proto) = ctx.get_range_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    err.set(
+        ctx.common_atoms.name,
+        JSValue::new_string(ctx.intern("RangeError")),
+    );
+    err.set(
+        ctx.common_atoms.message,
+        JSValue::new_string(ctx.intern(msg)),
+    );
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    ctx.pending_exception = Some(JSValue::new_object(ptr));
+}
+
 fn array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let length = if args.is_empty() {
+    let length = if args.is_empty() || args[0].is_undefined() {
         0
     } else {
-        args[0].get_int() as usize
+        let n = match crate::builtins::global::js_to_number_value(ctx, &args[0]) {
+            Ok(n) => n,
+            Err(()) => return JSValue::undefined(),
+        };
+        let i = if n.is_nan() { 0.0 } else { n.trunc() };
+        if i < 0.0 || i > 2147483647.0 {
+            array_buffer_range_error(ctx, "Invalid array buffer length");
+            return JSValue::undefined();
+        }
+        i as usize
     };
+    if let Some(opts) = args.get(1) {
+        if opts.is_object() {
+            if let Some(mbl) = opts.as_object().get(ctx.intern("maxByteLength")) {
+                if !mbl.is_undefined() {
+                    let n = match crate::builtins::global::js_to_number_value(ctx, &mbl) {
+                        Ok(n) => n,
+                        Err(()) => return JSValue::undefined(),
+                    };
+                    let i = if n.is_nan() { 0.0 } else { n.trunc() };
+                    if i < 0.0 || i > 2147483647.0 {
+                        array_buffer_range_error(ctx, "Invalid array buffer max byte length");
+                        return JSValue::undefined();
+                    }
+                }
+            }
+        }
+    }
     create_array_buffer(ctx, length)
 }
 
@@ -456,6 +500,17 @@ fn array_buffer_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
     let obj = args[0].as_object();
     obj.get(ctx.intern("byteLength"))
         .unwrap_or(JSValue::undefined())
+}
+
+fn array_buffer_is_view(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let arg = args.first().copied().unwrap_or(JSValue::undefined());
+    if arg.is_object() {
+        let t = arg.as_object().obj_type();
+        if t == ObjectType::DataView || t == ObjectType::TypedArray {
+            return JSValue::bool(true);
+        }
+    }
+    JSValue::bool(false)
 }
 
 fn data_view_get_buffer(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1666,11 +1721,16 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     }
     let global_obj = global.as_object_mut();
 
-    crate::builtins::global::set_non_enumerable(
-        global_obj,
-        ctx.intern("ArrayBuffer"),
-        create_builtin_function(ctx, "ArrayBuffer"),
-    );
+    let ab_func = create_builtin_function(ctx, "ArrayBuffer");
+    if ab_func.is_function() {
+        crate::builtins::global::set_non_enumerable(
+            &mut ab_func.as_function_mut().base,
+            ctx.intern("isView"),
+            create_builtin_function(ctx, "arraybuffer_isView"),
+        );
+    }
+    crate::builtins::symbol::install_species_accessor(ctx, &ab_func);
+    crate::builtins::global::set_non_enumerable(global_obj, ctx.intern("ArrayBuffer"), ab_func);
 
     let mut dv_proto = JSObject::new();
     dv_proto.set(ctx.intern("buffer"), create_builtin_function(ctx, "dataview_buffer"));
@@ -1925,6 +1985,10 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "ArrayBuffer",
         HostFunction::ctor("ArrayBuffer", 1, array_buffer_constructor),
+    );
+    ctx.register_builtin(
+        "arraybuffer_isView",
+        HostFunction::new("isView", 1, array_buffer_is_view),
     );
     ctx.register_builtin(
         "DataView",
