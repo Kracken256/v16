@@ -1895,8 +1895,8 @@ pub fn js_to_length(val: &JSValue) -> u64 {
     let n = val.to_number();
     if n.is_nan() || n <= 0.0 {
         0
-    } else if n.is_infinite() {
-        u64::MAX
+    } else if n >= 9007199254740991.0 {
+        9007199254740991
     } else {
         n as u64
     }

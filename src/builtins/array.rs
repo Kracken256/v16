@@ -100,7 +100,7 @@ fn safe_array_len_with_ctx(obj: &JSObject, len_atom: crate::runtime::atom::Atom,
                 let s = ctx.get_atom_str(actual.get_atom());
                 let n: f64 = s.parse().unwrap_or(f64::NAN);
                 if n.is_nan() || n <= 0.0 { 0 }
-                else if n.is_infinite() { u64::MAX }
+                else if n >= 9007199254740991.0 { 9007199254740991 }
                 else { n as u64 }
             } else {
                 js_to_length(&actual)
@@ -2177,10 +2177,13 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             i.min(len)
         })
         .unwrap_or(0);
-    let delete_count = args
-        .get(2)
-        .map(|v| (js_to_length(v)).min(len.saturating_sub(start)))
-        .unwrap_or(len.saturating_sub(start));
+    let delete_count = if args.len() < 2 {
+        0
+    } else if args.len() == 2 {
+        len.saturating_sub(start)
+    } else {
+        js_to_length(&args[2]).min(len.saturating_sub(start))
+    };
     let insert_items: Vec<JSValue> = args.iter().skip(3).copied().collect();
 
     let new_len = len - delete_count + insert_items.len() as u64;
@@ -2193,7 +2196,50 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let shift = insert_items.len() as i64 - delete_count as i64;
 
-    if shift < 0 {
+    if shift != 0 && len > 1_000_000 {
+        let mut keys: Vec<u64> = Vec::new();
+        {
+            let arr = this.as_object();
+            for slot in arr.iter_props() {
+                if let Ok(k) = ctx.get_atom_str(slot.atom).parse::<u64>() {
+                    keys.push(k);
+                }
+            }
+        }
+        if shift > 0 {
+            keys.sort_unstable_by(|a, b| b.cmp(a));
+        } else {
+            keys.sort_unstable();
+        }
+        for s in keys {
+            if s >= start + delete_count && s < len {
+                let val = {
+                    let arr = this.as_object();
+                    array_get(arr, s as usize, ctx).unwrap_or(JSValue::undefined())
+                };
+                let t = (s as i64 + shift) as usize;
+                let arr = this.as_object_mut();
+                array_set(arr, t, val);
+            }
+        }
+        if shift < 0 {
+            let mut del: Vec<u64> = Vec::new();
+            {
+                let arr = this.as_object();
+                for slot in arr.iter_props() {
+                    if let Ok(k) = ctx.get_atom_str(slot.atom).parse::<u64>() {
+                        if k >= new_len && k < len {
+                            del.push(k);
+                        }
+                    }
+                }
+            }
+            for k in del {
+                let arr = this.as_object_mut();
+                array_delete(arr, k as usize);
+            }
+        }
+    } else if shift < 0 {
         for i in start..(len - delete_count) {
             let src_idx = (start + delete_count + (i - start)) as usize;
             let dst_idx = (start + insert_items.len() as u64 + (i - start)) as usize;
@@ -2227,7 +2273,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let arr = this.as_object_mut();
-    arr.set_length(len_atom, JSValue::new_int(new_len as i64));
+    arr.set_length(len_atom, JSValue::new_float(new_len as f64));
 
     let mut removed_arr = new_jsarray_with_proto(ctx);
     for v in removed.iter() {
