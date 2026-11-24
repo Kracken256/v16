@@ -7337,6 +7337,34 @@ impl VM {
                     let send_val = self.get_reg(send_reg);
                     self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val))?;
                 }
+                Opcode::IteratorClose => {
+                    let iter_reg = self.read_u16_pc();
+                    let iter_val = self.get_reg(iter_reg);
+                    if iter_val.is_object() {
+                        let return_atom = ctx.intern("return");
+                        let ret_fn = {
+                            let iter_obj = iter_val.as_object();
+                            let mut found = iter_obj.get(return_atom);
+                            if found.is_none() {
+                                let mut proto = iter_obj.prototype;
+                                while let Some(p) = proto {
+                                    let pobj = unsafe { &*p };
+                                    if let Some(v) = pobj.get(return_atom) {
+                                        found = Some(v);
+                                        break;
+                                    }
+                                    proto = pobj.prototype;
+                                }
+                            }
+                            found
+                        };
+                        if let Some(f) = ret_fn {
+                            if f.is_function() {
+                                self.call_function_with_this(ctx, f, iter_val, &[])?;
+                            }
+                        }
+                    }
+                }
                 Opcode::GetArguments => {
                     let dst = self.read_u16_pc();
                     let fi = self.frame_index;

@@ -526,6 +526,24 @@ impl CodeGenerator {
         }
     }
 
+    fn emit_iterator_close(&mut self, iter_reg: u16, done_reg: Option<u16>) {
+        let skip_patch = if let Some(d) = done_reg {
+            self.emit(Opcode::JumpIf);
+            self.emit_u16(d);
+            let p = self.code.len();
+            self.emit_i32(0);
+            Some(p)
+        } else {
+            None
+        };
+        self.emit(Opcode::IteratorClose);
+        self.emit_u16(iter_reg);
+        if let Some(p) = skip_patch {
+            let end = self.code.len();
+            self.patch_jump(p, end);
+        }
+    }
+
     fn emit_conditional_backward_jump(&mut self, src: u16, target: usize, jump_if_true: bool) {
         let compact_offset = (target as i64 - (self.code.len() as i64 + 4)) as i32;
         if compact_offset >= i8::MIN as i32 && compact_offset <= i8::MAX as i32 {
@@ -2367,6 +2385,7 @@ impl CodeGenerator {
                 self.emit_u16(value_reg);
 
                 let len = arr.elements.len();
+                let mut last_done_reg: Option<u16> = None;
                 for (i, elem) in arr.elements.iter().enumerate() {
                     if i == len - 1 {
                         if let Some(PatternElement::RestElement(rest)) = elem {
@@ -2427,7 +2446,11 @@ impl CodeGenerator {
 
                     let after_undef = self.code.len();
                     self.patch_jump(not_done_skip, after_undef);
-                    self.free_register(done_reg);
+                    if i == len - 1 {
+                        last_done_reg = Some(done_reg);
+                    } else {
+                        self.free_register(done_reg);
+                    }
 
                     if let Some(elem) = elem {
                         match elem {
@@ -2453,6 +2476,10 @@ impl CodeGenerator {
                         }
                     }
                     self.free_register(val_reg);
+                }
+                if let Some(d) = last_done_reg {
+                    self.emit_iterator_close(iter_reg, Some(d));
+                    self.free_register(d);
                 }
                 self.free_register(iter_reg);
                 Ok(())
@@ -6090,6 +6117,7 @@ impl CodeGenerator {
         self.emit_u16(value_reg);
 
         let len = arr.elements.len();
+        let mut last_done_reg: Option<u16> = None;
         for (i, elem) in arr.elements.iter().enumerate() {
             if i == len - 1 {
                 if let Some(PatternElement::RestElement(rest)) = elem {
@@ -6145,7 +6173,11 @@ impl CodeGenerator {
 
             let after_undef = self.code.len();
             self.patch_jump(not_done_skip, after_undef);
-            self.free_register(done_reg);
+            if i == len - 1 {
+                last_done_reg = Some(done_reg);
+            } else {
+                self.free_register(done_reg);
+            }
 
             if let Some(elem) = elem {
                 match elem {
@@ -6162,6 +6194,10 @@ impl CodeGenerator {
                 }
             }
             self.free_register(val_reg);
+        }
+        if let Some(d) = last_done_reg {
+            self.emit_iterator_close(iter_reg, Some(d));
+            self.free_register(d);
         }
         self.free_register(iter_reg);
         Ok(())

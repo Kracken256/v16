@@ -2103,12 +2103,18 @@ impl Parser {
             } else {
                 false
             };
-            let argument =
-                if self.is_eof() || self.at_punct(";") || self.at_punct("}") || self.at(")") {
-                    None
-                } else {
-                    Some(Box::new(self.parse_assignment_expression()?))
-                };
+            let argument = if self.is_eof()
+                || self.at_punct(";")
+                || self.at_punct("}")
+                || self.at_punct(")")
+                || self.at_punct("]")
+                || self.at_punct(",")
+                || self.has_line_terminator()
+            {
+                None
+            } else {
+                Some(Box::new(self.parse_assignment_expression()?))
+            };
             return Ok(Expression::YieldExpression(YieldExpression {
                 argument,
                 delegate,
