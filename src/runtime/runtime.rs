@@ -5,6 +5,8 @@ use super::module::ModuleRegistry;
 use crate::value::JSValue;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub static EXTERNAL_INTERRUPT: AtomicBool = AtomicBool::new(false);
+
 pub struct JSRuntime {
     atom_table: AtomTable,
     gc_heap: GcHeap,

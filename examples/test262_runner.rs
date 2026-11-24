@@ -11,6 +11,25 @@ thread_local! {
     static PRINT_OUTPUT: RefCell<Vec<String>> = RefCell::new(Vec::new());
 }
 
+static WATCHDOG_DEADLINE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn start_watchdog() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let deadline = WATCHDOG_DEADLINE_MS.load(std::sync::atomic::Ordering::Relaxed);
+        if deadline != 0 && now_ms() >= deadline {
+            pipa::set_external_interrupt(true);
+        }
+    });
+}
+
 fn test262_print(ctx: &mut pipa::JSContext, args: &[JSValue]) -> JSValue {
     let msg = if let Some(v) = args.get(0) {
         if v.is_string() {
@@ -419,10 +438,12 @@ fn main() {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let _per_test_timeout_ms: u64 = std::env::var("PIPA_T262_TIMEOUT_MS")
+    let per_test_timeout_ms: u64 = std::env::var("PIPA_T262_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(15000);
+
+    start_watchdog();
 
     let test_dir = if args.len() > 1 {
         args[1].clone()
@@ -629,7 +650,18 @@ fn main() {
             };
             mode_labels.push(label);
 
-            match run_test_mode(&mut ctx, code_ref, &meta, &harness_code, force_strict) {
+            pipa::set_external_interrupt(false);
+            if per_test_timeout_ms > 0 {
+                WATCHDOG_DEADLINE_MS.store(
+                    now_ms() + per_test_timeout_ms,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+            let outcome = run_test_mode(&mut ctx, code_ref, &meta, &harness_code, force_strict);
+            WATCHDOG_DEADLINE_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+            pipa::set_external_interrupt(false);
+
+            match outcome {
                 TestOutcome::Passed => {}
                 TestOutcome::Failed(e) => {
                     test_passed = false;

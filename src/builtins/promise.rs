@@ -1130,6 +1130,11 @@ pub fn create_pending_promise(ctx: &mut JSContext) -> JSValue {
 
 pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::VM) {
     while let Some(task) = ctx.microtask_dequeue() {
+        if crate::runtime::runtime::EXTERNAL_INTERRUPT
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
         match task {
             Microtask::Reaction(reaction, argument) => {
                 if reaction.is_all_settled {

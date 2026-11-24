@@ -89,6 +89,10 @@ pub fn set_interrupt(runtime: &JSRuntime, flag: bool) {
     runtime.set_interrupt(flag);
 }
 
+pub fn set_external_interrupt(flag: bool) {
+    runtime::runtime::EXTERNAL_INTERRUPT.store(flag, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub fn run_event_loop(ctx: &mut JSContext) -> Result<EventLoopResult, String> {
     compiler::run_event_loop(ctx)
 }

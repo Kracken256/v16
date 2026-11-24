@@ -413,7 +413,10 @@ impl JSContext {
         self.interrupt_counter -= 1;
         if self.interrupt_counter <= 0 {
             self.interrupt_counter = Self::INTERRUPT_THRESHOLD;
-            if self.runtime_mut().is_interrupted() {
+            if self.runtime_mut().is_interrupted()
+                || crate::runtime::runtime::EXTERNAL_INTERRUPT
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 return Err("interrupted".to_string());
             }
         }
