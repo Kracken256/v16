@@ -3091,18 +3091,13 @@ impl CodeGenerator {
                     self.predeclare_binding_pattern(&d.id, VariableKind::Var);
                     if self.is_global_scope() && !(self.is_strict && self.is_eval) {
                         if let BindingPattern::Identifier(name) = &d.id {
-                            let slot = self.lookup_var_slot(name).unwrap();
                             let atom = ctx.intern(name);
                             let idx = self.add_constant(JSValue::new_string(atom));
-                            if self.is_eval {
-                                self.emit(Opcode::InitGlobalVar);
-                                self.emit_u32(idx);
-                                self.emit_u16(slot);
-                            } else {
-                                self.emit(Opcode::DefineGlobal);
-                                self.emit_u32(idx);
-                                self.emit_u16(slot);
-                            }
+                            let undefined = self.emit_load_undefined();
+                            self.emit(Opcode::InitGlobalVar);
+                            self.emit_u32(idx);
+                            self.emit_u16(undefined);
+                            self.free_register(undefined);
                         }
                     }
                 } else {
