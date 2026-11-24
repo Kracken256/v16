@@ -21,7 +21,7 @@ pub fn init_generator(ctx: &mut JSContext) {
 
     ctx.register_builtin(
         "generator_return",
-        HostFunction::new("return", 1, generator_return),
+        HostFunction::method("return", 1, generator_return),
     );
     let return_func = create_builtin_function(ctx, "generator_return");
     let return_atom = ctx.intern("return");
