@@ -9,6 +9,12 @@ pub fn parse(pattern: &str, flags: u16) -> Result<Ast, String> {
         return Err(format!("Unexpected character at position {}", state.pos));
     }
 
+    for backref in &state.named_backrefs {
+        if !state.named_groups.contains(backref) {
+            return Err(format!("Invalid named capture referenced: {}", backref));
+        }
+    }
+
     Ok(ast.simplify())
 }
 
@@ -493,6 +499,8 @@ fn parse_named_backref(state: &mut ParseState) -> Result<Ast, String> {
     state.expect('<')?;
     let name = parse_group_name(state)?;
     state.expect('>')?;
+
+    state.named_backrefs.push(name.clone());
 
     Ok(Ast::NamedBackRef(name))
 }

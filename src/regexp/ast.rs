@@ -133,6 +133,8 @@ pub struct ParseState {
 
     pub named_groups: Vec<String>,
 
+    pub named_backrefs: Vec<String>,
+
     pub is_unicode: bool,
 
     pub dot_all: bool,
@@ -147,6 +149,7 @@ impl ParseState {
             pattern: pattern.chars().collect(),
             capture_count: 1,
             named_groups: Vec::new(),
+            named_backrefs: Vec::new(),
             is_unicode,
             dot_all: (flags & super::opcode::FLAG_DOT_ALL) != 0,
         }
