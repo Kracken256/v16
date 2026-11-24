@@ -2446,6 +2446,7 @@ impl Parser {
             return Ok(Expression::YieldExpression(YieldExpression {
                 argument,
                 delegate,
+                parenthesized: false,
             }));
         }
 
