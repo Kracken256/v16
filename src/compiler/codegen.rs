@@ -2435,7 +2435,7 @@ impl CodeGenerator {
                                 self.gen_assignment_target_binding(target, val_reg, kind, ctx)?;
                             }
                             PatternElement::RestElement(_) => {
-                                return Err("rest element not at end".to_string());
+                                return Err("SyntaxError: rest element not at end".to_string());
                             }
                             PatternElement::AssignmentPattern(ap) => {
                                 let binding_name = match &*ap.left {
@@ -4361,6 +4361,58 @@ impl CodeGenerator {
         }
     }
 
+    fn gen_yield_star(
+        &mut self,
+        yield_expr: &YieldExpression,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        let iterable_reg = match &yield_expr.argument {
+            Some(arg) => self.gen_expression(arg, ctx)?,
+            None => {
+                let r = self.alloc_register();
+                self.emit(Opcode::LoadUndefined);
+                self.emit_u16(r);
+                r
+            }
+        };
+
+        let iter_reg = self.alloc_register();
+        self.emit(Opcode::GetIterator);
+        self.emit_u16(iter_reg);
+        self.emit_u16(iterable_reg);
+        self.free_register(iterable_reg);
+
+        let value_reg = self.alloc_register();
+        let done_reg = self.alloc_register();
+        self.emit(Opcode::LoadUndefined);
+        self.emit_u16(value_reg);
+
+        let loop_start = self.code.len();
+        self.emit(Opcode::IteratorNextSend);
+        self.emit_u16(value_reg);
+        self.emit_u16(done_reg);
+        self.emit_u16(iter_reg);
+        self.emit_u16(value_reg);
+
+        self.emit(Opcode::JumpIf);
+        self.emit_u16(done_reg);
+        let exit_patch = self.code.len();
+        self.emit_i32(0);
+
+        self.emit(Opcode::Yield);
+        self.emit_u16(value_reg);
+
+        self.emit_backward_jump(loop_start);
+
+        let end_pos = self.code.len();
+        self.patch_jump(exit_patch, end_pos);
+
+        self.free_register(iter_reg);
+        self.free_register(done_reg);
+
+        Ok(value_reg)
+    }
+
     fn gen_expression(&mut self, expr: &Expression, ctx: &mut JSContext) -> Result<u16, String> {
         match expr {
             Expression::Identifier(id) => {
@@ -4707,7 +4759,7 @@ impl CodeGenerator {
             }
             Expression::YieldExpression(yield_expr) => {
                 if yield_expr.delegate {
-                    return Err("yield* not yet supported in register VM".to_string());
+                    return self.gen_yield_star(yield_expr, ctx);
                 }
                 let val_reg = if let Some(arg) = &yield_expr.argument {
                     self.gen_expression(arg, ctx)?
@@ -6101,7 +6153,7 @@ impl CodeGenerator {
                         self.gen_assignment_target_destructure(target, val_reg, ctx)?;
                     }
                     PatternElement::RestElement(_) => {
-                        return Err("rest element not at end".to_string());
+                        return Err("SyntaxError: rest element not at end".to_string());
                     }
                     PatternElement::AssignmentPattern(ap) => {
                         self.gen_default_value_assignment(&ap.right, val_reg, ctx)?;
@@ -6933,10 +6985,16 @@ impl CodeGenerator {
                 Property::Property {
                     key,
                     value,
+                    shorthand,
                     getter,
                     setter,
                     ..
                 } => {
+                    if *shorthand && matches!(**value, Expression::AssignmentExpression(_)) {
+                        return Err(
+                            "SyntaxError: Invalid shorthand property initializer".to_string()
+                        );
+                    }
                     if *getter || *setter {
                         let func_reg = self.gen_expression(value, ctx)?;
                         let key_reg = match key {

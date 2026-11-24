@@ -120,7 +120,7 @@ impl Parser {
     fn error(&self, msg: &str) -> String {
         let line = self.current.as_ref().map(|t| t.line).unwrap_or(0);
         let col = self.current.as_ref().map(|t| t.column).unwrap_or(0);
-        format!("Parse error ({}:{}): {}", line, col, msg)
+        format!("SyntaxError: Parse error ({}:{}): {}", line, col, msg)
     }
 }
 
@@ -297,16 +297,11 @@ impl Parser {
                     let arg = self.parse_binding_pattern()?;
                     Some(Box::new(match arg {
                         BindingPattern::Identifier(name) => AssignmentTarget::Identifier(name),
-                        other => AssignmentTarget::ArrayPattern(match other {
-                            BindingPattern::ArrayPattern(p) => p,
-                            BindingPattern::ObjectPattern(_) => {
-                                return Err(self.error("rest element must be array/identifier"));
-                            }
-                            BindingPattern::AssignmentPattern(_) => {
-                                return Err(self.error("rest element cannot be assignment pattern"));
-                            }
-                            BindingPattern::Identifier(_) => unreachable!(),
-                        }),
+                        BindingPattern::ArrayPattern(p) => AssignmentTarget::ArrayPattern(p),
+                        BindingPattern::ObjectPattern(p) => AssignmentTarget::ObjectPattern(p),
+                        BindingPattern::AssignmentPattern(_) => {
+                            return Err(self.error("rest element cannot be assignment pattern"));
+                        }
                     }))
                 } else {
                     None
@@ -318,6 +313,9 @@ impl Parser {
                     elements.push(Some(PatternElement::RestElement(RestElement {
                         argument: arg,
                     })));
+                    if !self.at_punct("]") {
+                        return Err(self.error("rest element must be last element"));
+                    }
                     continue;
                 }
                 let pattern = self.parse_binding_pattern()?;
@@ -703,19 +701,20 @@ impl Parser {
 
     fn parse_for_statement(&mut self) -> Result<ASTNode, String> {
         self.expect("for")?;
+
+        let is_await = if self.at_keyword("await") && self.peek_at("(") {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         self.expect("(")?;
 
         if self.at_punct(";") {
             self.advance();
             return self.parse_for_rest(None);
         }
-
-        let is_await = if self.at_keyword("await") {
-            self.advance();
-            true
-        } else {
-            false
-        };
 
         let is_var = matches!(self.cur_value(), "var" | "let" | "const");
         if is_var {
@@ -2350,6 +2349,27 @@ impl Parser {
                     getter: false,
                     setter: false,
                 });
+            } else if self.at_punct("=") {
+                let name = match &key {
+                    PropertyKey::Identifier(n) => n.clone(),
+                    _ => return Err(self.error("invalid shorthand property")),
+                };
+                self.advance();
+                let default = self.parse_assignment_expression()?;
+                let value = Expression::AssignmentExpression(AssignmentExpression {
+                    op: AssignOp::Assign,
+                    left: AssignmentTarget::Identifier(name),
+                    right: Box::new(default),
+                });
+                properties.push(Property::Property {
+                    key,
+                    value: Box::new(value),
+                    computed: false,
+                    shorthand: true,
+                    method: false,
+                    getter: false,
+                    setter: false,
+                });
             } else {
                 return Err(self.error("expected ':' or '(' in object literal"));
             }
@@ -2558,20 +2578,34 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
                         ..
                     } => {
                         if shorthand {
-                            let name = match &key {
-                                PropertyKey::Identifier(n) => n.clone(),
-                                _ => {
-                                    return Err(
-                                        "invalid shorthand property in destructuring".to_string()
-                                    );
-                                }
-                            };
-                            properties.push(ObjectPatternProperty::Property {
-                                key,
-                                value: AssignmentTarget::Identifier(name),
-                                computed: false,
-                                shorthand: true,
-                            });
+                            if let Expression::AssignmentExpression(a) = *value {
+                                properties.push(ObjectPatternProperty::Property {
+                                    key,
+                                    value: AssignmentTarget::AssignmentPattern(
+                                        AssignmentPattern {
+                                            left: Box::new(a.left),
+                                            right: a.right,
+                                        },
+                                    ),
+                                    computed: false,
+                                    shorthand: true,
+                                });
+                            } else {
+                                let name = match &key {
+                                    PropertyKey::Identifier(n) => n.clone(),
+                                    _ => {
+                                        return Err(
+                                            "invalid shorthand property in destructuring".to_string()
+                                        );
+                                    }
+                                };
+                                properties.push(ObjectPatternProperty::Property {
+                                    key,
+                                    value: AssignmentTarget::Identifier(name),
+                                    computed: false,
+                                    shorthand: true,
+                                });
+                            }
                         } else {
                             let target = expr_to_target(*value)?;
                             properties.push(ObjectPatternProperty::Property {

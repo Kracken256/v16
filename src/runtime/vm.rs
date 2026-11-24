@@ -148,6 +148,8 @@ pub struct VM {
 
     regex_lit_cache: std::collections::HashMap<usize, crate::regexp::Regex>,
 
+    pub last_yield_src: Option<u16>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -190,6 +192,7 @@ impl VM {
             instanceof_cache_proto: 0,
             instanceof_cache_result: false,
             regex_lit_cache: std::collections::HashMap::new(),
+            last_yield_src: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -908,12 +911,19 @@ impl VM {
 
                     let saved_handlers = self.exception_handlers.clone();
 
-                    let (result_snapshot, result_pc, result_done) = if has_params {
-                        match self.execute_generator_step(ctx, rb, &snapshot, 0) {
-                            Ok((_val, new_snapshot, new_pc, done)) => {
+                    let (result_snapshot, result_pc, result_done, result_send_reg) = if has_params {
+                        match self.execute_generator_step(
+                            ctx,
+                            rb,
+                            &snapshot,
+                            0,
+                            JSValue::undefined(),
+                            None,
+                        ) {
+                            Ok((_val, new_snapshot, new_pc, done, src)) => {
                                 self.exception_handlers = saved_handlers;
                                 self.frame_index = saved_frame_index;
-                                (new_snapshot, new_pc, done)
+                                (new_snapshot, new_pc, done, src)
                             }
                             Err(e) => {
                                 self.exception_handlers = saved_handlers;
@@ -924,16 +934,21 @@ impl VM {
                                 if e.contains("SyntaxError") || e.contains("Uncaught") {
                                     return Err(e);
                                 }
-                                (snapshot, 0, false)
+                                (snapshot, 0, false, None)
                             }
                         }
                     } else {
-                        (snapshot, 0, false)
+                        (snapshot, 0, false, None)
                     };
 
                     let mut gen_obj = crate::object::object::JSObject::new();
                     gen_obj.set_is_generator(true);
-                    if let Some(proto_ptr) = ctx.get_generator_prototype() {
+                    let async_gen_proto = if js_func.is_async() {
+                        ctx.get_async_generator_prototype()
+                    } else {
+                        ctx.get_generator_prototype()
+                    };
+                    if let Some(proto_ptr) = async_gen_proto {
                         gen_obj.prototype = Some(proto_ptr);
                     }
                     gen_obj.set_generator_state(crate::object::object::GeneratorState {
@@ -941,6 +956,7 @@ impl VM {
                         snapshot: result_snapshot,
                         pc: result_pc,
                         done: result_done,
+                        send_reg: result_send_reg,
                     });
                     let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -1968,17 +1984,31 @@ impl VM {
                     snapshot[i + 1] = *arg;
                 }
                 let has_params = (args.len() as u32) < rb.param_count as u32;
-                let (result_snapshot, result_pc, result_done) = if has_params {
-                    match self.execute_generator_step(ctx, rb, &snapshot, 0) {
-                        Ok((_val, new_snapshot, new_pc, done)) => (new_snapshot, new_pc, done),
-                        Err(_) => (snapshot, 0, false),
+                let (result_snapshot, result_pc, result_done, result_send_reg) = if has_params {
+                    match self.execute_generator_step(
+                        ctx,
+                        rb,
+                        &snapshot,
+                        0,
+                        JSValue::undefined(),
+                        None,
+                    ) {
+                        Ok((_val, new_snapshot, new_pc, done, src)) => {
+                            (new_snapshot, new_pc, done, src)
+                        }
+                        Err(_) => (snapshot, 0, false, None),
                     }
                 } else {
-                    (snapshot, 0, false)
+                    (snapshot, 0, false, None)
                 };
                 let mut gen_obj = crate::object::object::JSObject::new();
                 gen_obj.set_is_generator(true);
-                if let Some(proto_ptr) = ctx.get_generator_prototype() {
+                let gen_proto = if js_func.is_async() {
+                    ctx.get_async_generator_prototype()
+                } else {
+                    ctx.get_generator_prototype()
+                };
+                if let Some(proto_ptr) = gen_proto {
                     gen_obj.prototype = Some(proto_ptr);
                 }
                 gen_obj.set_generator_state(crate::object::object::GeneratorState {
@@ -1986,6 +2016,7 @@ impl VM {
                     snapshot: result_snapshot,
                     pc: result_pc,
                     done: result_done,
+                    send_reg: result_send_reg,
                 });
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -2535,6 +2566,7 @@ impl VM {
                 Opcode::Yield => {
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
+                    self.last_yield_src = Some(src);
                     return Ok(ExecutionOutcome::Yield(val));
                 }
                 Opcode::Await => {
@@ -6589,7 +6621,12 @@ impl VM {
                                 }
                                 let mut gen_obj = crate::object::object::JSObject::new();
                                 gen_obj.set_is_generator(true);
-                                if let Some(proto_ptr) = ctx.get_generator_prototype() {
+                                let gen_proto = if js_func.is_async() {
+                                    ctx.get_async_generator_prototype()
+                                } else {
+                                    ctx.get_generator_prototype()
+                                };
+                                if let Some(proto_ptr) = gen_proto {
                                     gen_obj.prototype = Some(proto_ptr);
                                 }
                                 gen_obj.set_generator_state(
@@ -6598,6 +6635,7 @@ impl VM {
                                         snapshot,
                                         pc: 0,
                                         done: false,
+                                        send_reg: None,
                                     },
                                 );
                                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -7288,137 +7326,16 @@ impl VM {
                     let dst_done = self.read_u16_pc();
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
-
-                    if !iter_val.is_object() {
-                        self.set_reg(dst_val, JSValue::undefined());
-                        self.set_reg(dst_done, JSValue::bool(true));
-                        continue;
-                    }
-
-                    let iter_ptr = iter_val.get_ptr();
-                    let iter_obj =
-                        unsafe { &mut *(iter_ptr as *mut crate::object::object::JSObject) };
-                    let arr_atom = ctx.common_atoms.__iter_arr__;
-
-                    if let Some(arr_val) = iter_obj.get(arr_atom) {
-                        let idx_atom = ctx.common_atoms.__iter_idx__;
-                        let idx = iter_obj.get(idx_atom).map(|v| v.get_int()).unwrap_or(0) as usize;
-
-                        if arr_val.is_string() {
-                            let atom = arr_val.get_atom();
-                            let s = ctx.atom_table().get(atom);
-                            let chars: Vec<char> = s.chars().collect();
-                            if idx < chars.len() {
-                                let ch = chars[idx].to_string();
-                                let ch_atom = ctx.atom_table_mut().intern(&ch);
-                                let ch_val = JSValue::new_string(ch_atom);
-                                iter_obj.set_cached(
-                                    idx_atom,
-                                    JSValue::new_int((idx + 1) as i64),
-                                    ctx.shape_cache_mut(),
-                                );
-                                self.set_reg(dst_val, ch_val);
-                                self.set_reg(dst_done, JSValue::bool(false));
-                            } else {
-                                self.set_reg(dst_val, JSValue::undefined());
-                                self.set_reg(dst_done, JSValue::bool(true));
-                            }
-                        } else if arr_val.is_object() {
-                            let arr_ptr = arr_val.get_ptr();
-                            let is_jsarray =
-                                unsafe { &*(arr_ptr as *const crate::object::object::JSObject) }
-                                    .is_dense_array();
-                            let length = if is_jsarray {
-                                let arr = unsafe {
-                                    &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                                };
-                                arr.len()
-                            } else {
-                                let obj = unsafe {
-                                    &*(arr_ptr as *const crate::object::object::JSObject)
-                                };
-                                let len_atom = ctx.common_atoms.length;
-                                obj.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
-                            };
-
-                            if idx < length {
-                                let value = if is_jsarray {
-                                    let arr = unsafe {
-                                        &*(arr_ptr
-                                            as *const crate::object::array_obj::JSArrayObject)
-                                    };
-                                    arr.get(idx).unwrap_or(JSValue::undefined())
-                                } else {
-                                    let obj = unsafe {
-                                        &*(arr_ptr as *const crate::object::object::JSObject)
-                                    };
-                                    let key = self.int_atom(idx, ctx);
-                                    obj.get(key).unwrap_or(JSValue::undefined())
-                                };
-                                iter_obj.set_cached(
-                                    idx_atom,
-                                    JSValue::new_int((idx + 1) as i64),
-                                    ctx.shape_cache_mut(),
-                                );
-                                self.set_reg(dst_val, value);
-                                self.set_reg(dst_done, JSValue::bool(false));
-                            } else {
-                                self.set_reg(dst_val, JSValue::undefined());
-                                self.set_reg(dst_done, JSValue::bool(true));
-                            }
-                        } else {
-                            self.set_reg(dst_val, JSValue::undefined());
-                            self.set_reg(dst_done, JSValue::bool(true));
-                        }
-                    } else {
-                        let next_atom = ctx.intern("next");
-                        let next_fn = iter_obj.get(next_atom).or_else(|| {
-                            let mut proto = iter_obj.prototype;
-                            while let Some(p) = proto {
-                                let pobj = unsafe { &*p };
-                                if let Some(v) = pobj.get(next_atom) {
-                                    return Some(v);
-                                }
-                                proto = pobj.prototype;
-                            }
-                            None
-                        });
-
-                        if let Some(next_fn_val) = next_fn {
-                            if next_fn_val.is_function() {
-                                match self.call_function_with_this(ctx, next_fn_val, iter_val, &[])
-                                {
-                                    Ok(result) => {
-                                        if result.is_object() {
-                                            let result_obj = result.as_object();
-                                            let value = result_obj
-                                                .get(ctx.intern("value"))
-                                                .unwrap_or(JSValue::undefined());
-                                            let done = result_obj
-                                                .get(ctx.intern("done"))
-                                                .unwrap_or(JSValue::bool(false));
-                                            self.set_reg(dst_val, value);
-                                            self.set_reg(dst_done, done);
-                                        } else {
-                                            self.set_reg(dst_val, JSValue::undefined());
-                                            self.set_reg(dst_done, JSValue::bool(true));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.set_reg(dst_val, JSValue::undefined());
-                                        self.set_reg(dst_done, JSValue::bool(true));
-                                        return Err(e);
-                                    }
-                                }
-                            } else {
-                                self.set_reg(dst_val, JSValue::undefined());
-                                self.set_reg(dst_done, JSValue::bool(true));
-                            }
-                        } else {
-                            self.set_reg(dst_val, JSValue::undefined());
-                            self.set_reg(dst_done, JSValue::bool(true));
-                        }
-                    }
+                    self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None)?;
+                }
+                Opcode::IteratorNextSend => {
+                    let dst_val = self.read_u16_pc();
+                    let dst_done = self.read_u16_pc();
+                    let iter_reg = self.read_u16_pc();
+                    let send_reg = self.read_u16_pc();
+                    let iter_val = self.get_reg(iter_reg);
+                    let send_val = self.get_reg(send_reg);
+                    self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val))?;
                 }
                 Opcode::GetArguments => {
                     let dst = self.read_u16_pc();
@@ -7555,8 +7472,11 @@ impl VM {
         bytecode: &Bytecode,
         registers_snapshot: &[JSValue],
         start_pc: usize,
-    ) -> Result<(JSValue, Vec<JSValue>, usize, bool), String> {
+        send_value: JSValue,
+        send_reg: Option<u16>,
+    ) -> Result<(JSValue, Vec<JSValue>, usize, bool, Option<u16>), String> {
         self.ctx_ptr = ctx;
+        self.last_yield_src = None;
 
         let needed = bytecode.locals_count as usize;
         if needed > self.registers.len() {
@@ -7573,11 +7493,168 @@ impl VM {
             }
         }
 
+        if let Some(r) = send_reg {
+            let idx = r as usize;
+            if idx < self.registers.len() {
+                self.registers[idx] = send_value;
+            }
+        }
+
         let result = self.execute_inner(ctx, bytecode, true, start_pc, true)?;
         match result {
-            ExecutionOutcome::Complete(val) => Ok((val, self.registers.clone(), self.pc, true)),
-            ExecutionOutcome::Yield(val) => Ok((val, self.registers.clone(), self.pc, false)),
+            ExecutionOutcome::Complete(val) => Ok((
+                val,
+                self.registers.clone(),
+                self.pc,
+                true,
+                self.last_yield_src,
+            )),
+            ExecutionOutcome::Yield(val) => Ok((
+                val,
+                self.registers.clone(),
+                self.pc,
+                false,
+                self.last_yield_src,
+            )),
         }
+    }
+
+    fn op_iterator_next(
+        &mut self,
+        ctx: &mut JSContext,
+        dst_val: u16,
+        dst_done: u16,
+        iter_val: JSValue,
+        send: Option<JSValue>,
+    ) -> Result<(), String> {
+        if !iter_val.is_object() {
+            self.set_reg(dst_val, JSValue::undefined());
+            self.set_reg(dst_done, JSValue::bool(true));
+            return Ok(());
+        }
+
+        let iter_ptr = iter_val.get_ptr();
+        let iter_obj = unsafe { &mut *(iter_ptr as *mut crate::object::object::JSObject) };
+        let arr_atom = ctx.common_atoms.__iter_arr__;
+
+        if let Some(arr_val) = iter_obj.get(arr_atom) {
+            let idx_atom = ctx.common_atoms.__iter_idx__;
+            let idx = iter_obj.get(idx_atom).map(|v| v.get_int()).unwrap_or(0) as usize;
+
+            if arr_val.is_string() {
+                let atom = arr_val.get_atom();
+                let s = ctx.atom_table().get(atom);
+                let chars: Vec<char> = s.chars().collect();
+                if idx < chars.len() {
+                    let ch = chars[idx].to_string();
+                    let ch_atom = ctx.atom_table_mut().intern(&ch);
+                    let ch_val = JSValue::new_string(ch_atom);
+                    iter_obj.set_cached(
+                        idx_atom,
+                        JSValue::new_int((idx + 1) as i64),
+                        ctx.shape_cache_mut(),
+                    );
+                    self.set_reg(dst_val, ch_val);
+                    self.set_reg(dst_done, JSValue::bool(false));
+                } else {
+                    self.set_reg(dst_val, JSValue::undefined());
+                    self.set_reg(dst_done, JSValue::bool(true));
+                }
+            } else if arr_val.is_object() {
+                let arr_ptr = arr_val.get_ptr();
+                let is_jsarray = unsafe { &*(arr_ptr as *const crate::object::object::JSObject) }
+                    .is_dense_array();
+                let length = if is_jsarray {
+                    let arr = unsafe {
+                        &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
+                    };
+                    arr.len()
+                } else {
+                    let obj = unsafe { &*(arr_ptr as *const crate::object::object::JSObject) };
+                    let len_atom = ctx.common_atoms.length;
+                    obj.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
+                };
+
+                if idx < length {
+                    let value = if is_jsarray {
+                        let arr = unsafe {
+                            &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
+                        };
+                        arr.get(idx).unwrap_or(JSValue::undefined())
+                    } else {
+                        let obj = unsafe { &*(arr_ptr as *const crate::object::object::JSObject) };
+                        let key = self.int_atom(idx, ctx);
+                        obj.get(key).unwrap_or(JSValue::undefined())
+                    };
+                    iter_obj.set_cached(
+                        idx_atom,
+                        JSValue::new_int((idx + 1) as i64),
+                        ctx.shape_cache_mut(),
+                    );
+                    self.set_reg(dst_val, value);
+                    self.set_reg(dst_done, JSValue::bool(false));
+                } else {
+                    self.set_reg(dst_val, JSValue::undefined());
+                    self.set_reg(dst_done, JSValue::bool(true));
+                }
+            } else {
+                self.set_reg(dst_val, JSValue::undefined());
+                self.set_reg(dst_done, JSValue::bool(true));
+            }
+            return Ok(());
+        }
+
+        let next_atom = ctx.intern("next");
+        let next_fn = iter_obj.get(next_atom).or_else(|| {
+            let mut proto = iter_obj.prototype;
+            while let Some(p) = proto {
+                let pobj = unsafe { &*p };
+                if let Some(v) = pobj.get(next_atom) {
+                    return Some(v);
+                }
+                proto = pobj.prototype;
+            }
+            None
+        });
+
+        if let Some(next_fn_val) = next_fn {
+            if next_fn_val.is_function() {
+                let args: Vec<JSValue> = match send {
+                    Some(v) => vec![v],
+                    None => Vec::new(),
+                };
+                match self.call_function_with_this(ctx, next_fn_val, iter_val, &args) {
+                    Ok(result) => {
+                        if result.is_object() {
+                            let result_obj = result.as_object();
+                            let value = result_obj
+                                .get(ctx.intern("value"))
+                                .unwrap_or(JSValue::undefined());
+                            let done = result_obj
+                                .get(ctx.intern("done"))
+                                .unwrap_or(JSValue::bool(false));
+                            self.set_reg(dst_val, value);
+                            self.set_reg(dst_done, done);
+                        } else {
+                            self.set_reg(dst_val, JSValue::undefined());
+                            self.set_reg(dst_done, JSValue::bool(true));
+                        }
+                    }
+                    Err(e) => {
+                        self.set_reg(dst_val, JSValue::undefined());
+                        self.set_reg(dst_done, JSValue::bool(true));
+                        return Err(e);
+                    }
+                }
+            } else {
+                self.set_reg(dst_val, JSValue::undefined());
+                self.set_reg(dst_done, JSValue::bool(true));
+            }
+        } else {
+            self.set_reg(dst_val, JSValue::undefined());
+            self.set_reg(dst_done, JSValue::bool(true));
+        }
+        Ok(())
     }
 
     #[inline(always)]
