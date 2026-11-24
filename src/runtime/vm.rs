@@ -8068,7 +8068,23 @@ impl VM {
                                                 JSValue::undefined()
                                             }
                                         }
-                                        Err(e) => return Err(e),
+                                        Err(e) => {
+                                            let host_exc = ctx.pending_exception.take();
+                                            if let Some(exc) = self
+                                                .last_caught_exception
+                                                .take()
+                                                .or(host_exc)
+                                            {
+                                                match self.dispatch_throw_value(ctx, exc) {
+                                                    ThrowDispatch::Caught => continue,
+                                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                                    ThrowDispatch::AsyncComplete(o) => {
+                                                        return Ok(o)
+                                                    }
+                                                }
+                                            }
+                                            return Err(e);
+                                        }
                                     }
                                 } else {
                                     JSValue::undefined()
