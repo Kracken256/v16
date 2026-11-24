@@ -3210,6 +3210,14 @@ fn init_date(ctx: &mut JSContext) {
         HostFunction::method("setFullYear", 3, date::date_set_full_year),
     );
     ctx.register_builtin(
+        "date_getYear",
+        HostFunction::method("getYear", 0, date::date_get_year),
+    );
+    ctx.register_builtin(
+        "date_setYear",
+        HostFunction::method("setYear", 1, date::date_set_year),
+    );
+    ctx.register_builtin(
         "date_setUTCMilliseconds",
         HostFunction::method("setUTCMilliseconds", 1, date::date_set_utc_milliseconds),
     );

@@ -312,6 +312,11 @@ pub fn init_date(ctx: &mut JSContext) {
     );
     set_ne(
         &mut proto_obj,
+        ctx.intern("getYear"),
+        create_builtin_function(ctx, "date_getYear", 0, None),
+    );
+    set_ne(
+        &mut proto_obj,
         ctx.intern("getMonth"),
         create_builtin_function(ctx, "date_getMonth", 0, None),
     );
@@ -432,6 +437,11 @@ pub fn init_date(ctx: &mut JSContext) {
     );
     set_ne(
         &mut proto_obj,
+        ctx.intern("setYear"),
+        create_builtin_function(ctx, "date_setYear", 1, None),
+    );
+    set_ne(
+        &mut proto_obj,
         ctx.intern("setUTCMilliseconds"),
         create_builtin_function(ctx, "date_setUTCMilliseconds", 1, None),
     );
@@ -475,11 +485,9 @@ pub fn init_date(ctx: &mut JSContext) {
         ctx.intern("toISOString"),
         create_builtin_function(ctx, "date_toISOString", 0, None),
     );
-    set_ne(
-        &mut proto_obj,
-        ctx.intern("toUTCString"),
-        create_builtin_function(ctx, "date_toUTCString", 0, None),
-    );
+    let to_utc_string_fn = create_builtin_function(ctx, "date_toUTCString", 0, None);
+    set_ne(&mut proto_obj, ctx.intern("toUTCString"), to_utc_string_fn);
+    set_ne(&mut proto_obj, ctx.intern("toGMTString"), to_utc_string_fn);
     set_ne(
         &mut proto_obj,
         ctx.intern("toDateString"),
@@ -1028,6 +1036,20 @@ pub fn date_get_full_year(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     JSValue::new_int(year as i64)
 }
 
+pub fn date_get_year(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = &args.get(0).cloned().unwrap_or_else(JSValue::undefined);
+    if let Some(_) = require_date_this(ctx, this) {
+        return JSValue::undefined();
+    }
+    let timestamp = get_date_timestamp_with_ctx(this, ctx);
+    if timestamp.is_nan() {
+        return JSValue::new_float(f64::NAN);
+    }
+
+    let (year, _, _, _, _, _, _, _) = timestamp_to_date(timestamp);
+    JSValue::new_int(year as i64 - 1900)
+}
+
 pub fn date_get_month(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = &args.get(0).cloned().unwrap_or_else(JSValue::undefined);
     if let Some(_) = require_date_this(ctx, this) {
@@ -1554,6 +1576,39 @@ pub fn date_set_full_year(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let new_ts = make_date(make_day(y, mo, dt), time_within_day(tsi) as f64);
     set_date_timestamp(ctx, this, time_clip(new_ts))
 }
+pub fn date_set_year(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = &args.get(0).cloned().unwrap_or_else(JSValue::undefined);
+    if let Some(_) = require_date_this(ctx, this) {
+        return JSValue::undefined();
+    }
+    let ts = get_date_timestamp_with_ctx(this, ctx);
+    let y = match coerce_arg(ctx, args.get(1)) {
+        Ok(Some(n)) => n,
+        Ok(None) => f64::NAN,
+        Err(()) => return JSValue::undefined(),
+    };
+    let yyyy = if y.is_nan() {
+        f64::NAN
+    } else {
+        let yi = if y.is_infinite() { y } else { y.trunc() };
+        if (0.0..=99.0).contains(&yi) {
+            1900.0 + yi
+        } else {
+            y
+        }
+    };
+    let t = if ts.is_nan() { 0.0 } else { ts };
+    let tsi = t as i64;
+    let year = year_from_time(tsi);
+    let month = month_from_time(tsi);
+    let dt = (day_within_year(year, day_from_time(tsi))
+        - month_to_day_in_year(month as i32, is_leap_year(year)) as i64
+        + 1) as f64;
+    let new_ts = make_date(make_day(yyyy, month as f64, dt), time_within_day(tsi) as f64);
+    set_date_timestamp(ctx, this, time_clip(new_ts))
+}
+
+
 
 pub fn date_set_utc_milliseconds(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     date_set_milliseconds(ctx, args)
@@ -2026,10 +2081,8 @@ fn timestamp_to_date(ms: f64) -> (i32, u32, u32, u32, u32, u32, u32, u32) {
     }
 
     let total_ms = ms as i64;
-    let total_seconds = total_ms / 1000;
-    let total_minutes = total_seconds / 60;
-    let total_hours = total_minutes / 60;
-    let total_days = total_hours / 24;
+    let total_days = total_ms.div_euclid(86_400_000);
+    let ms_within_day = total_ms.rem_euclid(86_400_000);
 
     let mut year = 1970;
     let mut remaining_days = total_days;
@@ -2062,11 +2115,11 @@ fn timestamp_to_date(ms: f64) -> (i32, u32, u32, u32, u32, u32, u32, u32) {
     }
 
     let day = (remaining_days + 1) as u32;
-    let hour = ((total_hours % 24 + 24) % 24) as u32;
-    let minute = ((total_minutes % 60 + 60) % 60) as u32;
-    let second = ((total_seconds % 60 + 60) % 60) as u32;
-    let ms_part = (total_ms % 1000 + 1000) % 1000;
-    let weekday = ((total_days % 7 + 4 + 7) % 7) as u32;
+    let hour = (ms_within_day / 3_600_000) as u32;
+    let minute = ((ms_within_day / 60_000) % 60) as u32;
+    let second = ((ms_within_day / 1000) % 60) as u32;
+    let ms_part = (ms_within_day % 1000) as u32;
+    let weekday = ((total_days.rem_euclid(7) + 4) % 7) as u32;
 
     (
         year,

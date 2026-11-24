@@ -1544,6 +1544,19 @@ fn array_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     JSValue::undefined()
 }
 
+fn checked_array_len(
+    ctx: &mut JSContext,
+    obj: &JSObject,
+    len_atom: crate::runtime::atom::Atom,
+) -> Option<u64> {
+    let len = safe_array_len_with_ctx(obj, len_atom, ctx);
+    if len > ARRAY_LENGTH_LIMIT {
+        throw_range_error(ctx, "Invalid array length");
+        return None;
+    }
+    Some(len)
+}
+
 fn array_map(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = if args.is_empty() { JSValue::undefined() } else { args[0] };
 
@@ -1577,7 +1590,10 @@ fn array_map(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let length_atom = ctx.common_atoms.length;
 
-    let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
+    let len = match checked_array_len(ctx, obj, length_atom) {
+        Some(l) => l as usize,
+        None => return JSValue::undefined(),
+    };
 
     let mut result = new_jsarray_with_proto(ctx);
 
