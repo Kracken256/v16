@@ -8600,7 +8600,7 @@ impl VM {
             if let Some(custom_fn) = func.base.get(ctx.common_atoms.value_of) {
                 if custom_fn.is_function() {
                     if let Ok(r) = self.call_function_with_this(ctx, custom_fn, *v, &[]) {
-                        if !r.is_object() {
+                        if !r.is_object() && !r.is_function() {
                             return r;
                         }
                     }
@@ -8610,7 +8610,7 @@ impl VM {
             if let Some(custom_fn) = func.base.get(ctx.common_atoms.to_string) {
                 if custom_fn.is_function() {
                     if let Ok(r) = self.call_function_with_this(ctx, custom_fn, *v, &[]) {
-                        if !r.is_object() {
+                        if !r.is_object() && !r.is_function() {
                             return r;
                         }
                     }
@@ -8734,7 +8734,7 @@ impl VM {
                     let result =
                         self.call_function_safe(ctx, tp_fn, *v, &[JSValue::new_string(hint_atom)]);
                     match result {
-                        Ok(r) if !r.is_object() => return r,
+                        Ok(r) if !r.is_object() && !r.is_function() => return r,
                         Ok(_) => {
                             self.set_pending_type_error(
                                 ctx,
@@ -8763,7 +8763,7 @@ impl VM {
                 if f.is_function() {
                     let result = self.call_function_safe(ctx, f, *v, &[]);
                     match result {
-                        Ok(r) if !r.is_object() => return r,
+                        Ok(r) if !r.is_object() && !r.is_function() => return r,
                         Ok(_) => {}
                         Err(_) => {
                             return JSValue::undefined();
