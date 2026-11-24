@@ -2002,10 +2002,13 @@ pub fn to_property_key_string(ctx: &mut JSContext, v: &JSValue) -> String {
         throw_type_error(ctx, "Cannot convert a Symbol value to a property key");
         return String::new();
     }
-    if v.is_object() {
+    if v.is_object() || v.is_function() {
         if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
             let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
             let prim = vm.ordinary_to_primitive(v, "string", ctx);
+            if let Some(exc) = vm.take_pending_exception(ctx) {
+                ctx.pending_exception = Some(exc);
+            }
             if ctx.pending_exception.is_some() {
                 return String::new();
             }
