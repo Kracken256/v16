@@ -403,7 +403,11 @@ fn typedarray_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn typedarray_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let items: Vec<JSValue> = args[1..].to_vec();
+    let items: Vec<JSValue> = if args.len() > 1 {
+        args[1..].to_vec()
+    } else {
+        Vec::new()
+    };
     let len = items.len();
     let buffer = create_array_buffer(ctx, len * 8);
     match create_typed_array(ctx, TypedArrayKind::Float64, buffer, 0, Some(len)) {
