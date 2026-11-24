@@ -1547,6 +1547,14 @@ impl JSObject {
     }
 
     pub fn own_properties(&self) -> Vec<(Atom, JSValue)> {
+        self.own_properties_impl(false)
+    }
+
+    pub fn own_properties_including_symbols(&self) -> Vec<(Atom, JSValue)> {
+        self.own_properties_impl(true)
+    }
+
+    fn own_properties_impl(&self, include_symbols: bool) -> Vec<(Atom, JSValue)> {
         let mut result = Vec::new();
         let mut seen = std::collections::HashSet::new();
         // Use the property order vector if available, otherwise fall back to props order
@@ -1554,7 +1562,7 @@ impl JSObject {
             if let Some(ref order) = extra.property_order {
                 for atom in order.iter() {
                     // Skip Symbol-keyed properties
-                    if atom.0 & 0x40000000 != 0 {
+                    if !include_symbols && atom.0 & 0x40000000 != 0 {
                         continue;
                     }
                     // Check if it's a data property
@@ -1590,7 +1598,7 @@ impl JSObject {
             if slot.attrs == ATTR_DELETED {
                 continue;
             }
-            if slot.atom.0 & 0x40000000 != 0 {
+            if !include_symbols && slot.atom.0 & 0x40000000 != 0 {
                 continue;
             }
             if slot.attrs & ATTR_ENUMERABLE != 0 && !seen.contains(&slot.atom) {
@@ -1602,7 +1610,7 @@ impl JSObject {
         if let Some(ref extra) = self.extra {
             if let Some(ref accs) = extra.accessors {
                 for (atom, entry) in accs.iter() {
-                    if atom.0 & 0x40000000 != 0 {
+                    if !include_symbols && atom.0 & 0x40000000 != 0 {
                         continue;
                     }
                     if entry.enumerable && !seen.contains(atom) {

@@ -5925,10 +5925,17 @@ impl VM {
                     if (dst_val.is_object() || dst_val.is_function())
                         && (src_val.is_object() || src_val.is_function())
                     {
-                        let dst_obj = dst_val.as_object_mut();
-                        let src_obj = src_val.as_object();
-
-                        for (atom, value) in src_obj.own_properties() {
+                        let keys: Vec<crate::runtime::atom::Atom> = {
+                            let src_obj = src_val.as_object();
+                            src_obj
+                                .own_properties_including_symbols()
+                                .into_iter()
+                                .map(|(atom, _)| atom)
+                                .collect()
+                        };
+                        for atom in keys {
+                            let value = self.get_prop_value(ctx, src_val, atom)?;
+                            let dst_obj = dst_val.as_object_mut();
                             dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
                         }
                     }
