@@ -1126,7 +1126,7 @@ fn map_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn map_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
-        return create_map_iter(ctx, vec![]);
+        return create_map_iter(ctx, JSValue::undefined(), "key");
     }
     let this = args[0];
     if !this.is_object() {
@@ -1138,19 +1138,12 @@ fn map_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.keys called on incompatible receiver");
         return JSValue::undefined();
     }
-    let size = map_size(ctx, obj);
-
-    let mut keys = Vec::with_capacity(size);
-    for i in 0..size {
-        let mk_atom = map_key_atom(ctx, i);
-        keys.push(obj.get(mk_atom).unwrap_or_else(JSValue::undefined));
-    }
-    create_map_iter(ctx, keys)
+    create_map_iter(ctx, this, "key")
 }
 
 fn map_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
-        return create_map_iter(ctx, vec![]);
+        return create_map_iter(ctx, JSValue::undefined(), "key");
     }
     let this = args[0];
     if !this.is_object() {
@@ -1162,19 +1155,12 @@ fn map_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.values called on incompatible receiver");
         return JSValue::undefined();
     }
-    let size = map_size(ctx, obj);
-
-    let mut vals = Vec::with_capacity(size);
-    for i in 0..size {
-        let mv_atom = map_val_atom(ctx, i);
-        vals.push(obj.get(mv_atom).unwrap_or_else(JSValue::undefined));
-    }
-    create_map_iter(ctx, vals)
+    create_map_iter(ctx, this, "value")
 }
 
 fn map_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
-        return create_map_iter(ctx, vec![]);
+        return create_map_iter(ctx, JSValue::undefined(), "key");
     }
     let this = args[0];
     if !this.is_object() {
@@ -1186,23 +1172,12 @@ fn map_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.entries called on incompatible receiver");
         return JSValue::undefined();
     }
-    let size = map_size(ctx, obj);
-
-    let mut entries = Vec::with_capacity(size);
-    for i in 0..size {
-        let mk_atom = map_key_atom(ctx, i);
-        let mv_atom = map_val_atom(ctx, i);
-        let k = obj.get(mk_atom).unwrap_or_else(JSValue::undefined);
-        let v = obj.get(mv_atom).unwrap_or_else(JSValue::undefined);
-        let pair = make_array(ctx, vec![k, v]);
-        entries.push(pair);
-    }
-    create_map_iter(ctx, entries)
+    create_map_iter(ctx, this, "entry")
 }
 
 fn map_symbol_iterator(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
-        return create_map_iter(ctx, vec![]);
+        return create_map_iter(ctx, JSValue::undefined(), "key");
     }
     let this = args[0];
     if !this.is_object() {
@@ -1214,33 +1189,29 @@ fn map_symbol_iterator(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype[Symbol.iterator] called on incompatible receiver");
         return JSValue::undefined();
     }
-    let size = map_size(ctx, obj);
-    let mut entries = Vec::with_capacity(size);
-    for i in 0..size {
-        let mk_atom = map_key_atom(ctx, i);
-        let mv_atom = map_val_atom(ctx, i);
-        let k = obj.get(mk_atom).unwrap_or_else(JSValue::undefined);
-        let v = obj.get(mv_atom).unwrap_or_else(JSValue::undefined);
-        let pair = make_array(ctx, vec![k, v]);
-        entries.push(pair);
-    }
-    create_map_iter(ctx, entries)
+    create_map_iter(ctx, this, "entry")
 }
 
-fn create_map_iter(ctx: &mut JSContext, entries: Vec<JSValue>) -> JSValue {
-    create_iter_with_proto(ctx, entries, ctx.get_map_iterator_prototype())
+fn create_map_iter(ctx: &mut JSContext, map_obj: JSValue, kind: &str) -> JSValue {
+    create_live_iter(ctx, map_obj, kind, ctx.get_map_iterator_prototype())
 }
 
-fn create_set_iter(ctx: &mut JSContext, entries: Vec<JSValue>) -> JSValue {
-    create_iter_with_proto(ctx, entries, ctx.get_set_iterator_prototype())
+fn create_set_iter(ctx: &mut JSContext, set_obj: JSValue, kind: &str) -> JSValue {
+    create_live_iter(ctx, set_obj, kind, ctx.get_set_iterator_prototype())
 }
 
-fn create_iter_with_proto(ctx: &mut JSContext, entries: Vec<JSValue>, proto: Option<usize>) -> JSValue {
+fn create_live_iter(
+    ctx: &mut JSContext,
+    collection: JSValue,
+    kind: &str,
+    proto: Option<usize>,
+) -> JSValue {
     let mut iter_obj = JSObject::new();
-    let arr_atom = ctx.common_atoms.__iter_arr__;
+    let map_atom = ctx.intern("__iter_map__");
+    let kind_atom = ctx.intern("__iter_kind__");
     let idx_atom = ctx.common_atoms.__iter_idx__;
-    let entries_arr = make_array(ctx, entries);
-    iter_obj.set(arr_atom, entries_arr);
+    iter_obj.set(map_atom, collection);
+    iter_obj.set(kind_atom, JSValue::new_string(ctx.intern(kind)));
     iter_obj.set(idx_atom, JSValue::new_int(0));
     if let Some(proto_ptr) = proto {
         iter_obj.prototype = Some(proto_ptr as *mut JSObject);
@@ -1261,7 +1232,52 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let obj_mut = unsafe { &mut *(obj_ptr as *mut JSObject) };
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
+    let map_atom = ctx.intern("__iter_map__");
+    let kind_atom = ctx.intern("__iter_kind__");
+    let done_atom = ctx.intern("done");
+    let value_atom = ctx.intern("value");
     let iter_idx = obj.get(idx_atom).map(|v| if v.is_int() { v.get_int() as usize } else { 0 }).unwrap_or(0);
+    if let Some(collection) = obj.get(map_atom).filter(|value| value.is_object_like()) {
+        let kind = obj
+            .get(kind_atom)
+            .filter(|value| value.is_string())
+            .map(|value| ctx.get_atom_str(value.get_atom()).to_string())
+            .unwrap_or_else(|| "key".to_string());
+        let coll = collection.as_object();
+        let is_set = kind == "set-value" || kind == "set-entry";
+        let size = if is_set { set_size(ctx, coll) } else { map_size(ctx, coll) };
+        if iter_idx < size {
+            let value = if is_set {
+                let v = coll.get(set_val_atom(ctx, iter_idx)).unwrap_or_else(JSValue::undefined);
+                if kind == "set-entry" {
+                    make_array(ctx, vec![v, v])
+                } else {
+                    v
+                }
+            } else {
+                let k = coll.get(map_key_atom(ctx, iter_idx)).unwrap_or_else(JSValue::undefined);
+                let v = coll.get(map_val_atom(ctx, iter_idx)).unwrap_or_else(JSValue::undefined);
+                match kind.as_str() {
+                    "key" => k,
+                    "value" => v,
+                    _ => make_array(ctx, vec![k, v]),
+                }
+            };
+            obj_mut.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
+            let mut result = JSObject::new();
+            result.set(value_atom, value);
+            result.set(done_atom, JSValue::bool(false));
+            let ptr = Box::into_raw(Box::new(result)) as usize;
+            ctx.runtime_mut().gc_heap_mut().track(ptr);
+            return JSValue::new_object(ptr);
+        }
+        let mut result = JSObject::new();
+        result.set(value_atom, JSValue::undefined());
+        result.set(done_atom, JSValue::bool(true));
+        let ptr = Box::into_raw(Box::new(result)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        return JSValue::new_object(ptr);
+    }
     let arr_val = match obj.get(arr_atom) {
         Some(v) => v,
         None => {
@@ -1275,8 +1291,6 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let arr_obj = arr_val.as_object();
     let len = arr_obj.get(ctx.common_atoms.length).map(|v| super::string::js_to_length(&v) as usize).unwrap_or(0);
-    let done_atom = ctx.intern("done");
-    let value_atom = ctx.intern("value");
     if iter_idx < len {
         let value = super::array::array_get(arr_obj, iter_idx, ctx).unwrap_or_else(JSValue::undefined);
         obj_mut.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
@@ -1302,7 +1316,7 @@ fn iterator_symbol_iterator(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn set_symbol_iterator(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
-        return create_set_iter(ctx, vec![]);
+        return create_set_iter(ctx, JSValue::undefined(), "set-value");
     }
     let this = args[0];
     if !this.is_object() {
@@ -1314,14 +1328,7 @@ fn set_symbol_iterator(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype[Symbol.iterator] called on incompatible receiver");
         return JSValue::undefined();
     }
-    let size = set_size(ctx, obj);
-    let mut values = Vec::with_capacity(size);
-    for i in 0..size {
-        let sv_atom = set_val_atom(ctx, i);
-        let v = obj.get(sv_atom).unwrap_or_else(JSValue::undefined);
-        values.push(v);
-    }
-    create_set_iter(ctx, values)
+    create_set_iter(ctx, this, "set-value")
 }
 
 fn weakmap_constructor(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
@@ -1790,7 +1797,7 @@ fn set_clear(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn set_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
-        return create_set_iter(ctx, vec![]);
+        return create_set_iter(ctx, JSValue::undefined(), "set-value");
     }
     let this = args[0];
     if !this.is_object() {
@@ -1802,14 +1809,7 @@ fn set_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.values called on incompatible receiver");
         return JSValue::undefined();
     }
-    let size = set_size(ctx, obj);
-
-    let mut vals = Vec::with_capacity(size);
-    for i in 0..size {
-        let sv_atom = set_val_atom(ctx, i);
-        vals.push(obj.get(sv_atom).unwrap_or_else(JSValue::undefined));
-    }
-    create_set_iter(ctx, vals)
+    create_set_iter(ctx, this, "set-value")
 }
 
 fn set_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1818,7 +1818,7 @@ fn set_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn set_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
-        return create_set_iter(ctx, vec![]);
+        return create_set_iter(ctx, JSValue::undefined(), "set-value");
     }
     let this = args[0];
     if !this.is_object() {
@@ -1830,16 +1830,7 @@ fn set_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.entries called on incompatible receiver");
         return JSValue::undefined();
     }
-    let size = set_size(ctx, obj);
-
-    let mut entries = Vec::with_capacity(size);
-    for i in 0..size {
-        let sv_atom = set_val_atom(ctx, i);
-        let v = obj.get(sv_atom).unwrap_or_else(JSValue::undefined);
-        let pair = make_array(ctx, vec![v, v]);
-        entries.push(pair);
-    }
-    create_set_iter(ctx, entries)
+    create_set_iter(ctx, this, "set-entry")
 }
 
 fn set_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
