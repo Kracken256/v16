@@ -347,6 +347,7 @@ pub struct VM {
     pending_finally_return: Option<(usize, JSValue)>,
     pending_finally_jump: Option<(usize, usize, usize)>,
     pending_finally_depth: usize,
+    caught_exception_value: Option<JSValue>,
 
     ctx_ptr: *mut crate::runtime::JSContext,
 
@@ -433,6 +434,7 @@ impl VM {
             pending_finally_return: None,
             pending_finally_jump: None,
             pending_finally_depth: 0,
+            caught_exception_value: None,
             ctx_ptr: std::ptr::null_mut(),
             allocation_count: 0,
             caller_vm: None,
@@ -2772,7 +2774,7 @@ impl VM {
             }
             self.pc = handler.catch_pc;
             self.refresh_cache();
-            self.set_reg(0, value);
+            self.caught_exception_value = Some(value);
             ThrowDispatch::Caught
         } else {
             self.clear_pending_finally_for_frame(self.frame_index);
@@ -5337,7 +5339,7 @@ impl VM {
                             self.pc = handler.catch_pc;
                         }
                         self.refresh_cache();
-                        self.set_reg(0, value);
+                        self.caught_exception_value = Some(value);
                     } else {
                         self.clear_pending_finally_for_frame(self.frame_index);
                         if let Some(async_idx) = find_async_frame(&self.frames, self.frame_index) {
@@ -8292,6 +8294,14 @@ impl VM {
                             arr.header.set(len_atom, JSValue::new_int(new_len));
                         }
                     }
+                }
+                Opcode::LoadCaughtException => {
+                    let dst = self.read_u16_pc();
+                    let value = self
+                        .caught_exception_value
+                        .take()
+                        .unwrap_or_else(JSValue::undefined);
+                    self.set_reg(dst, value);
                 }
                 Opcode::SetProto => {
                     let obj_reg = self.read_u16_pc();

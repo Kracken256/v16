@@ -5420,24 +5420,25 @@ impl CodeGenerator {
                         self.pre_scan_binding(param, VariableKind::Let);
                         self.emit_tdz_for_binding(param)?;
                         let slot = self.declare_var(name, VariableKind::Let);
-                        if slot != 0 {
-                            self.emit(Opcode::Move);
-                            self.emit_u16(slot);
-                            self.emit_u16(0);
-                        }
+                        self.emit(Opcode::LoadCaughtException);
+                        self.emit_u16(slot);
 
                         if self.is_global_var(name) {
                             let atom = ctx.intern(name);
                             let idx = self.add_constant(JSValue::new_string(atom));
                             self.emit(Opcode::SetGlobal);
                             self.emit_u32(idx);
-                            self.emit_u16(0);
+                            self.emit_u16(slot);
                         }
                     }
                     _ => {
                         self.pre_scan_binding(param, VariableKind::Let);
                         self.emit_tdz_for_binding(param)?;
-                        self.gen_binding_pattern(param, 0, VariableKind::Let, ctx)?;
+                        let exc_reg = self.alloc_register();
+                        self.emit(Opcode::LoadCaughtException);
+                        self.emit_u16(exc_reg);
+                        self.gen_binding_pattern(param, exc_reg, VariableKind::Let, ctx)?;
+                        self.free_register(exc_reg);
                     }
                 }
             }

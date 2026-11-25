@@ -205,6 +205,7 @@ pub enum Opcode {
     GetEvalPrivateOwner = 241,
     CheckObjectOrNull = 242,
     ArrayPushAll = 243,
+    LoadCaughtException = 244,
 }
 
 impl Opcode {
@@ -401,6 +402,7 @@ impl Opcode {
             241 => Some(Opcode::GetEvalPrivateOwner),
             242 => Some(Opcode::CheckObjectOrNull),
             243 => Some(Opcode::ArrayPushAll),
+            244 => Some(Opcode::LoadCaughtException),
             _ => None,
         }
     }
@@ -562,6 +564,7 @@ impl Opcode {
             Opcode::GetEvalPrivateOwner => 7,
             Opcode::CheckObjectOrNull => 3,
             Opcode::ArrayPushAll => 5,
+            Opcode::LoadCaughtException => 3,
             Opcode::NewGeneratorFunction => 1,
             Opcode::NewAsyncFunction => 1,
             Opcode::NewAsyncGeneratorFunction => 1,
@@ -1044,6 +1047,10 @@ impl Bytecode {
                     let dst = read_u16(1);
                     let src = read_u16(3);
                     write!(operands, " r{}, r{}", dst, src).unwrap();
+                }
+                Opcode::LoadCaughtException => {
+                    let dst = read_u16(1);
+                    write!(operands, " r{}", dst).unwrap();
                 }
                 Opcode::SetNamedProp => {
                     let obj = read_u16(1);
