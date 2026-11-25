@@ -254,9 +254,10 @@ pub struct LogicalExpression {
     pub op: LogicalOp,
     pub left: Box<Expression>,
     pub right: Box<Expression>,
+    pub parenthesized: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LogicalOp {
     And,
     Or,

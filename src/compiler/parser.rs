@@ -1855,13 +1855,38 @@ impl Parser {
                 LogicalOp::NullishCoalescing
             };
             let right = self.parse_logical_and()?;
+            if op == LogicalOp::NullishCoalescing {
+                if Self::is_unparenthesized_logical(&left, LogicalOp::And)
+                    || Self::is_unparenthesized_logical(&left, LogicalOp::Or)
+                    || Self::is_unparenthesized_logical(&right, LogicalOp::And)
+                    || Self::is_unparenthesized_logical(&right, LogicalOp::Or)
+                {
+                    return Err(self.error(
+                        "SyntaxError: Coalesce expression cannot be mixed with logical operators",
+                    ));
+                }
+            } else if Self::is_unparenthesized_logical(&left, LogicalOp::NullishCoalescing)
+                || Self::is_unparenthesized_logical(&right, LogicalOp::NullishCoalescing)
+            {
+                return Err(self.error(
+                    "SyntaxError: Coalesce expression cannot be mixed with logical operators",
+                ));
+            }
             left = Expression::LogicalExpression(LogicalExpression {
                 op,
                 left: Box::new(left),
                 right: Box::new(right),
+                parenthesized: false,
             });
         }
         Ok(left)
+    }
+
+    fn is_unparenthesized_logical(expr: &Expression, op: LogicalOp) -> bool {
+        match expr {
+            Expression::LogicalExpression(l) => l.op == op && !l.parenthesized,
+            _ => false,
+        }
     }
 
     fn parse_logical_and(&mut self) -> Result<Expression, String> {
@@ -1873,6 +1898,7 @@ impl Parser {
                 op: LogicalOp::And,
                 left: Box::new(left),
                 right: Box::new(right),
+                parenthesized: false,
             });
         }
         Ok(left)
@@ -2364,6 +2390,7 @@ impl Parser {
                 Expression::UnaryExpression(u) => u.parenthesized = true,
                 Expression::UpdateExpression(u) => u.parenthesized = true,
                 Expression::AwaitExpression(a) => a.parenthesized = true,
+                Expression::LogicalExpression(l) => l.parenthesized = true,
                 _ => {}
             }
             return Ok(expr);
