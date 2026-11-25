@@ -15,6 +15,16 @@ thread_local! {
 const PRIM_STRING_SHAPE_ID: usize = usize::MAX - 10;
 const PRIM_NUMBER_SHAPE_ID: usize = usize::MAX - 11;
 
+#[derive(Clone, Copy)]
+enum BitwiseOp {
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    UShr,
+}
+
 #[derive(Debug, Clone)]
 pub struct CallFrame {
     pub return_pc: usize,
@@ -36,6 +46,9 @@ pub struct CallFrame {
     pub arg_count: u16,
     pub super_ctor: JSValue,
     pub super_base: JSValue,
+    pub new_target: JSValue,
+    pub this_initialized: bool,
+    pub is_super_call: bool,
     pub is_constructor: bool,
     pub is_async: bool,
     pub uses_arguments: bool,
@@ -73,6 +86,9 @@ impl CallFrame {
             arg_count: 0,
             super_ctor: JSValue::undefined(),
             super_base: JSValue::undefined(),
+            new_target: JSValue::undefined(),
+            this_initialized: true,
+            is_super_call: false,
             is_constructor: false,
             is_async: false,
             uses_arguments: false,
@@ -358,7 +374,9 @@ pub struct VM {
 
     pub pending_handlers: Option<Vec<ExceptionHandler>>,
 
-    pending_return_value: Option<JSValue>,
+    pub pending_return_value: Option<JSValue>,
+
+    pub pending_new_target: Option<JSValue>,
 
     pub async_step: bool,
 
@@ -415,6 +433,7 @@ impl VM {
             pending_this: None,
             pending_handlers: None,
             pending_return_value: None,
+            pending_new_target: None,
             async_step: false,
             await_suspend: None,
             gc_roots: Vec::with_capacity(512),
@@ -809,6 +828,9 @@ impl VM {
         frame.dst_reg = dst_reg;
         frame.arg_count = arg_count;
         frame.super_ctor = JSValue::undefined();
+        frame.new_target = JSValue::undefined();
+        frame.this_initialized = true;
+        frame.is_super_call = false;
         frame.is_constructor = is_constructor;
         frame.is_async = is_async;
         if let Some(fptr) = function_ptr {
@@ -948,6 +970,9 @@ impl VM {
         frame.dst_reg = dst_reg;
         frame.arg_count = arg_count;
         frame.super_ctor = JSValue::undefined();
+        frame.new_target = JSValue::undefined();
+        frame.this_initialized = true;
+        frame.is_super_call = false;
         frame.is_constructor = is_constructor;
         frame.is_async = is_async;
         if let Some(fptr) = function_ptr {
@@ -1044,15 +1069,26 @@ impl VM {
         let frame = &self.frames[self.frame_index];
         let dst_reg = frame.dst_reg;
         let return_pc = frame.return_pc;
+        let is_super_call = frame.is_super_call;
 
         self.frame_index -= 1;
         self.pc = return_pc;
         self.refresh_cache();
+        let regs_ptr = self.cached_registers_ptr;
         unsafe {
-            *self.cached_registers_ptr.add(dst_reg as usize) = return_value;
+            *regs_ptr.add(dst_reg as usize) = return_value;
         }
 
-        let caller = &self.frames[self.frame_index];
+        let caller = &mut self.frames[self.frame_index];
+        if is_super_call {
+            caller.this_initialized = true;
+            if return_value.is_object_like() {
+                caller.this_value = return_value;
+                unsafe {
+                    *regs_ptr = return_value;
+                }
+            }
+        }
         if let Some(ref sync_map) = caller.upvalue_sync_map {
             if let Some(cell) = sync_map.get(&dst_reg) {
                 cell.set(return_value);
@@ -1394,12 +1430,18 @@ impl VM {
                 if js_func.is_arrow() {
                     self.frames[self.frame_index].super_ctor = js_func.arrow_super;
                     self.frames[self.frame_index].super_base = js_func.arrow_super_base;
-                }
-                if is_call_new {
+                    self.frames[self.frame_index].this_initialized = js_func.arrow_this_initialized;
+                } else {
                     let super_key = ctx.common_atoms.__super__;
                     if let Some(super_val) = js_func.base.get(super_key) {
                         self.frames[self.frame_index].super_ctor = super_val;
                     }
+                    if js_func.is_derived_constructor {
+                        self.frames[self.frame_index].this_initialized = false;
+                    }
+                }
+                if is_call_new {
+                    self.frames[self.frame_index].new_target = func_val;
                 }
                 if !js_func.home_object.is_undefined() {
                     if js_func.home_object.is_object_like() {
@@ -1521,6 +1563,17 @@ impl VM {
                                 return Ok(false);
                             }
                         },
+                    }
+                }
+                if is_call_new && result.is_function() {
+                    let proto_key = ctx.common_atoms.prototype;
+                    if let Some(proto_val) = func_val.as_object().get(proto_key) {
+                        if proto_val.is_object_like() {
+                            result.as_function_mut().base.prototype = Some(
+                                proto_val.get_ptr()
+                                    as *mut crate::object::object::JSObject,
+                            );
+                        }
                     }
                 }
                 if is_call_new && !result.is_object_like() {
@@ -1790,6 +1843,55 @@ impl VM {
     }
 
     #[cold]
+    fn current_super_constructor(&self) -> JSValue {
+        let frame = &self.frames[self.frame_index];
+        if let Some(fptr) = frame.function_ptr {
+            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            if !func.is_arrow() && func.is_derived_constructor {
+                return func
+                    .base
+                    .prototype
+                    .map(|proto| {
+                        let proto_obj = unsafe {
+                            &*(proto as *const crate::object::object::JSObject)
+                        };
+                        if proto_obj.is_function_object {
+                            JSValue::new_function(proto as usize)
+                        } else {
+                            JSValue::new_object(proto as usize)
+                        }
+                    })
+                    .unwrap_or_else(JSValue::undefined);
+            }
+        }
+        frame.super_ctor
+    }
+
+    fn bind_super_call_result(&mut self, dst: u16) {
+        let result = self.get_reg(dst);
+        self.frames[self.frame_index].this_initialized = true;
+        if result.is_object_like() {
+            self.frames[self.frame_index].this_value = result;
+            self.set_reg(0, result);
+        }
+    }
+
+    fn bind_super_call_builtin_result(&mut self, dst: u16) {
+        let result = self.get_reg(dst);
+        let this_val = self.frames[self.frame_index].this_value;
+        self.frames[self.frame_index].this_initialized = true;
+        if result.is_object_like() {
+            if this_val.is_object_like() {
+                let proto = this_val.as_object().prototype;
+                if let Some(proto_ptr) = proto {
+                    result.as_object_mut().prototype = Some(proto_ptr);
+                }
+            }
+            self.frames[self.frame_index].this_value = result;
+            self.set_reg(0, result);
+        }
+    }
+
     pub fn set_pending_type_error(&mut self, ctx: &mut JSContext, msg: &str) {
         use crate::object::object::JSObject;
         let mut err = JSObject::new();
@@ -2656,6 +2758,21 @@ impl VM {
                 js_func.uses_arguments(),
             );
 
+            {
+                let super_key = ctx.common_atoms.__super__;
+                if let Some(super_val) = js_func.base.get(super_key) {
+                    self.frames[self.frame_index].super_ctor = super_val;
+                }
+                if js_func.is_derived_constructor {
+                    self.frames[self.frame_index].this_initialized = false;
+                }
+            }
+            if let Some(new_target) = self.pending_new_target.take() {
+                let frame = &mut self.frames[self.frame_index];
+                frame.new_target = new_target;
+                frame.is_constructor = true;
+            }
+
             let result = self.execute_inner(ctx, rb, false, 0, false);
             let return_value = self.get_reg(0);
 
@@ -2752,6 +2869,19 @@ impl VM {
         frame.uses_arguments = false;
         frame.var_name_map = std::rc::Rc::as_ptr(&bytecode.var_name_to_slot);
         frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
+        frame.super_ctor = JSValue::undefined();
+        frame.super_base = JSValue::undefined();
+        frame.new_target = JSValue::undefined();
+        frame.this_initialized = true;
+        frame.is_super_call = false;
+        if let Some(caller_ptr) = caller_vm_ptr {
+            let caller = unsafe { &*(caller_ptr as *const VM) };
+            let caller_frame = &caller.frames[caller.frame_index];
+            frame.super_ctor = caller_frame.super_ctor;
+            frame.super_base = caller_frame.super_base;
+            frame.new_target = caller_frame.new_target;
+            frame.this_initialized = caller_frame.this_initialized;
+        }
 
         self.frame_index = 0;
         self.exception_handlers.clear();
@@ -3115,6 +3245,27 @@ impl VM {
                 Opcode::Return => {
                     let src = self.read_u16_pc();
                     let mut ret = self.get_reg(src);
+                    {
+                        let frame = &self.frames[self.frame_index];
+                        if frame.is_constructor
+                            && frame.super_ctor.is_function()
+                            && !frame.this_initialized
+                            && !ret.is_object()
+                        {
+                            self.set_pending_reference_error(
+                                ctx,
+                                "this is not initialized",
+                            );
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     let frame = &self.frames[self.frame_index];
                     if frame.is_constructor && !ret.is_object() {
                         ret = frame.this_value;
@@ -3640,26 +3791,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        Self::create_bigint(a_int & b_int)
-                    } else if JSValue::both_int(&a, &b) {
-                        JSValue::new_int((a.get_int() as i32 & b.get_int() as i32) as i64)
-                    } else {
-                        let na = if a.is_int() {
-                            a.get_int() as f64
-                        } else {
-                            Self::js_to_number(&a, ctx)
-                        };
-                        let nb = if b.is_int() {
-                            b.get_int() as f64
-                        } else {
-                            Self::js_to_number(&b, ctx)
-                        };
-                        let ia = Self::to_int32(na) as i64;
-                        let ib = Self::to_int32(nb) as i64;
-                        JSValue::new_int(ia & ib)
+                    let result = match self.numeric_binary_op(&a, &b, BitwiseOp::And, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3669,26 +3812,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        Self::create_bigint(a_int | b_int)
-                    } else if JSValue::both_int(&a, &b) {
-                        JSValue::new_int((a.get_int() as i32 | b.get_int() as i32) as i64)
-                    } else {
-                        let na = if a.is_int() {
-                            a.get_int() as f64
-                        } else {
-                            Self::js_to_number(&a, ctx)
-                        };
-                        let nb = if b.is_int() {
-                            b.get_int() as f64
-                        } else {
-                            Self::js_to_number(&b, ctx)
-                        };
-                        let ia = Self::to_int32(na) as i64;
-                        let ib = Self::to_int32(nb) as i64;
-                        JSValue::new_int(ia | ib)
+                    let result = match self.numeric_binary_op(&a, &b, BitwiseOp::Or, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3698,43 +3833,38 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        Self::create_bigint(a_int ^ b_int)
-                    } else if JSValue::both_int(&a, &b) {
-                        JSValue::new_int((a.get_int() as i32 ^ b.get_int() as i32) as i64)
-                    } else {
-                        let na = if a.is_int() {
-                            a.get_int() as f64
-                        } else {
-                            Self::js_to_number(&a, ctx)
-                        };
-                        let nb = if b.is_int() {
-                            b.get_int() as f64
-                        } else {
-                            Self::js_to_number(&b, ctx)
-                        };
-                        let ia = Self::to_int32(na) as i64;
-                        let ib = Self::to_int32(nb) as i64;
-                        JSValue::new_int(ia ^ ib)
+                    let result = match self.numeric_binary_op(&a, &b, BitwiseOp::Xor, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     };
                     self.set_reg(dst, result);
                 }
                 Opcode::BitNot => {
                     let dst = self.read_u16_pc();
                     let a_reg = self.read_u16_pc();
-                    let mut a = self.get_reg(a_reg);
-                    if a.is_object() || a.is_function() {
-                        a = self.ordinary_to_primitive(&a, "number", ctx);
-                        if let Some(exc) = self.pending_throw.take() {
-                            match self.dispatch_throw_value(ctx, exc) {
-                                ThrowDispatch::Caught => continue,
-                                ThrowDispatch::Uncaught(e) => return Err(e),
-                                ThrowDispatch::AsyncComplete(_) => continue,
+                    let a = self.get_reg(a_reg);
+                    let a = match self.to_numeric(&a, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
                             }
+                            continue;
                         }
-                    }
+                    };
                     let result = if a.is_bigint() {
                         let a_int = Self::get_bigint_int(&a).unwrap_or(0);
                         Self::create_bigint(!a_int)
@@ -3755,27 +3885,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if JSValue::both_int(&a, &b) {
-                        let shift = b.get_int() & 0x1f;
-                        JSValue::new_int(a.get_int() << shift)
-                    } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        Self::create_bigint(a_int << b_int)
-                    } else {
-                        let nb = Self::js_to_number(&b, ctx);
-                        let shift = if nb.is_nan() || nb.is_infinite() {
-                            0
-                        } else {
-                            (nb as i64) & 0x1f
-                        };
-                        let na = Self::js_to_number(&a, ctx);
-                        let ia = if na.is_nan() || na.is_infinite() {
-                            0
-                        } else {
-                            na as i64
-                        };
-                        JSValue::new_int(ia << shift)
+                    let result = match self.numeric_binary_op(&a, &b, BitwiseOp::Shl, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3785,27 +3906,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if JSValue::both_int(&a, &b) {
-                        let shift = b.get_int() & 0x1f;
-                        JSValue::new_int(a.get_int() >> shift)
-                    } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        Self::create_bigint(a_int >> b_int)
-                    } else {
-                        let nb = Self::js_to_number(&b, ctx);
-                        let shift = if nb.is_nan() || nb.is_infinite() {
-                            0
-                        } else {
-                            (nb as i64) & 0x1f
-                        };
-                        let na = Self::js_to_number(&a, ctx);
-                        let ia = if na.is_nan() || na.is_infinite() {
-                            0
-                        } else {
-                            na as i64
-                        };
-                        JSValue::new_int(ia >> shift)
+                    let result = match self.numeric_binary_op(&a, &b, BitwiseOp::Shr, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3815,40 +3927,19 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-
-                    if JSValue::both_int(&a, &b) {
-                        let a_u32 = (a.get_int() as u64 & 0xffffffff) as u32;
-                        let shift = (b.get_int() & 0x1f) as u32;
-                        self.set_reg(dst, JSValue::new_int((a_u32 >> shift) as i64));
-                        continue;
-                    }
-                    let nb = Self::js_to_number(&b, ctx);
-                    let shift = if nb.is_nan() || nb.is_infinite() {
-                        0
-                    } else {
-                        (nb as i64) & 0x1f
-                    };
-                    let a_u32 = if a.is_int() {
-                        (a.get_int() as u64 & 0xffffffff) as u32
-                    } else {
-                        let n = Self::js_to_number(&a, ctx);
-                        if n.is_nan() || n.is_infinite() {
-                            0u32
-                        } else {
-                            let n = n.trunc();
-                            if n >= 0.0 {
-                                (n as u64 % (1u64 << 32)) as u32
-                            } else {
-                                let m = (-n) as u64 % (1u64 << 32);
-                                if m == 0 {
-                                    0u32
-                                } else {
-                                    ((1u64 << 32) - m) as u32
+                    let result = match self.numeric_binary_op(&a, &b, BitwiseOp::UShr, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
                                 }
                             }
+                            continue;
                         }
                     };
-                    let result = JSValue::new_int((a_u32 >> shift as u32) as i64);
                     self.set_reg(dst, result);
                 }
                 Opcode::Neg => {
@@ -3891,20 +3982,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if JSValue::both_int(&a, &b) {
-                        JSValue::bool(a.get_int() < b.get_int())
-                    } else if JSValue::both_raw_float(&a, &b) {
-                        JSValue::bool(a.get_float() < b.get_float())
-                    } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        JSValue::bool(a_int < b_int)
-                    } else if a.is_string() && b.is_string() {
-                        let sa = ctx.get_atom_str(a.get_atom());
-                        let sb = ctx.get_atom_str(b.get_atom());
-                        JSValue::bool(sa < sb)
-                    } else {
-                        JSValue::bool(a.to_number() < b.to_number())
+                    let result = match self.abstract_less_than(&a, &b, ctx, true) {
+                        Some(v) => JSValue::bool(v),
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            JSValue::bool(false)
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3914,18 +4003,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if JSValue::both_int(&a, &b) {
-                        JSValue::bool(a.get_int() <= b.get_int())
-                    } else if JSValue::both_raw_float(&a, &b) {
-                        JSValue::bool(a.get_float() <= b.get_float())
-                    } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        JSValue::bool(a_int <= b_int)
-                    } else if a.is_string() && b.is_string() {
-                        JSValue::bool(a.get_int() <= b.get_int())
-                    } else {
-                        JSValue::bool(a.to_number() <= b.to_number())
+                    let result = match self.abstract_less_than(&b, &a, ctx, false) {
+                        Some(v) => JSValue::bool(!v),
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            JSValue::bool(false)
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3934,12 +4023,19 @@ impl VM {
                     let a_reg = self.read_u16_pc();
                     let imm = self.read_u8() as i8 as i64;
                     let a = self.get_reg(a_reg);
-                    let result = if a.is_int() {
-                        JSValue::bool(a.get_int() <= imm)
-                    } else if a.is_float() {
-                        JSValue::bool(a.get_float() <= imm as f64)
-                    } else {
-                        JSValue::bool(Self::js_to_number(&a, ctx) <= imm as f64)
+                    let imm_val = JSValue::new_int(imm);
+                    let result = match self.abstract_less_than(&imm_val, &a, ctx, false) {
+                        Some(v) => JSValue::bool(!v),
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            JSValue::bool(false)
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3949,20 +4045,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if JSValue::both_int(&a, &b) {
-                        JSValue::bool(a.get_int() > b.get_int())
-                    } else if JSValue::both_raw_float(&a, &b) {
-                        JSValue::bool(a.get_float() > b.get_float())
-                    } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        JSValue::bool(a_int > b_int)
-                    } else if a.is_string() && b.is_string() {
-                        let sa = ctx.get_atom_str(a.get_atom());
-                        let sb = ctx.get_atom_str(b.get_atom());
-                        JSValue::bool(sa > sb)
-                    } else {
-                        JSValue::bool(a.to_number() > b.to_number())
+                    let result = match self.abstract_less_than(&b, &a, ctx, false) {
+                        Some(v) => JSValue::bool(v),
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            JSValue::bool(false)
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -3972,20 +4066,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if JSValue::both_int(&a, &b) {
-                        JSValue::bool(a.get_int() >= b.get_int())
-                    } else if JSValue::both_raw_float(&a, &b) {
-                        JSValue::bool(a.get_float() >= b.get_float())
-                    } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        JSValue::bool(a_int >= b_int)
-                    } else if a.is_string() && b.is_string() {
-                        let sa = ctx.get_atom_str(a.get_atom());
-                        let sb = ctx.get_atom_str(b.get_atom());
-                        JSValue::bool(sa >= sb)
-                    } else {
-                        JSValue::bool(a.to_number() >= b.to_number())
+                    let result = match self.abstract_less_than(&a, &b, ctx, true) {
+                        Some(v) => JSValue::bool(!v),
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            JSValue::bool(false)
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -11645,6 +11737,257 @@ impl VM {
             }
         }
         Self::js_to_string(v, ctx)
+    }
+
+    fn to_numeric(&mut self, v: &JSValue, ctx: &mut JSContext) -> Option<JSValue> {
+        let mut v = v.clone();
+        if v.is_object_like() {
+            v = self.ordinary_to_primitive(&v, "number", ctx);
+            if self.pending_throw.is_some() {
+                return None;
+            }
+        }
+        if v.is_symbol() {
+            self.set_pending_type_error(ctx, "Cannot convert a Symbol value to a number");
+            return None;
+        }
+        Some(v)
+    }
+
+    fn numeric_binary_op(
+        &mut self,
+        a: &JSValue,
+        b: &JSValue,
+        op: BitwiseOp,
+        ctx: &mut JSContext,
+    ) -> Option<JSValue> {
+        let a = self.to_numeric(a, ctx)?;
+        let b = self.to_numeric(b, ctx)?;
+        if a.is_bigint() != b.is_bigint() {
+            self.set_pending_type_error(ctx, "Cannot mix BigInt and other types");
+            return None;
+        }
+        if a.is_bigint() && b.is_bigint() {
+            let ai = Self::get_bigint_int(&a).unwrap_or(0);
+            let bi = Self::get_bigint_int(&b).unwrap_or(0);
+            return match op {
+                BitwiseOp::And => Some(Self::create_bigint(ai & bi)),
+                BitwiseOp::Or => Some(Self::create_bigint(ai | bi)),
+                BitwiseOp::Xor => Some(Self::create_bigint(ai ^ bi)),
+                BitwiseOp::Shl => {
+                    if bi < 0 {
+                        Some(Self::create_bigint(ai >> (-bi)))
+                    } else {
+                        Some(Self::create_bigint(ai << bi))
+                    }
+                }
+                BitwiseOp::Shr => {
+                    if bi < 0 {
+                        Some(Self::create_bigint(ai << (-bi)))
+                    } else {
+                        Some(Self::create_bigint(ai >> bi))
+                    }
+                }
+                BitwiseOp::UShr => {
+                    self.set_pending_type_error(ctx, "BigInts have no unsigned right shift");
+                    None
+                }
+            };
+        }
+        let na = if a.is_int() {
+            a.get_int() as f64
+        } else {
+            Self::js_to_number(&a, ctx)
+        };
+        let nb = if b.is_int() {
+            b.get_int() as f64
+        } else {
+            Self::js_to_number(&b, ctx)
+        };
+        let ia = Self::to_int32(na) as i64;
+        let ib = Self::to_int32(nb) as i64;
+        Some(match op {
+            BitwiseOp::And => JSValue::new_int(ia & ib),
+            BitwiseOp::Or => JSValue::new_int(ia | ib),
+            BitwiseOp::Xor => JSValue::new_int(ia ^ ib),
+            BitwiseOp::Shl => JSValue::new_int(((ia as i32) << (ib & 0x1f)) as i64),
+            BitwiseOp::Shr => JSValue::new_int(((ia as i32) >> (ib & 0x1f)) as i64),
+            BitwiseOp::UShr => {
+                let ua = (ia as u64 & 0xffffffff) as u32;
+                let sh = (ib & 0x1f) as u32;
+                JSValue::new_int((ua >> sh) as i64)
+            }
+        })
+    }
+
+    fn utf16_less_than(a: &str, b: &str) -> bool {
+        let a: Vec<u16> = a.encode_utf16().collect();
+        let b: Vec<u16> = b.encode_utf16().collect();
+        a < b
+    }
+
+    fn bigint_less_than_number(bigint: i128, number: f64) -> Option<bool> {
+        if number.is_nan() {
+            return None;
+        }
+        if number == f64::INFINITY {
+            return Some(true);
+        }
+        if number == f64::NEG_INFINITY {
+            return Some(false);
+        }
+        if number.fract() == 0.0 {
+            let other = number as i128;
+            return Some(bigint < other);
+        }
+        let floor = number.floor();
+        if floor >= i128::MAX as f64 {
+            return Some(true);
+        }
+        if floor <= i128::MIN as f64 {
+            return Some(false);
+        }
+        Some(bigint <= floor as i128)
+    }
+
+    fn number_less_than_bigint(number: f64, bigint: i128) -> Option<bool> {
+        if number.is_nan() {
+            return None;
+        }
+        if number == f64::INFINITY {
+            return Some(false);
+        }
+        if number == f64::NEG_INFINITY {
+            return Some(true);
+        }
+        if number.fract() == 0.0 {
+            let other = number as i128;
+            return Some(other < bigint);
+        }
+        let floor = number.floor();
+        if floor >= i128::MAX as f64 {
+            return Some(false);
+        }
+        if floor <= i128::MIN as f64 {
+            return Some(true);
+        }
+        Some((floor as i128) < bigint)
+    }
+
+    fn parse_bigint_string(value: &str) -> Option<i128> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Some(0);
+        }
+        if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+            return i128::from_str_radix(hex, 16).ok();
+        }
+        if let Some(oct) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
+            return i128::from_str_radix(oct, 8).ok();
+        }
+        if let Some(bin) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
+            return i128::from_str_radix(bin, 2).ok();
+        }
+        trimmed.parse::<i128>().ok()
+    }
+
+    fn abstract_less_than(
+        &mut self,
+        a: &JSValue,
+        b: &JSValue,
+        ctx: &mut JSContext,
+        left_first: bool,
+    ) -> Option<bool> {
+        let mut a = a.clone();
+        let mut b = b.clone();
+        if left_first {
+            if a.is_object_like() {
+                a = self.ordinary_to_primitive(&a, "number", ctx);
+                if self.pending_throw.is_some() {
+                    return None;
+                }
+            }
+            if b.is_object_like() {
+                b = self.ordinary_to_primitive(&b, "number", ctx);
+                if self.pending_throw.is_some() {
+                    return None;
+                }
+            }
+        } else {
+            if b.is_object_like() {
+                b = self.ordinary_to_primitive(&b, "number", ctx);
+                if self.pending_throw.is_some() {
+                    return None;
+                }
+            }
+            if a.is_object_like() {
+                a = self.ordinary_to_primitive(&a, "number", ctx);
+                if self.pending_throw.is_some() {
+                    return None;
+                }
+            }
+        }
+        if a.is_symbol() || b.is_symbol() {
+            self.set_pending_type_error(ctx, "Cannot convert a Symbol value to a number");
+            return None;
+        }
+        if a.is_string() && b.is_string() {
+            return Some(Self::utf16_less_than(
+                ctx.get_atom_str(a.get_atom()),
+                ctx.get_atom_str(b.get_atom()),
+            ));
+        }
+        if a.is_bigint() && b.is_bigint() {
+            return Some(
+                Self::get_bigint_int(&a).unwrap_or(0) < Self::get_bigint_int(&b).unwrap_or(0),
+            );
+        }
+        if a.is_bigint() {
+            let a_int = Self::get_bigint_int(&a).unwrap_or(0);
+            if b.is_string() {
+                return Self::parse_bigint_string(ctx.get_atom_str(b.get_atom()))
+                    .map(|b_int| a_int < b_int);
+            }
+            if b.is_int() {
+                return Some(a_int < b.get_int() as i128);
+            }
+            if b.is_float() {
+                return Self::bigint_less_than_number(a_int, b.get_float());
+            }
+            if b.is_bool() {
+                return Some(a_int < if b.get_bool() { 1 } else { 0 });
+            }
+            if b.is_null() {
+                return Some(a_int < 0);
+            }
+            return None;
+        }
+        if b.is_bigint() {
+            let b_int = Self::get_bigint_int(&b).unwrap_or(0);
+            if a.is_string() {
+                return Self::parse_bigint_string(ctx.get_atom_str(a.get_atom()))
+                    .map(|a_int| a_int < b_int);
+            }
+            if a.is_int() {
+                return Some((a.get_int() as i128) < b_int);
+            }
+            if a.is_float() {
+                return Self::number_less_than_bigint(a.get_float(), b_int);
+            }
+            if a.is_bool() {
+                return Some((if a.get_bool() { 1 } else { 0 }) < b_int);
+            }
+            if a.is_null() {
+                return Some(0 < b_int);
+            }
+            return None;
+        }
+        let na = Self::js_to_number(&a, ctx);
+        let nb = Self::js_to_number(&b, ctx);
+        if na.is_nan() || nb.is_nan() {
+            return None;
+        }
+        Some(na < nb)
     }
 
     fn js_to_number(v: &JSValue, ctx: &mut JSContext) -> f64 {
