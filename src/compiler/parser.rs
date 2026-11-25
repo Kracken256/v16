@@ -984,7 +984,7 @@ impl Parser {
                         }
                         if self.at_keyword("of") {
                             self.advance();
-                            let right = self.parse_expression()?;
+                            let right = self.parse_assignment_expression()?;
                             self.expect(")")?;
                             let body = self.parse_statement_body(false)?;
                             return Ok(ASTNode::ForOfStatement(ForOfStatement {
@@ -1021,7 +1021,7 @@ impl Parser {
             }
             if self.at_keyword("of") {
                 self.advance();
-                let right = self.parse_expression()?;
+                let right = self.parse_assignment_expression()?;
                 self.expect(")")?;
                 let body = self.parse_statement_body(false)?;
                 let decl = VariableDeclaration {
@@ -1072,7 +1072,7 @@ impl Parser {
         }
         if self.at_keyword("of") {
             self.advance();
-            let right = self.parse_expression()?;
+            let right = self.parse_assignment_expression()?;
             self.expect(")")?;
             let body = self.parse_statement_body(false)?;
             return Ok(ASTNode::ForOfStatement(ForOfStatement {
