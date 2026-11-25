@@ -50,6 +50,8 @@ enum DestructuringReference {
     Private {
         object: u16,
         key: u16,
+        owner_reg: u16,
+        owner_temp: bool,
     },
 }
 
@@ -1061,6 +1063,27 @@ impl CodeGenerator {
         None
     }
 
+    fn gen_private_owner(
+        &mut self,
+        name: &str,
+        ctx: &mut JSContext,
+    ) -> Result<(u16, bool), String> {
+        match self.resolve_var(name, ctx) {
+            Some(VarLocation::Local(slot)) => Ok((slot, false)),
+            Some(VarLocation::Upvalue(slot)) => {
+                let r = self.alloc_register();
+                self.emit(Opcode::GetUpvalue);
+                self.emit_u16(r);
+                self.emit_u16(slot);
+                Ok((r, true))
+            }
+            None => Err(format!(
+                "SyntaxError: Private name #{} is not defined",
+                name.trim_start_matches('#')
+            )),
+        }
+    }
+
     fn with_applies_to_local(&self, name: &str, scope_index: usize) -> bool {
         let _ = scope_index;
         self.with_scopes.iter().rev().any(|scope| {
@@ -1273,7 +1296,180 @@ impl CodeGenerator {
                     Self::collect_inherited_upvalues_stmt(s, &mut func_locals, parent_vars, result);
                 }
             }
+            ASTNode::ForInStatement(stmt) => {
+                let mut loop_locals = locals.clone();
+                match &stmt.left {
+                    ForInOfLeft::VariableDeclaration(decl) => {
+                        for d in &decl.declarations {
+                            if let Some(init) = &d.init {
+                                Self::collect_inherited_upvalues_expr(
+                                    init,
+                                    &mut loop_locals,
+                                    parent_vars,
+                                    result,
+                                );
+                            }
+                        }
+                        for d in &decl.declarations {
+                            Self::collect_binding_pattern_bindings(&d.id, &mut loop_locals);
+                        }
+                    }
+                    ForInOfLeft::AssignmentTarget(target) => {
+                        Self::collect_inherited_upvalues_target(
+                            target,
+                            &mut loop_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                }
+                Self::collect_inherited_upvalues_expr(&stmt.right, locals, parent_vars, result);
+                Self::collect_inherited_upvalues_stmt(
+                    &stmt.body,
+                    &mut loop_locals,
+                    parent_vars,
+                    result,
+                );
+            }
+            ASTNode::ForOfStatement(stmt) => {
+                let mut loop_locals = locals.clone();
+                match &stmt.left {
+                    ForInOfLeft::VariableDeclaration(decl) => {
+                        for d in &decl.declarations {
+                            if let Some(init) = &d.init {
+                                Self::collect_inherited_upvalues_expr(
+                                    init,
+                                    &mut loop_locals,
+                                    parent_vars,
+                                    result,
+                                );
+                            }
+                        }
+                        for d in &decl.declarations {
+                            Self::collect_binding_pattern_bindings(&d.id, &mut loop_locals);
+                        }
+                    }
+                    ForInOfLeft::AssignmentTarget(target) => {
+                        Self::collect_inherited_upvalues_target(
+                            target,
+                            &mut loop_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                }
+                Self::collect_inherited_upvalues_expr(&stmt.right, locals, parent_vars, result);
+                Self::collect_inherited_upvalues_stmt(
+                    &stmt.body,
+                    &mut loop_locals,
+                    parent_vars,
+                    result,
+                );
+            }
+            ASTNode::ClassDeclaration(class) => {
+                if let Some(super_class) = &class.super_class {
+                    Self::collect_inherited_upvalues_expr(
+                        super_class,
+                        locals,
+                        parent_vars,
+                        result,
+                    );
+                }
+                let mut class_locals = locals.clone();
+                class_locals.insert(class.name.clone());
+                Self::collect_inherited_upvalues_class_body(
+                    &class.body,
+                    &class_locals,
+                    parent_vars,
+                    result,
+                );
+            }
             _ => {}
+        }
+    }
+
+    fn collect_inherited_upvalues_class_body(
+        body: &ClassBody,
+        outer_locals: &std::collections::HashSet<String>,
+        parent_vars: &FxHashMap<String, ParentVar>,
+        result: &mut std::collections::HashSet<String>,
+    ) {
+        let mut class_locals = outer_locals.clone();
+        for element in &body.elements {
+            let name = match element {
+                ClassElement::Method(m) => match &m.name {
+                    PropertyKey::PrivateIdentifier(n) => Some(n.clone()),
+                    PropertyKey::Identifier(n) if m.is_private => Some(n.clone()),
+                    _ => None,
+                },
+                ClassElement::Property(p) => match &p.name {
+                    PropertyKey::PrivateIdentifier(n) => Some(n.clone()),
+                    PropertyKey::Identifier(n) if p.is_private => Some(n.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(name) = name {
+                class_locals.insert(name);
+            }
+        }
+        for element in &body.elements {
+            match element {
+                ClassElement::Method(m) => {
+                    if let PropertyKey::Computed(key) = &m.name {
+                        let mut key_locals = outer_locals.clone();
+                        Self::collect_inherited_upvalues_expr(
+                            key,
+                            &mut key_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                    let mut method_locals = class_locals.clone();
+                    for param in &m.params {
+                        Self::collect_parameter_bindings(param, &mut method_locals);
+                    }
+                    for s in &m.body.body {
+                        Self::collect_inherited_upvalues_stmt(
+                            s,
+                            &mut method_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                }
+                ClassElement::Property(p) => {
+                    if let PropertyKey::Computed(key) = &p.name {
+                        let mut key_locals = outer_locals.clone();
+                        Self::collect_inherited_upvalues_expr(
+                            key,
+                            &mut key_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                    if let Some(value) = &p.value {
+                        let mut value_locals = class_locals.clone();
+                        Self::collect_inherited_upvalues_expr(
+                            value,
+                            &mut value_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                }
+                ClassElement::StaticBlock(block) => {
+                    let mut block_locals = class_locals.clone();
+                    for s in &block.body {
+                        Self::collect_inherited_upvalues_stmt(
+                            s,
+                            &mut block_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -1472,6 +1668,146 @@ impl CodeGenerator {
         }
     }
 
+    fn collect_inherited_upvalues_target(
+        target: &AssignmentTarget,
+        locals: &mut std::collections::HashSet<String>,
+        parent_vars: &FxHashMap<String, ParentVar>,
+        result: &mut std::collections::HashSet<String>,
+    ) {
+        match target {
+            AssignmentTarget::Identifier(name) => {
+                if !locals.contains(name) && parent_vars.contains_key(name) {
+                    result.insert(name.clone());
+                }
+            }
+            AssignmentTarget::MemberExpression(member) => {
+                Self::collect_inherited_upvalues_expr(
+                    &member.object,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+                match &member.property {
+                    MemberProperty::Computed(e) => {
+                        Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
+                    }
+                    MemberProperty::PrivateIdentifier(name) => {
+                        if parent_vars.contains_key(name) {
+                            result.insert(name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            AssignmentTarget::OptionalMemberExpression(member) => {
+                Self::collect_inherited_upvalues_expr(
+                    &member.object,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+                match &member.property {
+                    MemberProperty::Computed(e) => {
+                        Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
+                    }
+                    MemberProperty::PrivateIdentifier(name) => {
+                        if parent_vars.contains_key(name) {
+                            result.insert(name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            AssignmentTarget::ComputedMember(obj, key) => {
+                Self::collect_inherited_upvalues_expr(obj, locals, parent_vars, result);
+                Self::collect_inherited_upvalues_expr(key, locals, parent_vars, result);
+            }
+            AssignmentTarget::ObjectPattern(pattern) => {
+                for property in &pattern.properties {
+                    match property {
+                        ObjectPatternProperty::Property {
+                            key,
+                            value,
+                            computed,
+                            ..
+                        } => {
+                            if *computed {
+                                if let PropertyKey::Computed(e) = key {
+                                    Self::collect_inherited_upvalues_expr(
+                                        e,
+                                        locals,
+                                        parent_vars,
+                                        result,
+                                    );
+                                }
+                            }
+                            Self::collect_inherited_upvalues_target(
+                                value,
+                                locals,
+                                parent_vars,
+                                result,
+                            );
+                        }
+                        ObjectPatternProperty::RestElement(rest) => {
+                            Self::collect_inherited_upvalues_target(
+                                &rest.argument,
+                                locals,
+                                parent_vars,
+                                result,
+                            );
+                        }
+                    }
+                }
+            }
+            AssignmentTarget::ArrayPattern(pattern) => {
+                for element in pattern.elements.iter().flatten() {
+                    match element {
+                        PatternElement::Pattern(t) => {
+                            Self::collect_inherited_upvalues_target(
+                                t,
+                                locals,
+                                parent_vars,
+                                result,
+                            );
+                        }
+                        PatternElement::RestElement(rest) => {
+                            Self::collect_inherited_upvalues_target(
+                                &rest.argument,
+                                locals,
+                                parent_vars,
+                                result,
+                            );
+                        }
+                        PatternElement::AssignmentPattern(ap) => {
+                            Self::collect_inherited_upvalues_target(
+                                &ap.left,
+                                locals,
+                                parent_vars,
+                                result,
+                            );
+                        }
+                    }
+                }
+            }
+            AssignmentTarget::RestElement(rest) => {
+                Self::collect_inherited_upvalues_target(
+                    &rest.argument,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+            }
+            AssignmentTarget::AssignmentPattern(ap) => {
+                Self::collect_inherited_upvalues_target(
+                    &ap.left,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+            }
+        }
+    }
+
     fn collect_inherited_upvalues_expr(
         expr: &Expression,
         locals: &mut std::collections::HashSet<String>,
@@ -1497,31 +1833,25 @@ impl CodeGenerator {
                         result.insert(id.name.clone());
                     }
                 }
+                Self::collect_inherited_upvalues_expr(
+                    &update.argument,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+            }
+            Expression::PrivateIdentifier(name) => {
+                if parent_vars.contains_key(name) {
+                    result.insert(name.clone());
+                }
             }
             Expression::AssignmentExpression(assign) => {
-                match &assign.left {
-                    AssignmentTarget::Identifier(name) => {
-                        if !locals.contains(name) && parent_vars.contains_key(name) {
-                            result.insert(name.clone());
-                        }
-                    }
-                    AssignmentTarget::MemberExpression(member) => {
-                        Self::collect_inherited_upvalues_expr(
-                            &member.object,
-                            locals,
-                            parent_vars,
-                            result,
-                        );
-                        if let MemberProperty::Computed(e) = &member.property {
-                            Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
-                        }
-                    }
-                    AssignmentTarget::ComputedMember(obj, key) => {
-                        Self::collect_inherited_upvalues_expr(obj, locals, parent_vars, result);
-                        Self::collect_inherited_upvalues_expr(key, locals, parent_vars, result);
-                    }
-                    _ => {}
-                }
+                Self::collect_inherited_upvalues_target(
+                    &assign.left,
+                    locals,
+                    parent_vars,
+                    result,
+                );
                 Self::collect_inherited_upvalues_expr(&assign.right, locals, parent_vars, result);
             }
             Expression::ConditionalExpression(cond) => {
@@ -1540,8 +1870,16 @@ impl CodeGenerator {
             }
             Expression::MemberExpression(member) => {
                 Self::collect_inherited_upvalues_expr(&member.object, locals, parent_vars, result);
-                if let MemberProperty::Computed(e) = &member.property {
-                    Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
+                match &member.property {
+                    MemberProperty::Computed(e) => {
+                        Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
+                    }
+                    MemberProperty::PrivateIdentifier(name) => {
+                        if parent_vars.contains_key(name) {
+                            result.insert(name.clone());
+                        }
+                    }
+                    _ => {}
                 }
             }
             Expression::CallExpression(call) => {
@@ -1551,6 +1889,31 @@ impl CodeGenerator {
                         Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
                     }
                 }
+            }
+            Expression::OptionalMemberExpression(member) => {
+                Self::collect_inherited_upvalues_expr(&member.object, locals, parent_vars, result);
+                match &member.property {
+                    MemberProperty::Computed(e) => {
+                        Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
+                    }
+                    MemberProperty::PrivateIdentifier(name) => {
+                        if parent_vars.contains_key(name) {
+                            result.insert(name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Expression::OptionalCallExpression(call) => {
+                Self::collect_inherited_upvalues_expr(&call.callee, locals, parent_vars, result);
+                for arg in &call.arguments {
+                    if let Argument::Expression(e) = arg {
+                        Self::collect_inherited_upvalues_expr(e, locals, parent_vars, result);
+                    }
+                }
+            }
+            Expression::ChainExpression(inner) => {
+                Self::collect_inherited_upvalues_expr(inner, locals, parent_vars, result);
             }
             Expression::NewExpression(new) => {
                 Self::collect_inherited_upvalues_expr(&new.callee, locals, parent_vars, result);
@@ -1603,6 +1966,26 @@ impl CodeGenerator {
                 for s in &body.body {
                     Self::collect_inherited_upvalues_stmt(s, &mut func_locals, parent_vars, result);
                 }
+            }
+            Expression::ClassExpression(class) => {
+                if let Some(super_class) = &class.super_class {
+                    Self::collect_inherited_upvalues_expr(
+                        super_class,
+                        locals,
+                        parent_vars,
+                        result,
+                    );
+                }
+                let mut class_locals = locals.clone();
+                if let Some(ref name) = class.name {
+                    class_locals.insert(name.clone());
+                }
+                Self::collect_inherited_upvalues_class_body(
+                    &class.body,
+                    &class_locals,
+                    parent_vars,
+                    result,
+                );
             }
             Expression::SequenceExpression(seq) => {
                 for e in &seq.expressions {
@@ -5838,6 +6221,7 @@ impl CodeGenerator {
                         self.free_register(key_reg);
                     }
                     MemberProperty::PrivateIdentifier(name) => {
+                        let (owner_reg, owner_temp) = self.gen_private_owner(name, ctx)?;
                         let key_idx = self.intern_and_add_const(ctx, name);
                         let key_reg = self.alloc_register();
                         self.emit(Opcode::LoadConst);
@@ -5847,6 +6231,10 @@ impl CodeGenerator {
                         self.emit_u16(result);
                         self.emit_u16(obj_reg);
                         self.emit_u16(key_reg);
+                        self.emit_u16(owner_reg);
+                        if owner_temp {
+                            self.free_register(owner_reg);
+                        }
                         self.free_register(key_reg);
                     }
                 }
@@ -6201,12 +6589,24 @@ impl CodeGenerator {
         };
 
         let dst = self.alloc_register();
+        let mut private_owner = None;
+        if bin.op == BinaryOp::In {
+            if let Expression::PrivateIdentifier(name) = &*bin.left {
+                private_owner = Some(self.gen_private_owner(name, ctx)?);
+            }
+        }
         self.emit(op);
         self.emit_u16(dst);
 
         if bin.op == BinaryOp::In {
             self.emit_u16(right);
             self.emit_u16(left);
+            if let Some((owner_reg, owner_temp)) = private_owner {
+                self.emit_u16(owner_reg);
+                if owner_temp {
+                    self.free_register(owner_reg);
+                }
+            }
         } else {
             self.emit_u16(left);
             self.emit_u16(right);
@@ -7682,6 +8082,7 @@ impl CodeGenerator {
                         }
                     }
                     MemberProperty::PrivateIdentifier(name) => {
+                        let (owner_reg, owner_temp) = self.gen_private_owner(name, ctx)?;
                         let key_idx = self.intern_and_add_const(ctx, name);
                         let key = self.alloc_register();
                         self.emit(Opcode::LoadConst);
@@ -7695,6 +8096,7 @@ impl CodeGenerator {
                             self.emit_u16(tmp);
                             self.emit_u16(obj);
                             self.emit_u16(key);
+                            self.emit_u16(owner_reg);
                             let val = self.gen_expression(&assign.right, ctx)?;
                             self.emit(opcode);
                             self.emit_u16(tmp);
@@ -7704,18 +8106,30 @@ impl CodeGenerator {
                             self.emit_u16(obj);
                             self.emit_u16(key);
                             self.emit_u16(tmp);
+                            self.emit_u16(owner_reg);
                             self.free_register(val);
                             self.free_register(key);
                             self.free_register(obj);
+                            if owner_temp {
+                                self.free_register(owner_reg);
+                            }
                             Ok(tmp)
                         } else {
                             let val = self.gen_expression(&assign.right, ctx)?;
-                            self.emit(Opcode::SetPrivate);
+                            if assign.private_field_init {
+                                self.emit(Opcode::DefinePrivateField);
+                            } else {
+                                self.emit(Opcode::SetPrivate);
+                            }
                             self.emit_u16(obj);
                             self.emit_u16(key);
                             self.emit_u16(val);
+                            self.emit_u16(owner_reg);
                             self.free_register(key);
                             self.free_register(obj);
+                            if owner_temp {
+                                self.free_register(owner_reg);
+                            }
                             Ok(val)
                         }
                     }
@@ -7754,6 +8168,7 @@ impl CodeGenerator {
                 DestructuringReference::Computed { object: obj, key }
             }
             MemberProperty::PrivateIdentifier(name) => {
+                let (owner_reg, owner_temp) = self.gen_private_owner(name, ctx)?;
                 self.emit(Opcode::CheckObjectCoercible);
                 self.emit_u16(obj);
                 let key_idx = self.intern_and_add_const(ctx, name);
@@ -7761,7 +8176,12 @@ impl CodeGenerator {
                 self.emit(Opcode::LoadConst);
                 self.emit_u16(key);
                 self.emit_u32(key_idx);
-                DestructuringReference::Private { object: obj, key }
+                DestructuringReference::Private {
+                    object: obj,
+                    key,
+                    owner_reg,
+                    owner_temp,
+                }
             }
         };
 
@@ -7779,11 +8199,17 @@ impl CodeGenerator {
                 self.emit_u16(*object);
                 self.emit_u16(*key);
             }
-            DestructuringReference::Private { object, key } => {
+            DestructuringReference::Private {
+                object,
+                key,
+                owner_reg,
+                ..
+            } => {
                 self.emit(Opcode::GetPrivate);
                 self.emit_u16(old);
                 self.emit_u16(*object);
                 self.emit_u16(*key);
+                self.emit_u16(*owner_reg);
             }
             DestructuringReference::Identifier { .. } => {}
         }
@@ -7885,12 +8311,18 @@ impl CodeGenerator {
                         Ok(Some(DestructuringReference::Computed { object, key }))
                     }
                     MemberProperty::PrivateIdentifier(name) => {
+                        let (owner_reg, owner_temp) = self.gen_private_owner(name, ctx)?;
                         let key_idx = self.intern_and_add_const(ctx, name);
                         let key = self.alloc_register();
                         self.emit(Opcode::LoadConst);
                         self.emit_u16(key);
                         self.emit_u32(key_idx);
-                        Ok(Some(DestructuringReference::Private { object, key }))
+                        Ok(Some(DestructuringReference::Private {
+                            object,
+                            key,
+                            owner_reg,
+                            owner_temp,
+                        }))
                     }
                 }
             }
@@ -7975,11 +8407,20 @@ impl CodeGenerator {
                 self.free_register(object);
                 Ok(())
             }
-            DestructuringReference::Private { object, key } => {
+            DestructuringReference::Private {
+                object,
+                key,
+                owner_reg,
+                owner_temp,
+            } => {
                 self.emit(Opcode::SetPrivate);
                 self.emit_u16(object);
                 self.emit_u16(key);
                 self.emit_u16(value_reg);
+                self.emit_u16(owner_reg);
+                if owner_temp {
+                    self.free_register(owner_reg);
+                }
                 self.free_register(key);
                 self.free_register(object);
                 Ok(())
@@ -8061,6 +8502,7 @@ impl CodeGenerator {
                         self.free_register(key);
                     }
                     MemberProperty::PrivateIdentifier(name) => {
+                        let (owner_reg, owner_temp) = self.gen_private_owner(name, ctx)?;
                         let key_idx = self.intern_and_add_const(ctx, name);
                         let key = self.alloc_register();
                         self.emit(Opcode::LoadConst);
@@ -8070,6 +8512,10 @@ impl CodeGenerator {
                         self.emit_u16(obj);
                         self.emit_u16(key);
                         self.emit_u16(value_reg);
+                        self.emit_u16(owner_reg);
+                        if owner_temp {
+                            self.free_register(owner_reg);
+                        }
                         self.free_register(key);
                     }
                 }
@@ -8749,6 +9195,7 @@ impl CodeGenerator {
                             self.free_register(key);
                         }
                         MemberProperty::PrivateIdentifier(name) => {
+                            let (owner_reg, owner_temp) = self.gen_private_owner(&name, ctx)?;
                             let key_idx = self.intern_and_add_const(ctx, &name);
                             let key = self.alloc_register();
                             self.emit(Opcode::LoadConst);
@@ -8758,6 +9205,10 @@ impl CodeGenerator {
                             self.emit_u16(result);
                             self.emit_u16(obj);
                             self.emit_u16(key);
+                            self.emit_u16(owner_reg);
+                            if owner_temp {
+                                self.free_register(owner_reg);
+                            }
                             self.free_register(key);
                         }
                     }
@@ -8940,6 +9391,7 @@ impl CodeGenerator {
                 }
             }
             MemberProperty::PrivateIdentifier(name) => {
+                let (owner_reg, owner_temp) = self.gen_private_owner(name, ctx)?;
                 let key_idx = self.intern_and_add_const(ctx, name);
                 let key = self.alloc_register();
                 self.emit(Opcode::LoadConst);
@@ -8949,6 +9401,10 @@ impl CodeGenerator {
                 self.emit_u16(dst);
                 self.emit_u16(obj);
                 self.emit_u16(key);
+                self.emit_u16(owner_reg);
+                if owner_temp {
+                    self.free_register(owner_reg);
+                }
                 self.free_register(key);
             }
         }
@@ -9159,6 +9615,7 @@ impl CodeGenerator {
                         }
                     }
                     MemberProperty::PrivateIdentifier(name) => {
+                        let (owner_reg, owner_temp) = self.gen_private_owner(name, ctx)?;
                         let key_idx = self.intern_and_add_const(ctx, name);
                         let key = self.alloc_register();
                         self.emit(Opcode::LoadConst);
@@ -9169,6 +9626,10 @@ impl CodeGenerator {
                         self.emit_u16(f);
                         self.emit_u16(obj_reg);
                         self.emit_u16(key);
+                        self.emit_u16(owner_reg);
+                        if owner_temp {
+                            self.free_register(owner_reg);
+                        }
                         self.free_register(key);
                         f
                     }
@@ -9908,10 +10369,72 @@ impl CodeGenerator {
                         right: Box::new(value),
                         parenthesized: false,
                         lhs_parenthesized: false,
+                        private_field_init: f.is_private,
                     }),
                 }))
             })
             .collect();
+
+        let mut instance_private_names: Vec<String> = Vec::new();
+        let mut static_private_names: Vec<String> = Vec::new();
+        for element in &body.elements {
+            let (name, is_static, is_private) = match element {
+                ClassElement::Property(p) => {
+                    let name = match &p.name {
+                        PropertyKey::PrivateIdentifier(n) => Some(n.clone()),
+                        PropertyKey::Identifier(n) if p.is_private => Some(n.clone()),
+                        _ => None,
+                    };
+                    (name, p.is_static, p.is_private)
+                }
+                ClassElement::Method(m) => {
+                    let name = match &m.name {
+                        PropertyKey::PrivateIdentifier(n) => Some(n.clone()),
+                        PropertyKey::Identifier(n) if m.is_private => Some(n.clone()),
+                        _ => None,
+                    };
+                    (name, m.is_static, m.is_private)
+                }
+                _ => (None, false, false),
+            };
+            if !is_private {
+                continue;
+            }
+            if let Some(name) = name {
+                if is_static {
+                    static_private_names.push(name);
+                } else {
+                    instance_private_names.push(name);
+                }
+            }
+        }
+
+        let proto_reg = self.alloc_register();
+        self.reserved_slots.insert(proto_reg);
+        self.push_scope();
+        {
+            let scope = self.scope_stack.last_mut().unwrap();
+            for name in &instance_private_names {
+                scope.insert(
+                    name.clone(),
+                    VarEntry {
+                        slot: proto_reg,
+                        kind: VariableKind::Let,
+                        initialized: true,
+                    },
+                );
+            }
+            for name in &static_private_names {
+                scope.insert(
+                    name.clone(),
+                    VarEntry {
+                        slot: class_slot,
+                        kind: VariableKind::Let,
+                        initialized: true,
+                    },
+                );
+            }
+        }
 
         let mut class_parent_vars = FxHashMap::default();
 
@@ -10144,6 +10667,7 @@ impl CodeGenerator {
         let ctor_reg = self.alloc_register();
         let class_name_atom = ctx.atom_table_mut().intern(class_name);
         let ctor_name_atom = class_name_atom.0;
+        let has_instance_private_elements = !instance_private_names.is_empty();
         self.emit_embedded_function(
             &ctor_bytecode,
             &ctor_upvalues,
@@ -10151,7 +10675,8 @@ impl CodeGenerator {
             ctor_reg,
             false,
             false,
-            3 | if has_super { 8 } else { 0 },
+            3 | if has_super { 8 } else { 0 }
+                | if has_instance_private_elements { 16 } else { 0 },
         );
 
         if let Some(super_expr) = super_class {
@@ -10180,7 +10705,6 @@ impl CodeGenerator {
             self.emit_u16(ctor_reg);
         }
 
-        let proto_reg = self.alloc_register();
         self.emit(Opcode::NewObject);
         self.emit_u16(proto_reg);
 
@@ -10288,6 +10812,7 @@ impl CodeGenerator {
                     self.emit_u16(key);
                     self.emit_u16(method_reg);
                     self.emit_u16(u16::MAX);
+                    self.emit_u16(proto_reg);
                 }
                 MethodKind::Set if is_private => {
                     self.emit(Opcode::DefinePrivateAccessor);
@@ -10295,6 +10820,7 @@ impl CodeGenerator {
                     self.emit_u16(key);
                     self.emit_u16(u16::MAX);
                     self.emit_u16(method_reg);
+                    self.emit_u16(proto_reg);
                 }
                 MethodKind::Get => {
                     self.emit(Opcode::DefineClassAccessor);
@@ -10312,10 +10838,11 @@ impl CodeGenerator {
                 }
                 _ => {
                     if is_private {
-                        self.emit(Opcode::SetPrivate);
+                        self.emit(Opcode::DefinePrivateMethod);
                         self.emit_u16(proto_reg);
                         self.emit_u16(key);
                         self.emit_u16(method_reg);
+                        self.emit_u16(proto_reg);
                     } else {
                         self.emit(Opcode::SetMethodProp);
                         self.emit_u16(proto_reg);
@@ -10392,6 +10919,10 @@ impl CodeGenerator {
                     self.emit_u16(key);
                     self.emit_u16(method_reg);
                     self.emit_u16(u16::MAX);
+                    self.emit_u16(class_slot);
+                    self.emit(Opcode::AddPrivateBrand);
+                    self.emit_u16(class_slot);
+                    self.emit_u16(class_slot);
                 }
                 MethodKind::Set if is_private => {
                     self.emit(Opcode::DefinePrivateAccessor);
@@ -10399,6 +10930,10 @@ impl CodeGenerator {
                     self.emit_u16(key);
                     self.emit_u16(u16::MAX);
                     self.emit_u16(method_reg);
+                    self.emit_u16(class_slot);
+                    self.emit(Opcode::AddPrivateBrand);
+                    self.emit_u16(class_slot);
+                    self.emit_u16(class_slot);
                 }
                 MethodKind::Get => {
                     self.emit(Opcode::DefineClassAccessor);
@@ -10416,10 +10951,14 @@ impl CodeGenerator {
                 }
                 _ => {
                     if is_private {
-                        self.emit(Opcode::SetPrivate);
+                        self.emit(Opcode::DefinePrivateMethod);
                         self.emit_u16(class_slot);
                         self.emit_u16(key);
                         self.emit_u16(method_reg);
+                        self.emit_u16(class_slot);
+                        self.emit(Opcode::AddPrivateBrand);
+                        self.emit_u16(class_slot);
+                        self.emit_u16(class_slot);
                     } else {
                         self.emit(Opcode::SetMethodProp);
                         self.emit_u16(class_slot);
@@ -10431,8 +10970,6 @@ impl CodeGenerator {
             self.free_register(key);
             self.free_register(method_reg);
         }
-
-        self.free_register(proto_reg);
 
         for element in &body.elements {
             if let ClassElement::Property(p) = element {
@@ -10471,13 +11008,17 @@ impl CodeGenerator {
                     self.emit_u16(key);
                     self.emit_u32(field_idx);
                     if p.is_private {
-                        self.emit(Opcode::SetPrivate);
+                        self.emit(Opcode::DefinePrivateField);
+                        self.emit_u16(class_slot);
+                        self.emit_u16(key);
+                        self.emit_u16(val_reg);
+                        self.emit_u16(class_slot);
                     } else {
                         self.emit(Opcode::SetProp);
+                        self.emit_u16(class_slot);
+                        self.emit_u16(key);
+                        self.emit_u16(val_reg);
                     }
-                    self.emit_u16(class_slot);
-                    self.emit_u16(key);
-                    self.emit_u16(val_reg);
                     self.free_register(key);
                     self.free_register(val_reg);
                 }
@@ -10501,6 +11042,8 @@ impl CodeGenerator {
             self.emit_u16(0);
             self.free_register(block_reg);
         }
+
+        self.pop_scope();
 
         Ok(class_name_atom)
     }

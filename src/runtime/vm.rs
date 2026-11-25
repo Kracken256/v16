@@ -1100,6 +1100,9 @@ impl VM {
                     *regs_ptr = return_value;
                 }
             }
+            if let Some(fptr) = Self::private_elements_owner_fn(caller) {
+                Self::initialize_private_instance_elements(caller.this_value, fptr);
+            }
         }
         if let Some(ref sync_map) = caller.upvalue_sync_map {
             if let Some(cell) = sync_map.get(&dst_reg) {
@@ -1454,6 +1457,9 @@ impl VM {
                 }
                 if is_call_new {
                     self.frames[self.frame_index].new_target = func_val;
+                }
+                if js_func.is_class_constructor && !js_func.is_derived_constructor {
+                    Self::initialize_private_instance_elements(fn_this, ptr);
                 }
                 if !js_func.home_object.is_undefined() {
                     if js_func.home_object.is_object_like() {
@@ -1879,12 +1885,49 @@ impl VM {
         frame.super_ctor
     }
 
+    fn private_elements_owner_fn(frame: &CallFrame) -> Option<usize> {
+        let fptr = frame.function_ptr?;
+        let func =
+            unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+        if func.is_arrow() {
+            if func.arrow_enclosing_ctor_ptr != 0 {
+                Some(func.arrow_enclosing_ctor_ptr)
+            } else {
+                None
+            }
+        } else if func.has_private_elements {
+            Some(fptr)
+        } else {
+            None
+        }
+    }
+
+    fn initialize_private_instance_elements(this_val: JSValue, func_ptr: usize) {
+        if !this_val.is_object_like() {
+            return;
+        }
+        let func = unsafe { &*(func_ptr as *const crate::object::function::JSFunction) };
+        if !func.has_private_elements {
+            return;
+        }
+        let owner = func.cached_prototype_ptr as usize;
+        if owner != 0 {
+            this_val.as_object_mut().add_private_brand(owner);
+        }
+    }
+
     fn bind_super_call_result(&mut self, dst: u16) {
         let result = self.get_reg(dst);
         self.frames[self.frame_index].this_initialized = true;
         if result.is_object_like() {
             self.frames[self.frame_index].this_value = result;
             self.set_reg(0, result);
+        }
+        if let Some(fptr) = Self::private_elements_owner_fn(&self.frames[self.frame_index]) {
+            Self::initialize_private_instance_elements(
+                self.frames[self.frame_index].this_value,
+                fptr,
+            );
         }
     }
 
@@ -1901,6 +1944,12 @@ impl VM {
             }
             self.frames[self.frame_index].this_value = result;
             self.set_reg(0, result);
+        }
+        if let Some(fptr) = Self::private_elements_owner_fn(&self.frames[self.frame_index]) {
+            Self::initialize_private_instance_elements(
+                self.frames[self.frame_index].this_value,
+                fptr,
+            );
         }
     }
 
@@ -2700,6 +2749,10 @@ impl VM {
         let new_ptr = Box::into_raw(Box::new(new_obj)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(new_ptr);
         let new_val = JSValue::new_object(new_ptr);
+
+        if js_func.is_class_constructor && !js_func.is_derived_constructor {
+            Self::initialize_private_instance_elements(new_val, ctor.get_ptr());
+        }
 
         match self.call_function_with_this(ctx, ctor, new_val, args) {
             Ok(result) => {
@@ -6921,183 +6974,238 @@ impl VM {
                     let dst = self.read_u16_pc();
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
+                    let owner_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
-                    let result = if (obj_val.is_object() || obj_val.is_function())
+                    let owner_val = self.get_reg(owner_reg);
+                    let mut result = JSValue::undefined();
+                    let mut failed = false;
+                    if obj_val.is_object_like()
                         && key_val.is_string()
+                        && owner_val.is_object_like()
                     {
-                        let js_obj = obj_val.as_object();
                         let atom = key_val.get_atom();
-                        let atom_str = ctx.get_atom_str(atom).to_string();
-                        let alt_atom = if let Some(stripped) = atom_str.strip_prefix('#') {
-                            Some(ctx.intern(stripped))
-                        } else {
-                            None
-                        };
-
-                        let own_accessor =
-                            js_obj.get_own_private_accessor_entry(atom).or_else(|| {
-                                alt_atom.and_then(|a| js_obj.get_own_private_accessor_entry(a))
-                            });
-                        if let Some(entry) = own_accessor {
-                            if let Some(getter) = entry.get {
-                                self.call_function_with_this(ctx, getter, obj_val, &[])
-                                    .unwrap_or(JSValue::undefined())
-                            } else {
-                                JSValue::undefined()
+                        let owner_ptr = owner_val.get_ptr();
+                        let owner_obj = owner_val.as_object();
+                        match owner_obj.get_private_kind(owner_ptr, atom) {
+                            Some(crate::object::object::PrivateKind::Method) => {
+                                let js_obj = obj_val.as_object();
+                                if !js_obj.has_private_brand(owner_ptr) {
+                                    failed = true;
+                                } else {
+                                    match owner_obj.get_private_method(owner_ptr, atom) {
+                                        Some(v) => result = v,
+                                        None => failed = true,
+                                    }
+                                }
                             }
-                        } else if let Some(val) = js_obj
-                            .get_private_field(atom)
-                            .or_else(|| alt_atom.and_then(|a| js_obj.get_private_field(a)))
-                        {
-                            val
-                        } else {
-                            let mut getter_fn: Option<JSValue> = None;
-                            let mut inherited_value: Option<JSValue> = None;
-                            let mut cur = js_obj.prototype;
-                            let mut depth = 0u32;
-                            while let Some(p) = cur {
-                                if p.is_null() || depth > 100 {
-                                    break;
+                            Some(crate::object::object::PrivateKind::Accessor) => {
+                                let js_obj = obj_val.as_object();
+                                if !js_obj.has_private_brand(owner_ptr) {
+                                    failed = true;
+                                } else {
+                                    let getter = owner_obj
+                                        .get_own_private_accessor_entry(owner_ptr, atom)
+                                        .and_then(|e| e.get);
+                                    match getter {
+                                        Some(getter) => {
+                                            result = self
+                                                .call_function_with_this(
+                                                    ctx, getter, obj_val, &[],
+                                                )
+                                                .unwrap_or(JSValue::undefined());
+                                        }
+                                        None => failed = true,
+                                    }
                                 }
-                                let proto_obj = unsafe { &*p };
-                                let accessor_entry =
-                                    proto_obj.get_own_private_accessor_entry(atom).or_else(|| {
-                                        alt_atom.and_then(|a| {
-                                            proto_obj.get_own_private_accessor_entry(a)
-                                        })
-                                    });
-                                if let Some(entry) = accessor_entry {
-                                    getter_fn = entry.get;
-                                    break;
-                                }
-                                if let Some(v) = proto_obj.get_private_field(atom).or_else(|| {
-                                    alt_atom.and_then(|a| proto_obj.get_private_field(a))
-                                }) {
-                                    inherited_value = Some(v);
-                                    break;
-                                }
-                                cur = proto_obj.prototype;
-                                depth += 1;
                             }
-                            if let Some(getter) = getter_fn {
-                                self.call_function_with_this(ctx, getter, obj_val, &[])
-                                    .unwrap_or(JSValue::undefined())
-                            } else if let Some(v) = inherited_value {
-                                v
-                            } else {
-                                JSValue::undefined()
+                            _ => {
+                                let js_obj = obj_val.as_object();
+                                match js_obj.get_private_field(owner_ptr, atom) {
+                                    Some(v) => result = v,
+                                    None => failed = true,
+                                }
                             }
                         }
                     } else {
-                        JSValue::undefined()
-                    };
+                        failed = true;
+                    }
+                    if failed {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot read private member from an object whose class did not declare it",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
                     self.set_reg(dst, result);
                 }
                 Opcode::SetPrivate => {
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
                     let val_reg = self.read_u16_pc();
+                    let owner_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
                     let val = self.get_reg(val_reg);
-                    if (obj_val.is_object() || obj_val.is_function()) && key_val.is_string() {
+                    let owner_val = self.get_reg(owner_reg);
+                    let mut failed = false;
+                    if obj_val.is_object_like()
+                        && key_val.is_string()
+                        && owner_val.is_object_like()
+                    {
                         let atom = key_val.get_atom();
-                        let atom_str = ctx.get_atom_str(atom).to_string();
-                        let alt_atom = if let Some(stripped) = atom_str.strip_prefix('#') {
-                            Some(ctx.intern(stripped))
-                        } else {
-                            None
-                        };
-
-                        let own_accessor_entry = {
-                            let js_obj = obj_val.as_object();
-                            js_obj
-                                .get_own_private_accessor_entry(atom)
-                                .or_else(|| {
-                                    alt_atom.and_then(|a| js_obj.get_own_private_accessor_entry(a))
-                                })
-                                .cloned()
-                        };
-                        if let Some(entry) = own_accessor_entry {
-                            if let Some(setter) = entry.set {
-                                let _ = self.call_function_with_this(ctx, setter, obj_val, &[val]);
-                            } else {
-                                self.set_pending_type_error(
-                                    ctx,
-                                    "Cannot set private property without setter",
-                                );
-                                if let Some(exc) = self.pending_throw.take() {
-                                    match self.dispatch_throw_value(ctx, exc) {
-                                        ThrowDispatch::Caught => continue,
-                                        ThrowDispatch::Uncaught(e) => return Err(e),
-                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                    }
-                                }
-                            }
-                        } else {
-                            let mut setter_fn: Option<JSValue> = None;
-                            let mut accessor_found = false;
-                            {
+                        let owner_ptr = owner_val.get_ptr();
+                        let owner_obj = owner_val.as_object();
+                        match owner_obj.get_private_kind(owner_ptr, atom) {
+                            Some(crate::object::object::PrivateKind::Accessor) => {
                                 let js_obj = obj_val.as_object();
-                                let mut cur = js_obj.prototype;
-                                let mut depth = 0u32;
-                                while let Some(p) = cur {
-                                    if p.is_null() || depth > 100 {
-                                        break;
+                                if !js_obj.has_private_brand(owner_ptr) {
+                                    failed = true;
+                                } else {
+                                    let setter = owner_obj
+                                        .get_own_private_accessor_entry(owner_ptr, atom)
+                                        .and_then(|e| e.set);
+                                    match setter {
+                                        Some(setter) => {
+                                            let _ = self.call_function_with_this(
+                                                ctx, setter, obj_val, &[val],
+                                            );
+                                        }
+                                        None => failed = true,
                                     }
-                                    let proto_obj = unsafe { &*p };
-                                    let accessor_entry = proto_obj
-                                        .get_own_private_accessor_entry(atom)
-                                        .or_else(|| {
-                                            alt_atom.and_then(|a| {
-                                                proto_obj.get_own_private_accessor_entry(a)
-                                            })
-                                        });
-                                    if let Some(entry) = accessor_entry {
-                                        accessor_found = true;
-                                        setter_fn = entry.set;
-                                        break;
-                                    }
-                                    cur = proto_obj.prototype;
-                                    depth += 1;
                                 }
                             }
-                            if let Some(setter) = setter_fn {
-                                let _ = self.call_function_with_this(ctx, setter, obj_val, &[val]);
-                            } else if accessor_found {
-                                self.set_pending_type_error(
-                                    ctx,
-                                    "Cannot set private property without setter",
-                                );
-                                if let Some(exc) = self.pending_throw.take() {
-                                    match self.dispatch_throw_value(ctx, exc) {
-                                        ThrowDispatch::Caught => continue,
-                                        ThrowDispatch::Uncaught(e) => return Err(e),
-                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                    }
-                                }
-                            } else {
+                            _ => {
                                 let js_obj = obj_val.as_object_mut();
-                                js_obj.set_private_field(atom, val);
+                                if js_obj.has_private_field(owner_ptr, atom) {
+                                    js_obj.set_private_field(owner_ptr, atom, val);
+                                } else {
+                                    failed = true;
+                                }
                             }
                         }
+                    } else {
+                        failed = true;
+                    }
+                    if failed {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot write private member to an object whose class did not declare it",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
+                }
+                Opcode::DefinePrivateField => {
+                    let obj_reg = self.read_u16_pc();
+                    let key_reg = self.read_u16_pc();
+                    let val_reg = self.read_u16_pc();
+                    let owner_reg = self.read_u16_pc();
+                    let obj_val = self.get_reg(obj_reg);
+                    let key_val = self.get_reg(key_reg);
+                    let val = self.get_reg(val_reg);
+                    let owner_val = self.get_reg(owner_reg);
+                    let mut failed = false;
+                    if obj_val.is_object_like()
+                        && key_val.is_string()
+                        && owner_val.is_object_like()
+                    {
+                        let atom = key_val.get_atom();
+                        let owner_ptr = owner_val.get_ptr();
+                        let js_obj = obj_val.as_object_mut();
+                        if js_obj.has_private_field(owner_ptr, atom) {
+                            failed = true;
+                        } else {
+                            js_obj.set_private_field(owner_ptr, atom, val);
+                            js_obj.add_private_brand(owner_ptr);
+                        }
+                    } else {
+                        failed = true;
+                    }
+                    if failed {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot initialize private field twice",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
+                }
+                Opcode::DefinePrivateMethod => {
+                    let obj_reg = self.read_u16_pc();
+                    let key_reg = self.read_u16_pc();
+                    let val_reg = self.read_u16_pc();
+                    let owner_reg = self.read_u16_pc();
+                    let obj_val = self.get_reg(obj_reg);
+                    let key_val = self.get_reg(key_reg);
+                    let val = self.get_reg(val_reg);
+                    let owner_val = self.get_reg(owner_reg);
+                    if obj_val.is_object_like()
+                        && key_val.is_string()
+                        && owner_val.is_object_like()
+                    {
+                        let atom = key_val.get_atom();
+                        let owner_ptr = owner_val.get_ptr();
+                        let js_obj = obj_val.as_object_mut();
+                        js_obj.define_private_method(owner_ptr, atom, val);
+                        js_obj.define_private_kind(
+                            owner_ptr,
+                            atom,
+                            crate::object::object::PrivateKind::Method,
+                        );
+                    }
+                }
+                Opcode::AddPrivateBrand => {
+                    let obj_reg = self.read_u16_pc();
+                    let owner_reg = self.read_u16_pc();
+                    let obj_val = self.get_reg(obj_reg);
+                    let owner_val = self.get_reg(owner_reg);
+                    if obj_val.is_object_like() && owner_val.is_object_like() {
+                        let owner_ptr = owner_val.get_ptr();
+                        obj_val.as_object_mut().add_private_brand(owner_ptr);
                     }
                 }
                 Opcode::HasPrivate => {
                     let dst = self.read_u16_pc();
                     let obj_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
+                    let owner_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
-                    let result =
-                        if (obj_val.is_object() || obj_val.is_function()) && key_val.is_string() {
-                            let js_obj = obj_val.as_object();
-                            let atom = key_val.get_atom();
-                            js_obj.has_private_field(atom)
-                        } else {
-                            false
-                        };
+                    let owner_val = self.get_reg(owner_reg);
+                    let result = if obj_val.is_object_like()
+                        && key_val.is_string()
+                        && owner_val.is_object_like()
+                    {
+                        let atom = key_val.get_atom();
+                        let owner_ptr = owner_val.get_ptr();
+                        let owner_obj = owner_val.as_object();
+                        match owner_obj.get_private_kind(owner_ptr, atom) {
+                            Some(crate::object::object::PrivateKind::Method)
+                            | Some(crate::object::object::PrivateKind::Accessor) => {
+                                obj_val.as_object().has_private_brand(owner_ptr)
+                            }
+                            _ => obj_val.as_object().has_private_field(owner_ptr, atom),
+                        }
+                    } else {
+                        false
+                    };
                     self.set_reg(dst, JSValue::bool(result));
                 }
                 Opcode::GatherRest => {
@@ -7661,11 +7769,16 @@ impl VM {
                     let key_reg = self.read_u16_pc();
                     let getter_reg = self.read_u16_pc();
                     let setter_reg = self.read_u16_pc();
+                    let owner_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let key_val = self.get_reg(key_reg);
-                    if (obj_val.is_object() || obj_val.is_function()) && key_val.is_string() {
+                    let owner_val = self.get_reg(owner_reg);
+                    if obj_val.is_object_like()
+                        && key_val.is_string()
+                        && owner_val.is_object_like()
+                    {
                         let atom = key_val.get_atom();
-                        let obj = obj_val.as_object_mut();
+                        let owner_ptr = owner_val.get_ptr();
                         let getter = if getter_reg != u16::MAX {
                             Some(self.get_reg(getter_reg))
                         } else {
@@ -7676,7 +7789,13 @@ impl VM {
                         } else {
                             None
                         };
-                        obj.define_private_accessor(atom, getter, setter);
+                        let obj = obj_val.as_object_mut();
+                        obj.define_private_accessor(owner_ptr, atom, getter, setter);
+                        obj.define_private_kind(
+                            owner_ptr,
+                            atom,
+                            crate::object::object::PrivateKind::Accessor,
+                        );
                     }
                 }
 
@@ -8600,6 +8719,9 @@ impl VM {
                             if is_call_new {
                                 self.frames[self.frame_index].new_target = func_val;
                             }
+                            if js_func.is_class_constructor && !js_func.is_derived_constructor {
+                                Self::initialize_private_instance_elements(this_val, ptr);
+                            }
                             if is_super_call {
                                 let frame = &mut self.frames[self.frame_index];
                                 frame.is_super_call = true;
@@ -8907,7 +9029,23 @@ impl VM {
                     func.set_is_strict(is_strict);
                     func.set_is_arrow(function_kind & 4 != 0);
                     func.is_derived_constructor = function_kind & 8 != 0;
+                    func.is_class_constructor = function_kind & 2 != 0;
+                    func.has_private_elements = function_kind & 16 != 0;
                     if function_kind & 4 != 0 {
+                        if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
+                            let parent_func = unsafe {
+                                &*(parent_ptr as *const crate::object::function::JSFunction)
+                            };
+                            func.arrow_enclosing_ctor_ptr = if parent_func.is_arrow() {
+                                parent_func.arrow_enclosing_ctor_ptr
+                            } else if parent_func.is_class_constructor
+                                && parent_func.has_private_elements
+                            {
+                                parent_ptr
+                            } else {
+                                0
+                            };
+                        }
                         let parent = &self.frames[self.frame_index];
                         func.arrow_this = parent.this_value;
                         func.arrow_this_initialized = parent.this_initialized;

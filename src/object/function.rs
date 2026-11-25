@@ -64,6 +64,9 @@ pub struct JSFunction {
     pub home_object: JSValue,
     pub arrow_super_base: JSValue,
     pub is_derived_constructor: bool,
+    pub is_class_constructor: bool,
+    pub has_private_elements: bool,
+    pub arrow_enclosing_ctor_ptr: usize,
 }
 
 impl JSFunction {
@@ -94,6 +97,9 @@ impl JSFunction {
             home_object: JSValue::undefined(),
             arrow_super_base: JSValue::undefined(),
             is_derived_constructor: false,
+            is_class_constructor: false,
+            has_private_elements: false,
+            arrow_enclosing_ctor_ptr: 0,
         }
     }
 

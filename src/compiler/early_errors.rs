@@ -1255,6 +1255,19 @@ fn unparenthesized_yield(expr: &Expression) -> bool {
     matches!(expr, Expression::YieldExpression(y) if !y.parenthesized)
 }
 
+fn is_private_name_member(expr: &Expression) -> bool {
+    match expr {
+        Expression::MemberExpression(m) => {
+            matches!(m.property, MemberProperty::PrivateIdentifier(_))
+        }
+        Expression::OptionalMemberExpression(m) => {
+            matches!(m.property, MemberProperty::PrivateIdentifier(_))
+        }
+        Expression::ChainExpression(inner) => is_private_name_member(inner),
+        _ => false,
+    }
+}
+
 fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
     match expr {
         Expression::Identifier(id) => check_identifier_reference(&id.name, ctx),
@@ -1414,6 +1427,11 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                     return Err(
                         "SyntaxError: delete of an unqualified identifier in strict mode"
                             .to_string(),
+                    );
+                }
+                if is_private_name_member(&u.argument) {
+                    return Err(
+                        "SyntaxError: delete of a private member in strict mode".to_string(),
                     );
                 }
             }

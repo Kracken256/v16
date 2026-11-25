@@ -1,6 +1,6 @@
 use super::shape::{Shape, ShapeCache};
 use crate::runtime::atom::Atom;
-use crate::util::FxHashMap;
+use crate::util::{FxHashMap, FxHashSet};
 use crate::value::JSValue;
 use std::mem::MaybeUninit;
 
@@ -450,10 +450,26 @@ impl<'a> IntoIterator for &'a mut SmallPropVec {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PrivateKey {
+    pub owner: usize,
+    pub name: Atom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateKind {
+    Field,
+    Method,
+    Accessor,
+}
+
 pub struct ObjectExtra {
     pub bigint_value: i128,
-    pub private_fields: Option<Box<FxHashMap<Atom, JSValue>>>,
-    pub private_accessors: Option<Box<FxHashMap<Atom, AccessorEntry>>>,
+    pub private_fields: Option<Box<FxHashMap<PrivateKey, JSValue>>>,
+    pub private_accessors: Option<Box<FxHashMap<PrivateKey, AccessorEntry>>>,
+    pub private_methods: Option<Box<FxHashMap<PrivateKey, JSValue>>>,
+    pub private_kinds: Option<Box<FxHashMap<PrivateKey, PrivateKind>>>,
+    pub private_brands: Option<Box<FxHashSet<usize>>>,
     pub array_elements: Option<Box<Vec<JSValue>>>,
 
     pub property_map: Option<Box<FxHashMap<Atom, u32>>>,
@@ -512,8 +528,11 @@ impl JSObject {
             Box::new(ObjectExtra {
                 bigint_value: 0,
                 private_fields: None,
+                private_brands: None,
                 array_elements: None,
                 private_accessors: None,
+                private_methods: None,
+                private_kinds: None,
                 property_map: None,
                 accessors: None,
                 property_order: None,
@@ -838,33 +857,113 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn get_private_field(&self, atom: Atom) -> Option<JSValue> {
+    pub fn get_private_field(&self, owner: usize, atom: Atom) -> Option<JSValue> {
         self.extra
             .as_ref()
             .and_then(|e| e.private_fields.as_ref())
-            .and_then(|fields| fields.get(&atom).cloned())
+            .and_then(|fields| fields.get(&PrivateKey { owner, name: atom }).cloned())
     }
 
     #[inline]
-    pub fn has_private_field(&self, atom: Atom) -> bool {
+    pub fn has_private_field(&self, owner: usize, atom: Atom) -> bool {
         self.extra
             .as_ref()
             .and_then(|e| e.private_fields.as_ref())
-            .map_or(false, |fields| fields.contains_key(&atom))
+            .map_or(false, |fields| {
+                fields.contains_key(&PrivateKey { owner, name: atom })
+            })
     }
 
-    pub fn set_private_field(&mut self, atom: Atom, value: JSValue) {
+    pub fn set_private_field(&mut self, owner: usize, atom: Atom, value: JSValue) {
         self.ensure_extra()
             .private_fields
             .get_or_insert_with(|| Box::new(FxHashMap::default()))
-            .insert(atom, value);
+            .insert(PrivateKey { owner, name: atom }, value);
     }
 
-    pub fn for_each_private_field(&self, mut f: impl FnMut(Atom, JSValue)) {
+    pub fn for_each_private_field(&self, mut f: impl FnMut(PrivateKey, JSValue)) {
         if let Some(ref extra) = self.extra {
             if let Some(ref fields) = extra.private_fields {
-                for (&atom, value) in fields.iter() {
-                    f(atom, value.clone());
+                for (&key, value) in fields.iter() {
+                    f(key, value.clone());
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub fn add_private_brand(&mut self, owner: usize) {
+        self.ensure_extra()
+            .private_brands
+            .get_or_insert_with(|| Box::new(FxHashSet::default()))
+            .insert(owner);
+    }
+
+    #[inline]
+    pub fn has_private_brand(&self, owner: usize) -> bool {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.private_brands.as_ref())
+            .map_or(false, |brands| brands.contains(&owner))
+    }
+
+    #[inline]
+    pub fn define_private_method(&mut self, owner: usize, name: Atom, value: JSValue) {
+        self.ensure_extra()
+            .private_methods
+            .get_or_insert_with(|| Box::new(FxHashMap::default()))
+            .insert(PrivateKey { owner, name }, value);
+    }
+
+    #[inline]
+    pub fn get_private_method(&self, owner: usize, name: Atom) -> Option<JSValue> {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.private_methods.as_ref())
+            .and_then(|methods| methods.get(&PrivateKey { owner, name }).cloned())
+    }
+
+    #[inline]
+    pub fn has_private_method(&self, owner: usize, name: Atom) -> bool {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.private_methods.as_ref())
+            .map_or(false, |methods| {
+                methods.contains_key(&PrivateKey { owner, name })
+            })
+    }
+
+    #[inline]
+    pub fn define_private_kind(&mut self, owner: usize, name: Atom, kind: PrivateKind) {
+        self.ensure_extra()
+            .private_kinds
+            .get_or_insert_with(|| Box::new(FxHashMap::default()))
+            .insert(PrivateKey { owner, name }, kind);
+    }
+
+    #[inline]
+    pub fn get_private_kind(&self, owner: usize, name: Atom) -> Option<PrivateKind> {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.private_kinds.as_ref())
+            .and_then(|kinds| kinds.get(&PrivateKey { owner, name }).copied())
+    }
+
+    #[inline]
+    pub fn has_private_kind(&self, owner: usize, name: Atom) -> bool {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.private_kinds.as_ref())
+            .map_or(false, |kinds| {
+                kinds.contains_key(&PrivateKey { owner, name })
+            })
+    }
+
+    pub fn for_each_private_method(&self, mut f: impl FnMut(PrivateKey, JSValue)) {
+        if let Some(ref extra) = self.extra {
+            if let Some(ref methods) = extra.private_methods {
+                for (&key, value) in methods.iter() {
+                    f(key, value.clone());
                 }
             }
         }
@@ -1175,21 +1274,31 @@ impl JSObject {
             );
     }
 
-    pub fn get_own_private_accessor_entry(&self, prop: Atom) -> Option<&AccessorEntry> {
-        self.extra.as_ref()?.private_accessors.as_ref()?.get(&prop)
+    pub fn get_own_private_accessor_entry(
+        &self,
+        owner: usize,
+        prop: Atom,
+    ) -> Option<&AccessorEntry> {
+        self.extra
+            .as_ref()?
+            .private_accessors
+            .as_ref()?
+            .get(&PrivateKey { owner, name: prop })
     }
 
     pub fn define_private_accessor(
         &mut self,
+        owner: usize,
         prop: Atom,
         getter: Option<JSValue>,
         setter: Option<JSValue>,
     ) {
+        let key = PrivateKey { owner, name: prop };
         let existing = self
             .extra
             .as_ref()
             .and_then(|e| e.private_accessors.as_ref())
-            .and_then(|a| a.get(&prop))
+            .and_then(|a| a.get(&key))
             .cloned();
         let (final_getter, final_setter) = match existing {
             Some(e) => (getter.or(e.get), setter.or(e.set)),
@@ -1199,7 +1308,7 @@ impl JSObject {
             .private_accessors
             .get_or_insert_with(|| Box::new(FxHashMap::default()))
             .insert(
-                prop,
+                key,
                 AccessorEntry {
                     get: final_getter,
                     set: final_setter,
@@ -2724,12 +2833,12 @@ mod tests {
     #[test]
     fn test_object_private_fields() {
         let mut obj = JSObject::new();
-        assert!(!obj.has_private_field(Atom(1)));
-        assert!(obj.get_private_field(Atom(1)).is_none());
+        assert!(!obj.has_private_field(0, Atom(1)));
+        assert!(obj.get_private_field(0, Atom(1)).is_none());
 
-        obj.set_private_field(Atom(1), JSValue::new_int(42));
-        assert!(obj.has_private_field(Atom(1)));
-        assert_eq!(obj.get_private_field(Atom(1)).unwrap().get_int(), 42);
+        obj.set_private_field(0, Atom(1), JSValue::new_int(42));
+        assert!(obj.has_private_field(0, Atom(1)));
+        assert_eq!(obj.get_private_field(0, Atom(1)).unwrap().get_int(), 42);
     }
 
     #[test]

@@ -1776,6 +1776,7 @@ impl Parser {
                     right: Box::new(right),
                     parenthesized: false,
                     lhs_parenthesized,
+                    private_field_init: false,
                 }));
             }
         }
@@ -2989,6 +2990,7 @@ impl Parser {
                     right: Box::new(default),
                     parenthesized: false,
                     lhs_parenthesized: false,
+                    private_field_init: false,
                 });
                 properties.push(Property::Property {
                     key,

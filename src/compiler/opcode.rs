@@ -196,6 +196,9 @@ pub enum Opcode {
     MarkDirectEval = 232,
     YieldResult = 233,
     YieldStarStep = 234,
+    DefinePrivateField = 235,
+    DefinePrivateMethod = 236,
+    AddPrivateBrand = 237,
 }
 
 impl Opcode {
@@ -383,6 +386,9 @@ impl Opcode {
             232 => Some(Opcode::MarkDirectEval),
             233 => Some(Opcode::YieldResult),
             234 => Some(Opcode::YieldStarStep),
+            235 => Some(Opcode::DefinePrivateField),
+            236 => Some(Opcode::DefinePrivateMethod),
+            237 => Some(Opcode::AddPrivateBrand),
             _ => None,
         }
     }
@@ -502,7 +508,7 @@ impl Opcode {
             | Opcode::MathRound => 5,
             Opcode::MathPow | Opcode::MathMin | Opcode::MathMax => 7,
             Opcode::DefineAccessor => 9,
-            Opcode::DefinePrivateAccessor => 9,
+            Opcode::DefinePrivateAccessor => 11,
             Opcode::SetMethodProp => 7,
             Opcode::DefineClassPrototype => 5,
             Opcode::DefineClassAccessor => 9,
@@ -531,9 +537,12 @@ impl Opcode {
             Opcode::CallSpread => 7,
             Opcode::CallMethodSpread => 9,
             Opcode::CallNewSpread => 7,
-            Opcode::GetPrivate => 7,
-            Opcode::SetPrivate => 7,
-            Opcode::HasPrivate => 7,
+            Opcode::GetPrivate => 9,
+            Opcode::SetPrivate => 9,
+            Opcode::HasPrivate => 9,
+            Opcode::DefinePrivateField => 9,
+            Opcode::DefinePrivateMethod => 9,
+            Opcode::AddPrivateBrand => 5,
             Opcode::NewGeneratorFunction => 1,
             Opcode::NewAsyncFunction => 1,
             Opcode::NewAsyncGeneratorFunction => 1,
@@ -947,13 +956,18 @@ impl Bytecode {
                 Opcode::GetField
                 | Opcode::GetProp
                 | Opcode::DeleteProp
-                | Opcode::HasProperty
-                | Opcode::GetPrivate
-                | Opcode::HasPrivate => {
+                | Opcode::HasProperty => {
                     let dst = read_u16(1);
                     let obj = read_u16(3);
                     let key = read_u16(5);
                     write!(operands, " r{}, r{}, r{}", dst, obj, key).unwrap();
+                }
+                Opcode::GetPrivate | Opcode::HasPrivate => {
+                    let dst = read_u16(1);
+                    let obj = read_u16(3);
+                    let key = read_u16(5);
+                    let owner = read_u16(7);
+                    write!(operands, " r{}, r{}, r{}, r{}", dst, obj, key, owner).unwrap();
                 }
                 Opcode::GetNamedProp => {
                     let dst = read_u16(1);
@@ -961,11 +975,23 @@ impl Bytecode {
                     let atom = read_u32(5);
                     write!(operands, " r{}, r{}, atom({})", dst, obj, atom).unwrap();
                 }
-                Opcode::SetField | Opcode::SetProp | Opcode::SetPrivate => {
+                Opcode::SetField | Opcode::SetProp => {
                     let obj = read_u16(1);
                     let key = read_u16(3);
                     let val = read_u16(5);
                     write!(operands, " r{}, r{}, r{}", obj, key, val).unwrap();
+                }
+                Opcode::SetPrivate | Opcode::DefinePrivateField | Opcode::DefinePrivateMethod => {
+                    let obj = read_u16(1);
+                    let key = read_u16(3);
+                    let val = read_u16(5);
+                    let owner = read_u16(7);
+                    write!(operands, " r{}, r{}, r{}, r{}", obj, key, val, owner).unwrap();
+                }
+                Opcode::AddPrivateBrand => {
+                    let obj = read_u16(1);
+                    let owner = read_u16(3);
+                    write!(operands, " r{}, r{}", obj, owner).unwrap();
                 }
                 Opcode::SetNamedProp => {
                     let obj = read_u16(1);
@@ -1118,7 +1144,13 @@ impl Bytecode {
                     let key = read_u16(3);
                     let getter = read_u16(5);
                     let setter = read_u16(7);
-                    write!(operands, " r{}, r{}, r{}, r{}", obj, key, getter, setter).unwrap();
+                    let owner = read_u16(9);
+                    write!(
+                        operands,
+                        " r{}, r{}, r{}, r{}, r{}",
+                        obj, key, getter, setter, owner
+                    )
+                    .unwrap();
                 }
                 Opcode::SetMethodProp => {
                     let obj = read_u16(1);

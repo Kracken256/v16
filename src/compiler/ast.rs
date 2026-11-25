@@ -281,6 +281,7 @@ pub struct AssignmentExpression {
     pub right: Box<Expression>,
     pub parenthesized: bool,
     pub lhs_parenthesized: bool,
+    pub private_field_init: bool,
 }
 
 #[derive(Debug, Clone)]

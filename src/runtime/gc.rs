@@ -445,6 +445,10 @@ impl GcHeap {
             self.mark_value(&value);
         });
 
+        func.base.for_each_private_method(|_key, value| {
+            self.mark_value(&value);
+        });
+
         if let Some(proto_ptr) = func.base.prototype {
             self.mark(proto_ptr as usize);
         }
@@ -523,6 +527,9 @@ impl GcHeap {
             arr.header.for_each_private_field(|_atom, value| {
                 self.mark_value(&value);
             });
+            arr.header.for_each_private_method(|_key, value| {
+                self.mark_value(&value);
+            });
             if let Some(proto_ptr) = arr.header.prototype {
                 self.mark(proto_ptr as usize);
             }
@@ -549,6 +556,9 @@ impl GcHeap {
                 }
             }
             obj.for_each_private_field(|_atom, value| {
+                self.mark_value(&value);
+            });
+            obj.for_each_private_method(|_key, value| {
                 self.mark_value(&value);
             });
             obj.for_each_array_element(|value| {

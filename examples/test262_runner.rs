@@ -299,7 +299,6 @@ fn should_skip(meta: &TestMeta) -> bool {
         "ExportDefault",
         "ExportAllFrom",
         "ImportAssertions",
-        "class-fields-private",
         "RegExp Unicode Sets",
         "symbols",
         "Proxy",
