@@ -2874,9 +2874,6 @@ impl Parser {
             self.advance();
             return Ok((PropertyKey::PrivateIdentifier(name), false, false));
         }
-        if self.has_invalid_identifier_escape() {
-            return Err(self.error("Invalid escaped identifier"));
-        }
         if self.cur_type() == Some(TokenType::String) {
             let val = self.cur_value().to_string();
             let has_escape = self.current.as_ref().map_or(false, |t| t.had_escape);
@@ -2901,6 +2898,9 @@ impl Parser {
                     (PropertyKey::Literal(Literal::LegacyOctal(v)), false, false)
                 }
             });
+        }
+        if self.has_invalid_identifier_escape() {
+            return Err(self.error("Invalid escaped identifier"));
         }
         if self.is_identifier_name()
             || matches!(
