@@ -10680,10 +10680,12 @@ impl VM {
                                     ctx.get_builtin_func("throw_type_error_callee");
                                 let thrower_ptr = Box::into_raw(Box::new(thrower)) as usize;
                                 ctx.runtime_mut().gc_heap_mut().track_function(thrower_ptr);
-                                args_obj.define_accessor(
+                                args_obj.define_accessor_flags(
                                     callee_atom,
                                     Some(JSValue::new_function(thrower_ptr)),
                                     None,
+                                    false,
+                                    false,
                                 );
                             } else {
                                 args_obj.define_property(
