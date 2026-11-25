@@ -282,6 +282,7 @@ pub struct JSContext {
     weakset_prototype: Option<usize>,
     dataview_prototype: Option<usize>,
     typed_array_prototype: Option<usize>,
+    typed_array_iterator_prototype: Option<usize>,
     error_prototype: Option<usize>,
     type_error_prototype: Option<usize>,
     reference_error_prototype: Option<usize>,
@@ -368,6 +369,7 @@ impl JSContext {
             weakset_prototype: None,
             dataview_prototype: None,
             typed_array_prototype: None,
+            typed_array_iterator_prototype: None,
             error_prototype: None,
             type_error_prototype: None,
             reference_error_prototype: None,
@@ -794,6 +796,14 @@ impl JSContext {
 
     pub fn set_typed_array_prototype(&mut self, ptr: usize) {
         self.typed_array_prototype = Some(ptr);
+    }
+
+    pub fn set_typed_array_iterator_prototype(&mut self, ptr: usize) {
+        self.typed_array_iterator_prototype = Some(ptr);
+    }
+
+    pub fn get_typed_array_iterator_prototype(&self) -> Option<*mut JSObject> {
+        self.typed_array_iterator_prototype.map(|p| p as *mut JSObject)
     }
 
     pub fn get_weakset_prototype(&self) -> Option<*mut JSObject> {

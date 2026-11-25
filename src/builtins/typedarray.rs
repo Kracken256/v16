@@ -1545,19 +1545,104 @@ fn typed_array_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     ta_get_element(ctx, obj, k as usize).unwrap_or(JSValue::undefined())
 }
 
+fn create_ta_iterator(ctx: &mut JSContext, this_val: JSValue, kind: i64) -> JSValue {
+    let arr_atom = ctx.common_atoms.__iter_arr__;
+    let idx_atom = ctx.common_atoms.__iter_idx__;
+    let kind_atom = ctx.common_atoms.__iter_kind__;
+    let mut iter_obj = crate::object::object::JSObject::new();
+    iter_obj.set(arr_atom, this_val);
+    iter_obj.set(idx_atom, JSValue::new_int(0));
+    iter_obj.set(kind_atom, JSValue::new_int(kind));
+    if let Some(proto) = ctx.get_typed_array_iterator_prototype() {
+        iter_obj.prototype = Some(proto);
+    }
+    let ptr = Box::into_raw(Box::new(iter_obj)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
+fn ta_make_iter_result(ctx: &mut JSContext, value: JSValue, done: bool) -> JSValue {
+    let mut result = crate::object::object::JSObject::new();
+    let done_atom = ctx.intern("done");
+    let value_atom = ctx.intern("value");
+    result.set(value_atom, value);
+    result.set(done_atom, JSValue::bool(done));
+    let ptr = Box::into_raw(Box::new(result)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
+fn ta_iterator_next_impl(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let base = args.first().copied().unwrap_or(JSValue::undefined());
+    if !base.is_object() {
+        throw_type_error(ctx, "Method called on incompatible receiver");
+        return JSValue::undefined();
+    }
+    let obj = base.as_object();
+    let idx_atom = ctx.common_atoms.__iter_idx__;
+    let iter_idx = obj
+        .get(idx_atom)
+        .map(|v| if v.is_int() { v.get_int() as usize } else { 0 })
+        .unwrap_or(0);
+    let target = match obj.get(ctx.common_atoms.__iter_arr__) {
+        Some(v) => v,
+        None => {
+            throw_type_error(ctx, "Iterator has no [[IteratedObject]] slot");
+            return JSValue::undefined();
+        }
+    };
+    let kind = obj
+        .get(ctx.common_atoms.__iter_kind__)
+        .map(|v| if v.is_int() { v.get_int() } else { 0 })
+        .unwrap_or(0);
+    if !target.is_object() {
+        throw_type_error(ctx, "Iterator [[IteratedObject]] is not an object");
+        return JSValue::undefined();
+    }
+    let target_obj = target.as_object();
+    let len = ta_get_length(ctx, target_obj);
+    if iter_idx < len {
+        let value = ta_get_element(ctx, target_obj, iter_idx).unwrap_or(JSValue::undefined());
+        let result_value = match kind {
+            1 => JSValue::new_int(iter_idx as i64),
+            2 => {
+                let key_val = JSValue::new_int(iter_idx as i64);
+                crate::builtins::array::create_iterator_entry(ctx, key_val, value)
+            }
+            _ => value,
+        };
+        base.as_object_mut()
+            .set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
+        ta_make_iter_result(ctx, result_value, false)
+    } else {
+        ta_make_iter_result(ctx, JSValue::undefined(), true)
+    }
+}
+
+fn ta_iterator_self(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let _ = ctx;
+    args.first().copied().unwrap_or(JSValue::undefined())
+}
+
 fn typed_array_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if !ta_check_this(args, ctx) { return JSValue::undefined(); }
-    JSValue::undefined()
+    if !ta_check_this(args, ctx) {
+        return JSValue::undefined();
+    }
+    create_ta_iterator(ctx, args[0], 0)
 }
 
 fn typed_array_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if !ta_check_this(args, ctx) { return JSValue::undefined(); }
-    JSValue::undefined()
+    if !ta_check_this(args, ctx) {
+        return JSValue::undefined();
+    }
+    create_ta_iterator(ctx, args[0], 1)
 }
 
 fn typed_array_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if !ta_check_this(args, ctx) { return JSValue::undefined(); }
-    JSValue::undefined()
+    if !ta_check_this(args, ctx) {
+        return JSValue::undefined();
+    }
+    create_ta_iterator(ctx, args[0], 2)
 }
 
 fn typed_array_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1948,7 +2033,10 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     ta_proto.set(ctx.intern("includes"), create_builtin_function(ctx, "ta_includes"));
     ta_proto.set(ctx.intern("join"), create_builtin_function(ctx, "ta_join"));
     ta_proto.set(ctx.intern("at"), create_builtin_function(ctx, "ta_at"));
-    ta_proto.set(ctx.intern("values"), create_builtin_function(ctx, "ta_values"));
+    let ta_sym_iter = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
+    let ta_values_fn = create_builtin_function(ctx, "ta_values");
+    ta_proto.set(ctx.intern("values"), ta_values_fn);
+    ta_proto.set(ta_sym_iter, ta_values_fn);
     ta_proto.set(ctx.intern("keys"), create_builtin_function(ctx, "ta_keys"));
     ta_proto.set(ctx.intern("entries"), create_builtin_function(ctx, "ta_entries"));
     ta_proto.set(ctx.intern("toString"), create_builtin_function(ctx, "ta_toString"));
@@ -1982,6 +2070,22 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     let ta_proto_ptr = Box::into_raw(Box::new(ta_proto)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(ta_proto_ptr);
     ctx.set_typed_array_prototype(ta_proto_ptr);
+
+    let mut ta_iter_proto = JSObject::new();
+    ta_iter_proto.set(
+        ctx.intern("next"),
+        create_builtin_function(ctx, "ta_iterator_next"),
+    );
+    ta_iter_proto.set(
+        ta_sym_iter,
+        create_builtin_function(ctx, "ta_iterator_self"),
+    );
+    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
+        ta_iter_proto.prototype = Some(obj_proto_ptr);
+    }
+    let ta_iter_proto_ptr = Box::into_raw(Box::new(ta_iter_proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ta_iter_proto_ptr);
+    ctx.set_typed_array_iterator_prototype(ta_iter_proto_ptr);
 
     let ta_names = [
         "Int8Array", "Uint8Array", "Uint8ClampedArray",
@@ -2273,6 +2377,14 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "ta_entries",
         HostFunction::method("entries", 0, typed_array_entries),
+    );
+    ctx.register_builtin(
+        "ta_iterator_next",
+        HostFunction::method("next", 0, ta_iterator_next_impl),
+    );
+    ctx.register_builtin(
+        "ta_iterator_self",
+        HostFunction::method("[Symbol.iterator]", 0, ta_iterator_self),
     );
     ctx.register_builtin(
         "ta_toString",
