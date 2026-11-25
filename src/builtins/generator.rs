@@ -7,6 +7,78 @@ use crate::value::JSValue;
 pub fn register_builtins(_ctx: &mut JSContext) {}
 
 pub fn init_generator(ctx: &mut JSContext) {
+    let sym_iter_val = crate::builtins::symbol::get_symbol_iterator(ctx);
+    let sym_iter_atom = if sym_iter_val.is_symbol() {
+        Some(crate::runtime::atom::Atom(
+            0x40000000 | sym_iter_val.get_symbol_id(),
+        ))
+    } else {
+        None
+    };
+    let sym_async_iter_val = crate::builtins::symbol::get_symbol_async_iterator(ctx);
+    let sym_async_iter_atom = if sym_async_iter_val.is_symbol() {
+        Some(crate::runtime::atom::Atom(
+            0x40000000 | sym_async_iter_val.get_symbol_id(),
+        ))
+    } else {
+        None
+    };
+    let to_string_tag_atom = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+
+    ctx.register_builtin(
+        "iterator_prototype_symbol_iterator",
+        HostFunction::method("[Symbol.iterator]", 0, generator_symbol_iterator),
+    );
+    let mut iterator_proto = JSObject::new();
+    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
+        iterator_proto.prototype = Some(obj_proto_ptr);
+    }
+    if let Some(sym_atom) = sym_iter_atom {
+        let method = create_builtin_function(ctx, "iterator_prototype_symbol_iterator");
+        define_data_property(&mut iterator_proto, sym_atom, method, true, true);
+    }
+    define_data_property(
+        &mut iterator_proto,
+        to_string_tag_atom,
+        JSValue::new_string(ctx.intern("Iterator")),
+        false,
+        true,
+    );
+    let iterator_proto_ptr = Box::into_raw(Box::new(iterator_proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(iterator_proto_ptr);
+
+    ctx.register_builtin(
+        "async_iterator_prototype_symbol_async_iterator",
+        HostFunction::method("[Symbol.asyncIterator]", 0, generator_symbol_iterator),
+    );
+    let mut async_iterator_proto = JSObject::new();
+    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
+        async_iterator_proto.prototype = Some(obj_proto_ptr);
+    }
+    if let Some(sym_atom) = sym_async_iter_atom {
+        let method =
+            create_builtin_function(ctx, "async_iterator_prototype_symbol_async_iterator");
+        define_data_property(&mut async_iterator_proto, sym_atom, method, true, true);
+    }
+    let async_iterator_proto_ptr = Box::into_raw(Box::new(async_iterator_proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(async_iterator_proto_ptr);
+
+    ctx.register_builtin(
+        "generator_function_constructor",
+        HostFunction::ctor("GeneratorFunction", 1, generator_function_constructor),
+    );
+    ctx.register_builtin(
+        "async_generator_function_constructor",
+        HostFunction::ctor("AsyncGeneratorFunction", 1, async_generator_function_constructor),
+    );
+    let generator_function =
+        create_generator_constructor(ctx, "GeneratorFunction", "generator_function_constructor");
+    let async_generator_function = create_generator_constructor(
+        ctx,
+        "AsyncGeneratorFunction",
+        "async_generator_function_constructor",
+    );
+
     let mut gen_proto = JSObject::new();
 
     ctx.register_builtin(
@@ -34,24 +106,77 @@ pub fn init_generator(ctx: &mut JSContext) {
     let throw_func = create_builtin_function(ctx, "generator_throw");
     gen_proto.set(ctx.intern("throw"), throw_func);
 
-    // Generator.prototype[Symbol.iterator] = function() { return this; }
     ctx.register_builtin(
         "generator_symbol_iterator",
         HostFunction::method("[Symbol.iterator]", 0, generator_symbol_iterator),
     );
     let sym_iter_func = create_builtin_function(ctx, "generator_symbol_iterator");
-    let sym_iter_val = crate::builtins::symbol::get_symbol_iterator(ctx);
-    if sym_iter_val.is_symbol() {
-        let sym_atom = crate::runtime::atom::Atom(0x40000000 | sym_iter_val.get_symbol_id());
+    if let Some(sym_atom) = sym_iter_atom {
         gen_proto.set(sym_atom, sym_iter_func);
     }
 
-    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
-        gen_proto.prototype = Some(obj_proto_ptr);
-    }
-
+    define_data_property(
+        &mut gen_proto,
+        to_string_tag_atom,
+        JSValue::new_string(ctx.intern("Generator")),
+        false,
+        true,
+    );
+    gen_proto.prototype = Some(iterator_proto_ptr as *mut crate::object::object::JSObject);
     let proto_ptr = Box::into_raw(Box::new(gen_proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_generator_prototype(proto_ptr);
+
+    let mut generator_function_proto = JSObject::new();
+    if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
+        generator_function_proto.prototype = Some(fn_proto_ptr);
+    }
+    define_data_property(
+        &mut generator_function_proto,
+        ctx.common_atoms.constructor,
+        generator_function,
+        false,
+        true,
+    );
+    define_data_property(
+        &mut generator_function_proto,
+        ctx.common_atoms.prototype,
+        JSValue::new_object(proto_ptr),
+        false,
+        true,
+    );
+    define_data_property(
+        &mut generator_function_proto,
+        to_string_tag_atom,
+        JSValue::new_string(ctx.intern("GeneratorFunction")),
+        false,
+        true,
+    );
+    let generator_function_proto_ptr =
+        Box::into_raw(Box::new(generator_function_proto)) as usize;
+    ctx.runtime_mut()
+        .gc_heap_mut()
+        .track(generator_function_proto_ptr);
+    {
+        let func = generator_function.as_function_mut();
+        define_data_property(
+            &mut func.base,
+            ctx.common_atoms.prototype,
+            JSValue::new_object(generator_function_proto_ptr),
+            false,
+            false,
+        );
+    }
+    unsafe {
+        define_data_property(
+            &mut *(proto_ptr as *mut JSObject),
+            ctx.common_atoms.constructor,
+            JSValue::new_object(generator_function_proto_ptr),
+            false,
+            true,
+        );
+    }
+    ctx.set_generator_function_prototype(generator_function_proto_ptr);
 
     let mut async_gen_proto = JSObject::new();
 
@@ -82,20 +207,187 @@ pub fn init_generator(ctx: &mut JSContext) {
     );
     let async_sym_iter_func =
         create_builtin_function(ctx, "async_generator_symbol_async_iterator");
-    let async_sym_iter_val = crate::builtins::symbol::get_symbol_async_iterator(ctx);
-    if async_sym_iter_val.is_symbol() {
-        let sym_atom =
-            crate::runtime::atom::Atom(0x40000000 | async_sym_iter_val.get_symbol_id());
+    if let Some(sym_atom) = sym_async_iter_atom {
         async_gen_proto.set(sym_atom, async_sym_iter_func);
     }
 
-    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
-        async_gen_proto.prototype = Some(obj_proto_ptr);
-    }
+    define_data_property(
+        &mut async_gen_proto,
+        to_string_tag_atom,
+        JSValue::new_string(ctx.intern("AsyncGenerator")),
+        false,
+        true,
+    );
+    async_gen_proto.prototype =
+        Some(async_iterator_proto_ptr as *mut crate::object::object::JSObject);
 
     let async_proto_ptr = Box::into_raw(Box::new(async_gen_proto)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(async_proto_ptr);
     ctx.set_async_generator_prototype(async_proto_ptr);
+
+    let mut async_generator_function_proto = JSObject::new();
+    if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
+        async_generator_function_proto.prototype = Some(fn_proto_ptr);
+    }
+    define_data_property(
+        &mut async_generator_function_proto,
+        ctx.common_atoms.constructor,
+        async_generator_function,
+        false,
+        true,
+    );
+    define_data_property(
+        &mut async_generator_function_proto,
+        ctx.common_atoms.prototype,
+        JSValue::new_object(async_proto_ptr),
+        false,
+        true,
+    );
+    define_data_property(
+        &mut async_generator_function_proto,
+        to_string_tag_atom,
+        JSValue::new_string(ctx.intern("AsyncGeneratorFunction")),
+        false,
+        true,
+    );
+    let async_generator_function_proto_ptr =
+        Box::into_raw(Box::new(async_generator_function_proto)) as usize;
+    ctx.runtime_mut()
+        .gc_heap_mut()
+        .track(async_generator_function_proto_ptr);
+    {
+        let func = async_generator_function.as_function_mut();
+        define_data_property(
+            &mut func.base,
+            ctx.common_atoms.prototype,
+            JSValue::new_object(async_generator_function_proto_ptr),
+            false,
+            false,
+        );
+    }
+    unsafe {
+        define_data_property(
+            &mut *(async_proto_ptr as *mut JSObject),
+            ctx.common_atoms.constructor,
+            JSValue::new_object(async_generator_function_proto_ptr),
+            false,
+            true,
+        );
+    }
+    ctx.set_async_generator_function_prototype(async_generator_function_proto_ptr);
+}
+
+fn define_data_property(
+    obj: &mut JSObject,
+    atom: crate::runtime::atom::Atom,
+    value: JSValue,
+    writable: bool,
+    configurable: bool,
+) {
+    let desc = crate::object::object::PropertyDescriptor {
+        value: Some(value),
+        writable,
+        enumerable: false,
+        configurable,
+        get: None,
+        set: None,
+    };
+    obj.define_property(atom, desc);
+}
+
+fn create_generator_constructor(
+    ctx: &mut JSContext,
+    name: &str,
+    builtin_name: &str,
+) -> JSValue {
+    let name_atom = ctx.intern(name);
+    let mut func = JSFunction::new_builtin(name_atom, 1);
+    func.set_builtin_marker(ctx, builtin_name);
+    if let Some(fn_pp) = ctx.get_function_prototype() {
+        func.base.prototype = Some(fn_pp);
+    }
+    let ptr = Box::into_raw(Box::new(func)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track_function(ptr);
+    let value = JSValue::new_function(ptr);
+    let func_ref = value.as_function_mut();
+    define_data_property(
+        &mut func_ref.base,
+        ctx.common_atoms.name,
+        JSValue::new_string(name_atom),
+        false,
+        true,
+    );
+    define_data_property(
+        &mut func_ref.base,
+        ctx.common_atoms.length,
+        JSValue::new_int(1),
+        false,
+        true,
+    );
+    value
+}
+
+fn dynamic_generator_function_constructor(
+    ctx: &mut JSContext,
+    args: &[JSValue],
+    prefix: &str,
+) -> JSValue {
+    let body_idx = args.len().saturating_sub(1);
+    let body_str = if args[body_idx].is_string() {
+        ctx.get_atom_str(args[body_idx].get_atom()).to_string()
+    } else {
+        let s = crate::builtins::global::to_property_key_string(ctx, &args[body_idx]);
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+        s
+    };
+    let mut params = Vec::new();
+    for i in 0..body_idx {
+        let p = if args[i].is_string() {
+            ctx.get_atom_str(args[i].get_atom()).to_string()
+        } else {
+            let s = crate::builtins::global::to_property_key_string(ctx, &args[i]);
+            if ctx.pending_exception.is_some() {
+                return JSValue::undefined();
+            }
+            s
+        };
+        for part in p.trim().split(',') {
+            let part = part.trim();
+            if !part.is_empty() {
+                params.push(part.to_string());
+            }
+        }
+    }
+    let params_str = params.join(",");
+    let source = format!("({} anonymous({}){{{}}})", prefix, params_str, body_str);
+    match crate::eval(ctx, &source) {
+        Ok(val) => {
+            if val.is_function() {
+                val.as_function_mut().name = ctx.intern("anonymous");
+                let name_atom = ctx.intern("name");
+                let obj = val.as_object_mut();
+                let mut desc = crate::object::object::PropertyDescriptor::new_data(
+                    JSValue::new_string(ctx.intern("anonymous")),
+                );
+                desc.writable = false;
+                desc.enumerable = false;
+                desc.configurable = true;
+                obj.define_property_ext(name_atom, desc, true, true, true);
+            }
+            val
+        }
+        Err(_) => JSValue::undefined(),
+    }
+}
+
+fn generator_function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    dynamic_generator_function_constructor(ctx, args, "function*")
+}
+
+fn async_generator_function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    dynamic_generator_function_constructor(ctx, args, "async function*")
 }
 
 fn create_builtin_function(ctx: &mut JSContext, builtin_name: &str) -> JSValue {

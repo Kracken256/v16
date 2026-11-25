@@ -3918,6 +3918,8 @@ impl VM {
         push_proto!(get_finalization_registry_prototype);
         push_proto!(get_generator_prototype);
         push_proto!(get_async_generator_prototype);
+        push_proto!(get_generator_function_prototype);
+        push_proto!(get_async_generator_function_prototype);
         push_proto!(get_promise_prototype);
 
         for &v in &ctx.runtime().gc_heap().extra_roots {
@@ -3980,6 +3982,8 @@ impl VM {
         push_proto!(get_finalization_registry_prototype);
         push_proto!(get_generator_prototype);
         push_proto!(get_async_generator_prototype);
+        push_proto!(get_generator_function_prototype);
+        push_proto!(get_async_generator_function_prototype);
         push_proto!(get_promise_prototype);
 
         for &v in &ctx.runtime().gc_heap().extra_roots {
@@ -11159,7 +11163,14 @@ impl VM {
                         unboxed_func.cached_prototype_ptr =
                             proto_ptr as *mut crate::object::object::JSObject;
                     }
-                    if let Some(fn_pp) = ctx.get_function_prototype() {
+                    let function_parent_proto = if is_generator && is_async {
+                        ctx.get_async_generator_function_prototype()
+                    } else if is_generator {
+                        ctx.get_generator_function_prototype()
+                    } else {
+                        ctx.get_function_prototype()
+                    };
+                    if let Some(fn_pp) = function_parent_proto {
                         unboxed_func.base.prototype = Some(fn_pp);
                     } else if let Some(obj_pp) = ctx.get_object_prototype() {
                         unboxed_func.base.prototype = Some(obj_pp);

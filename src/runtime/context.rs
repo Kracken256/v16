@@ -300,6 +300,8 @@ pub struct JSContext {
     pub tagged_template_cache: FxHashMap<u32, JSValue>,
     generator_prototype: Option<usize>,
     async_generator_prototype: Option<usize>,
+    generator_function_prototype: Option<usize>,
+    async_generator_function_prototype: Option<usize>,
     promise_prototype: Option<usize>,
 
     register_vm_ptr: Option<usize>,
@@ -388,6 +390,8 @@ impl JSContext {
             tagged_template_cache: FxHashMap::default(),
             generator_prototype: None,
             async_generator_prototype: None,
+            generator_function_prototype: None,
+            async_generator_function_prototype: None,
             promise_prototype: None,
             register_vm_ptr: None,
             compiler_opt_level: OptLevel::default(),
@@ -915,6 +919,23 @@ impl JSContext {
 
     pub fn get_async_generator_prototype(&self) -> Option<*mut JSObject> {
         self.async_generator_prototype.map(|p| p as *mut JSObject)
+    }
+
+    pub fn set_generator_function_prototype(&mut self, ptr: usize) {
+        self.generator_function_prototype = Some(ptr);
+    }
+
+    pub fn get_generator_function_prototype(&self) -> Option<*mut JSObject> {
+        self.generator_function_prototype.map(|p| p as *mut JSObject)
+    }
+
+    pub fn set_async_generator_function_prototype(&mut self, ptr: usize) {
+        self.async_generator_function_prototype = Some(ptr);
+    }
+
+    pub fn get_async_generator_function_prototype(&self) -> Option<*mut JSObject> {
+        self.async_generator_function_prototype
+            .map(|p| p as *mut JSObject)
     }
 
     pub fn set_promise_prototype(&mut self, ptr: usize) {
