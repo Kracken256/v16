@@ -1665,19 +1665,15 @@ impl Parser {
             if self.peek_at("(") || (self.peek_value().map_or(false, |v| v != "function")) {
                 let saved_pos = self.lexer.pos();
                 let saved_kind = self.lexer.last_token_kind();
+                let saved_cur = self.current.clone();
+                let saved_peek = self.peek_token.clone();
                 self.advance();
                 if self.at_keyword("function") {
-                    self.lexer.set_pos(saved_pos);
-                    self.lexer.set_last_token_kind(saved_kind);
-                    self.current = self.lexer.next_token();
-                    self.peek_token = self.lexer.next_token();
+                    self.restore(saved_pos, saved_kind, saved_cur, saved_peek);
                 } else if let Some(arrow) = self.try_parse_arrow_function(true)? {
                     return Ok(arrow);
                 } else {
-                    self.lexer.set_pos(saved_pos);
-                    self.lexer.set_last_token_kind(saved_kind);
-                    self.current = self.lexer.next_token();
-                    self.peek_token = self.lexer.next_token();
+                    self.restore(saved_pos, saved_kind, saved_cur, saved_peek);
                 }
             }
         }
