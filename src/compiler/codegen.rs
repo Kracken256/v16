@@ -315,6 +315,24 @@ impl CodeGenerator {
         }
     }
 
+    fn emit_reset_per_iter_bindings(&mut self) {
+        let slots: Vec<u16> = self
+            .scope_stack
+            .last()
+            .map(|scope| {
+                scope
+                    .iter()
+                    .filter(|(_, entry)| entry.kind != VariableKind::Var)
+                    .map(|(_, entry)| entry.slot)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for slot in slots {
+            self.emit(Opcode::ResetPerIterVar);
+            self.emit_u16(slot);
+        }
+    }
+
     fn statement_is_iteration_statement(stmt: &ASTNode) -> bool {
         matches!(
             stmt,
@@ -4423,17 +4441,8 @@ impl CodeGenerator {
         self.emit_u16(keys_reg);
         self.emit_u16(idx_reg);
 
-        // Clear sync map for per-iteration let bindings BEFORE assigning.
         if needs_block_scope {
-            if let Some(slot) = self.scope_stack.last().and_then(|scope| {
-                scope
-                    .iter()
-                    .find(|(_, e)| e.kind != VariableKind::Var)
-                    .map(|(_, e)| e.slot)
-            }) {
-                self.emit(Opcode::ResetPerIterVar);
-                self.emit_u16(slot);
-            }
+            self.emit_reset_per_iter_bindings();
         }
         if has_complex_left {
             match &stmt.left {
@@ -4629,6 +4638,9 @@ impl CodeGenerator {
             continue_target: Some(0),
         });
 
+        if needs_block_scope {
+            self.emit_reset_per_iter_bindings();
+        }
         match &stmt.left {
             ForInOfLeft::VariableDeclaration(decl) => {
                 if let Some(first) = decl.declarations.first() {
