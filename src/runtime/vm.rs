@@ -8173,6 +8173,45 @@ impl VM {
                         }
                     }
                 }
+                Opcode::ArrayPushAll => {
+                    let arr_reg = self.read_u16_pc();
+                    let src_reg = self.read_u16_pc();
+                    let arr_val = self.get_reg(arr_reg);
+                    let src_val = self.get_reg(src_reg);
+                    if arr_val.is_object() && src_val.is_object() {
+                        let src_values = {
+                            let src_ptr = src_val.get_ptr();
+                            let src = unsafe {
+                                &*(src_ptr as *const crate::object::array_obj::JSArrayObject)
+                            };
+                            src.elements.clone()
+                        };
+                        let arr_ptr = arr_val.get_ptr();
+                        let arr = unsafe {
+                            &mut *(arr_ptr as *mut crate::object::array_obj::JSArrayObject)
+                        };
+                        for val in src_values {
+                            arr.push(val);
+                        }
+                        let len_atom = ctx.common_atoms.length;
+                        let new_len = arr.elements.len() as i64;
+                        if !arr.header.has_own(len_atom) {
+                            arr.header.define_property(
+                                len_atom,
+                                crate::object::object::PropertyDescriptor {
+                                    value: Some(JSValue::new_int(new_len)),
+                                    writable: true,
+                                    enumerable: false,
+                                    configurable: false,
+                                    get: None,
+                                    set: None,
+                                },
+                            );
+                        } else {
+                            arr.header.set(len_atom, JSValue::new_int(new_len));
+                        }
+                    }
+                }
                 Opcode::SetProto => {
                     let obj_reg = self.read_u16_pc();
                     let proto_reg = self.read_u16_pc();

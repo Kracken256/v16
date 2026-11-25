@@ -244,6 +244,7 @@ pub struct CodeGenerator {
     in_static_method: bool,
     in_async_generator: bool,
     pub(crate) in_field_initializer: bool,
+    in_default_derived_constructor: bool,
     pending_field_init_range: Option<(usize, usize)>,
     field_init_name: Option<String>,
     pending_labels: Vec<String>,
@@ -315,6 +316,7 @@ impl CodeGenerator {
             in_static_method: false,
             in_async_generator: false,
             in_field_initializer: false,
+            in_default_derived_constructor: false,
             pending_field_init_range: None,
             field_init_name: None,
             pending_labels: Vec::new(),
@@ -9738,8 +9740,18 @@ impl CodeGenerator {
                         self.free_register(val);
                     }
                     Argument::Spread(expr) => {
-                        let val = self.gen_expression(expr, ctx)?;
-                        self.emit_spread_into_array(arr_reg, val, ctx)?;
+                        if self.in_default_derived_constructor
+                            && matches!(expr, Expression::Identifier(id) if id.name == "__v16_super_args__")
+                        {
+                            let val = self.gen_expression(expr, ctx)?;
+                            self.emit(Opcode::ArrayPushAll);
+                            self.emit_u16(arr_reg);
+                            self.emit_u16(val);
+                            self.free_register(val);
+                        } else {
+                            let val = self.gen_expression(expr, ctx)?;
+                            self.emit_spread_into_array(arr_reg, val, ctx)?;
+                        }
                     }
                 }
             }
@@ -10537,7 +10549,7 @@ impl CodeGenerator {
                     expression: Expression::CallExpression(CallExpression {
                         callee: Box::new(Expression::Super),
                         arguments: vec![Argument::Spread(Expression::Identifier(Identifier {
-                            name: "arguments".to_string(),
+                            name: "__v16_super_args__".to_string(),
                             parenthesized: false,
                         }))],
                     }),
@@ -10548,8 +10560,18 @@ impl CodeGenerator {
             let mut nested = self.nested_codegen();
             nested.is_strict = true;
             nested.in_derived_constructor = has_super;
+            nested.in_default_derived_constructor = has_super;
+            let default_params: Vec<Parameter> = if has_super {
+                vec![Parameter::RestElement(RestElement {
+                    argument: Box::new(AssignmentTarget::Identifier(
+                        "__v16_super_args__".to_string(),
+                    )),
+                })]
+            } else {
+                Vec::new()
+            };
             nested.compile_function_with_parent(
-                &[],
+                &default_params,
                 &BlockStatement {
                     body: default_body,
                     lines: default_lines,

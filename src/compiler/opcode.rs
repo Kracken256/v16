@@ -204,6 +204,7 @@ pub enum Opcode {
     DefineField = 240,
     GetEvalPrivateOwner = 241,
     CheckObjectOrNull = 242,
+    ArrayPushAll = 243,
 }
 
 impl Opcode {
@@ -399,6 +400,7 @@ impl Opcode {
             240 => Some(Opcode::DefineField),
             241 => Some(Opcode::GetEvalPrivateOwner),
             242 => Some(Opcode::CheckObjectOrNull),
+            243 => Some(Opcode::ArrayPushAll),
             _ => None,
         }
     }
@@ -559,6 +561,7 @@ impl Opcode {
             Opcode::DefineField => 7,
             Opcode::GetEvalPrivateOwner => 7,
             Opcode::CheckObjectOrNull => 3,
+            Opcode::ArrayPushAll => 5,
             Opcode::NewGeneratorFunction => 1,
             Opcode::NewAsyncFunction => 1,
             Opcode::NewAsyncGeneratorFunction => 1,
@@ -1036,6 +1039,11 @@ impl Bytecode {
                 Opcode::CheckObjectOrNull => {
                     let reg = read_u16(1);
                     write!(operands, " r{}", reg).unwrap();
+                }
+                Opcode::ArrayPushAll => {
+                    let dst = read_u16(1);
+                    let src = read_u16(3);
+                    write!(operands, " r{}, r{}", dst, src).unwrap();
                 }
                 Opcode::SetNamedProp => {
                     let obj = read_u16(1);
