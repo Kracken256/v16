@@ -152,7 +152,12 @@ pub fn start_async_call(
         Some(ref rb) => rb,
         None => return Ok(JSValue::undefined()),
     };
-    let this = if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null()) {
+    let this = if js_func.is_arrow() {
+        match &js_func.arrow_this_cell {
+            Some(cell) => cell.get().0,
+            None => js_func.arrow_this,
+        }
+    } else if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null()) {
         ctx.global()
     } else {
         this_val
@@ -3946,6 +3951,50 @@ impl VM {
             self.frame_index = 0;
             self.exception_handlers = self.pending_handlers.take().unwrap_or_default();
             self.frames[0].is_strict_frame = bytecode.is_strict;
+
+            if let Some(ptr) = self.frames[0].function_ptr {
+                let js_func = unsafe { JSValue::function_from_ptr(ptr) };
+                if js_func.is_arrow() {
+                    self.frames[0].this_cell = js_func.arrow_this_cell.clone();
+                    self.frames[0].super_ctor = js_func.arrow_super;
+                    self.frames[0].super_base = js_func.arrow_super_base;
+                    if let Some(cell) = &js_func.arrow_this_cell {
+                        let (tv, init) = cell.get();
+                        self.frames[0].this_value = tv;
+                        self.frames[0].this_initialized = init;
+                        self.registers[0] = tv;
+                    } else {
+                        self.frames[0].this_initialized = js_func.arrow_this_initialized;
+                    }
+                } else {
+                    let super_key = ctx.common_atoms.__super__;
+                    if let Some(super_val) = js_func.base.get(super_key) {
+                        self.frames[0].super_ctor = super_val;
+                    }
+                    if js_func.is_derived_constructor {
+                        self.frames[0].this_initialized = false;
+                    }
+                    if !js_func.home_object.is_undefined() {
+                        if js_func.home_object.is_object_like() {
+                            let home = js_func.home_object.as_object();
+                            let base = home
+                                .prototype
+                                .map(|p| JSValue::new_object(p as usize))
+                                .unwrap_or(JSValue::undefined());
+                            self.frames[0].super_base = base;
+                        }
+                    } else {
+                        let sc = self.frames[0].super_ctor;
+                        if sc.is_object_like() {
+                            let base = sc
+                                .as_object()
+                                .get(ctx.common_atoms.prototype)
+                                .unwrap_or(JSValue::undefined());
+                            self.frames[0].super_base = base;
+                        }
+                    }
+                }
+            }
         }
         let mut start_pc = start_pc;
         if let Some(value) = self.pending_return_value.take() {
