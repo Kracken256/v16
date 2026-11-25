@@ -597,13 +597,24 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
                 if !labels.insert(current.label.clone()) {
                     return Err("SyntaxError: duplicate label in statement".to_string());
                 }
+                check_label_identifier(&current.label, ctx)?;
                 match &*current.body {
                     ASTNode::LabelledStatement(next) => current = next,
                     _ => break,
                 }
             }
-            check_label_identifier(&l.label, ctx)?;
-            validate_single_statement(&l.body, ctx, true)
+            match &*current.body {
+                ASTNode::FunctionDeclaration(fd) => {
+                    if fd.is_async || fd.generator || ctx.strict {
+                        return Err(
+                            "SyntaxError: Labelled function declarations are not allowed in this context"
+                                .to_string(),
+                        );
+                    }
+                    validate_function_declaration(fd, ctx)
+                }
+                _ => validate_single_statement(&l.body, ctx, true),
+            }
         }
         ASTNode::SwitchStatement(s) => {
             validate_expression(&s.discriminant, ctx)?;
