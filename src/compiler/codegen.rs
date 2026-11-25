@@ -3694,6 +3694,9 @@ impl CodeGenerator {
                 self.gen_statement(stmt, ctx)?;
             }
             ASTNode::ReturnStatement(ret) => {
+                if self.is_script_level {
+                    return Err("SyntaxError: Illegal return statement".to_string());
+                }
                 if let Some(ref arg) = ret.argument {
                     let reg = self.gen_expression(arg, ctx)?;
                     self.emit(Opcode::Return);
