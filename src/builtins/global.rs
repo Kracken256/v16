@@ -586,7 +586,16 @@ fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         Err(exc) => return promise::create_rejected_promise(ctx, exc),
     };
 
-    match crate::runtime::module::load_and_evaluate_module(ctx, &specifier) {
+    let attribute_type = match import_attributes_type(ctx, args) {
+        Ok(attribute_type) => attribute_type,
+        Err(exc) => return promise::create_rejected_promise(ctx, exc),
+    };
+
+    match crate::runtime::module::load_and_evaluate_module_with_attributes(
+        ctx,
+        &specifier,
+        attribute_type.as_deref(),
+    ) {
         Ok(ns_ptr) => {
             let ns_value = JSValue::new_object(ns_ptr);
             let result = promise::create_resolved_promise(ctx, ns_value);
@@ -599,6 +608,21 @@ fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let err_msg = JSValue::new_string(ctx.intern(&e));
             promise::create_rejected_promise(ctx, err_msg)
         }
+    }
+}
+
+fn import_attributes_type(
+    ctx: &mut JSContext,
+    args: &[JSValue],
+) -> Result<Option<String>, JSValue> {
+    if args.len() < 2 {
+        return Ok(None);
+    }
+    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+        vm.get_import_attributes(ctx, args[1])
+    } else {
+        Ok(None)
     }
 }
 

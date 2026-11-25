@@ -2292,6 +2292,69 @@ impl VM {
         caught.or(host).or(pending)
     }
 
+    pub fn get_import_attributes(
+        &mut self,
+        ctx: &mut JSContext,
+        options: JSValue,
+    ) -> Result<Option<String>, JSValue> {
+        if options.is_undefined() {
+            return Ok(None);
+        }
+        if !options.is_object_like() {
+            self.set_pending_type_error(ctx, "Import options must be an object");
+            return Err(self
+                .pending_throw
+                .take()
+                .unwrap_or_else(JSValue::undefined));
+        }
+        let with_atom = ctx.intern("with");
+        let with_value = match self.get_prop_value(ctx, options, with_atom) {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(self
+                    .take_pending_exception(ctx)
+                    .unwrap_or_else(JSValue::undefined));
+            }
+        };
+        if with_value.is_undefined() {
+            return Ok(None);
+        }
+        if !with_value.is_object_like() {
+            self.set_pending_type_error(ctx, "Import attributes must be an object");
+            return Err(self
+                .pending_throw
+                .take()
+                .unwrap_or_else(JSValue::undefined));
+        }
+        let keys = self.own_enumerable_keys_in_order(ctx, with_value);
+        let mut attribute_type = None;
+        for atom in keys {
+            if atom.0 & 0x40000000 != 0 {
+                continue;
+            }
+            let value = match self.get_prop_value(ctx, with_value, atom) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Err(self
+                        .take_pending_exception(ctx)
+                        .unwrap_or_else(JSValue::undefined));
+                }
+            };
+            if !value.is_string() {
+                self.set_pending_type_error(ctx, "Import attribute values must be strings");
+                return Err(self
+                    .pending_throw
+                    .take()
+                    .unwrap_or_else(JSValue::undefined));
+            }
+            let name = ctx.get_atom_str(atom).to_string();
+            if name == "type" {
+                attribute_type = Some(ctx.get_atom_str(value.get_atom()).to_string());
+            }
+        }
+        Ok(attribute_type)
+    }
+
     fn invoke_iterator_return(
         &mut self,
         ctx: &mut JSContext,

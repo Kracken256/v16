@@ -794,6 +794,14 @@ fn link_module(ctx: &mut JSContext, resolved: &str) -> Result<(), String> {
 }
 
 pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<usize, String> {
+    load_and_evaluate_module_with_attributes(ctx, specifier, None)
+}
+
+pub fn load_and_evaluate_module_with_attributes(
+    ctx: &mut JSContext,
+    specifier: &str,
+    attribute_type: Option<&str>,
+) -> Result<usize, String> {
     use crate::compiler::ast::BlockStatement;
     use crate::compiler::codegen::CodeGenerator;
     use crate::compiler::parser::Parser;
@@ -870,6 +878,35 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
     }
 
     if evaluating {
+        return namespace_object_for(ctx, &resolved);
+    }
+
+    if attribute_type == Some("text") {
+        let registered = ctx.runtime().module_registry().has(&resolved);
+        if !registered {
+            let text = std::fs::read_to_string(&resolved)
+                .map_err(|e| format!("Failed to load module '{}': {}", resolved, e))?;
+            let module = Module::new(resolved.clone(), text);
+            ctx.runtime_mut().module_registry_mut().register(module);
+        }
+        let source = {
+            let registry = ctx.runtime().module_registry();
+            registry
+                .get(&resolved)
+                .map(|cell| cell.borrow().source.clone())
+                .unwrap_or_default()
+        };
+        let default_value = JSValue::new_string(ctx.intern(&source));
+        {
+            let registry = ctx.runtime_mut().module_registry_mut();
+            if let Some(module_cell) = registry.get_mut(&resolved) {
+                let mut module = module_cell.borrow_mut();
+                if module.exports.is_empty() {
+                    module.add_export("default".to_string(), default_value, false);
+                }
+                module.state = ModuleState::Evaluated;
+            }
+        }
         return namespace_object_for(ctx, &resolved);
     }
 
