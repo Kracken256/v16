@@ -814,7 +814,10 @@ impl VM {
     fn builtin_needs_callee(name: &str) -> bool {
         matches!(
             name,
-            "intl_collator_compare_call" | "promise_internal_resolve" | "promise_internal_reject"
+            "global_eval"
+                | "intl_collator_compare_call"
+                | "promise_internal_resolve"
+                | "promise_internal_reject"
         )
     }
 
@@ -4936,7 +4939,6 @@ impl VM {
                 .unwrap_or_default();
             let needs_this = ctx.builtin_needs_this(&builtin_name);
             let needs_callee = Self::builtin_needs_callee(&builtin_name);
-
             let mut call_args_vec: Vec<JSValue> = Vec::new();
             let call_args: &[JSValue] = if needs_callee {
                 call_args_vec.reserve(args.len() + 1);

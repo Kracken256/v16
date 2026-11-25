@@ -537,6 +537,37 @@ impl JSContext {
         s
     }
 
+    pub fn refresh_builtin_realm(&mut self) {
+        let context = self as *mut JSContext as usize;
+        let global = self.global();
+        if !global.is_object_like() {
+            return;
+        }
+        let mut function_ptrs = Vec::new();
+        global.as_object().for_each_property(|_, value, _| {
+            if value.is_function() {
+                function_ptrs.push(value.get_ptr());
+            }
+        });
+        for ptr in function_ptrs {
+            let func = unsafe { &mut *(ptr as *mut crate::object::function::JSFunction) };
+            func.realm_context = context;
+            func.realm_global = global;
+        }
+    }
+
+    pub fn swap_global_environment(&mut self, other: &mut JSContext) {
+        std::mem::swap(&mut self.global_object, &mut other.global_object);
+        std::mem::swap(
+            &mut self.global_lexical_bindings,
+            &mut other.global_lexical_bindings,
+        );
+        std::mem::swap(
+            &mut self.global_lexical_kinds,
+            &mut other.global_lexical_kinds,
+        );
+    }
+
     pub fn global(&self) -> JSValue {
         self.global_object
     }

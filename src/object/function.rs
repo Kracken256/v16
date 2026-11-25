@@ -89,6 +89,8 @@ pub struct JSFunction {
     pub has_private_elements: bool,
     pub arrow_enclosing_ctor_ptr: usize,
     pub instance_fields: Vec<InstanceFieldDefinition>,
+    pub realm_context: usize,
+    pub realm_global: JSValue,
 }
 
 impl JSFunction {
@@ -125,6 +127,8 @@ impl JSFunction {
             has_private_elements: false,
             arrow_enclosing_ctor_ptr: 0,
             instance_fields: Vec::new(),
+            realm_context: 0,
+            realm_global: JSValue::undefined(),
         }
     }
 

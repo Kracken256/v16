@@ -156,20 +156,18 @@ fn parse_frontmatter(content: &str) -> Option<(TestMeta, &str)> {
 }
 
 fn test262_create_realm(ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue {
-    let mut new_runtime = v16::JSRuntime::new();
-    let mut new_ctx = v16::JSContext::new(&mut new_runtime);
-    v16::builtins::init_globals(&mut new_ctx);
-    inject_test262_globals(&mut new_ctx);
-    let new_global = new_ctx.global();
+    let runtime_ptr = ctx.runtime_mut() as *mut v16::JSRuntime;
+    let new_ctx = Box::into_raw(Box::new(v16::JSContext::new(unsafe { &mut *runtime_ptr })));
+    let new_ctx_ref = unsafe { &mut *new_ctx };
+    new_ctx_ref.refresh_builtin_realm();
+    inject_test262_globals(new_ctx_ref);
+    let new_global = new_ctx_ref.global();
 
     let mut realm = JSObject::new();
     realm.set(ctx.intern("global"), new_global);
 
     let realm_ptr = Box::into_raw(Box::new(realm)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(realm_ptr);
-
-    std::mem::forget(new_ctx);
-    std::mem::forget(new_runtime);
 
     JSValue::new_object(realm_ptr)
 }

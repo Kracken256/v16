@@ -44,6 +44,8 @@ pub fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
+    func.realm_context = ctx as *mut JSContext as usize;
+    func.realm_global = ctx.global();
     let ptr = Box::into_raw(Box::new(func)) as usize;
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
@@ -833,17 +835,32 @@ fn global_isfinite(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if args.is_empty() {
-        return JSValue::undefined();
-    }
+    let callee = args.first().copied().unwrap_or(JSValue::undefined());
+    let source_arg = args.get(1).copied().unwrap_or(JSValue::undefined());
 
-    let source = if args[0].is_string() {
-        ctx.get_atom_str(args[0].get_atom()).to_string()
-    } else if args[0].is_object_like() {
-        return args[0].clone();
+    let source = if source_arg.is_string() {
+        ctx.get_atom_str(source_arg.get_atom()).to_string()
+    } else if source_arg.is_object_like() {
+        return source_arg;
     } else {
-        return args[0].clone();
+        return source_arg;
     };
+
+    if callee.is_function() {
+        let realm_context = callee.as_function().realm_context;
+        let realm_global = callee.as_function().realm_global;
+        if realm_context != 0 && realm_global.is_object_like()
+            && realm_global.raw_bits() != ctx.global().raw_bits() {
+            let realm_ctx = unsafe { &mut *(realm_context as *mut JSContext) };
+            ctx.swap_global_environment(realm_ctx);
+            let result = match crate::compiler::eval_code_as_eval(ctx, &source) {
+                Ok(value) => value,
+                Err(_) => JSValue::undefined(),
+            };
+            ctx.swap_global_environment(realm_ctx);
+            return result;
+        }
+    }
 
     if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
         let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
