@@ -270,7 +270,7 @@ pub fn register_builtins(ctx: &mut JSContext) {
     );
     ctx.register_builtin(
         "throw_type_error_caller",
-        HostFunction::new("caller", 0, throw_type_error_caller_args),
+        HostFunction::method("caller", 0, throw_type_error_caller_args),
     );
 }
 
@@ -282,7 +282,19 @@ fn throw_type_error_callee(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     JSValue::undefined()
 }
 
-fn throw_type_error_caller_args(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
+fn throw_type_error_caller_args(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this_val = args.first().copied().unwrap_or_else(JSValue::undefined);
+    if this_val.is_function() {
+        let js_func = this_val.as_function();
+        if !js_func.is_strict()
+            && !js_func.is_arrow()
+            && !js_func.is_generator()
+            && !js_func.is_async()
+            && !js_func.is_method
+        {
+            return JSValue::undefined();
+        }
+    }
     if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
         let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
         vm.set_pending_type_error(ctx, "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them");
