@@ -10335,6 +10335,13 @@ impl CodeGenerator {
     ) -> Result<crate::runtime::atom::Atom, String> {
         self.reserved_slots.insert(class_slot);
         let has_super = super_class.is_some();
+        let is_null_heritage = super_class
+            .as_ref()
+            .map_or(false, |e| matches!(**e, Expression::Literal(Literal::Null)));
+        let super_val_reg = match super_class {
+            Some(expr) => Some(self.gen_expression(expr, ctx)?),
+            None => None,
+        };
 
         let ctor_method = body.elements.iter().find(|e| {
             if let ClassElement::Method(m) = e {
@@ -10709,24 +10716,22 @@ impl CodeGenerator {
                 | if has_instance_private_elements { 16 } else { 0 },
         );
 
-        if let Some(super_expr) = super_class {
+        if let Some(super_val) = super_val_reg {
             let super_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.__super__));
             let super_key = self.alloc_register();
             self.emit(Opcode::LoadConst);
             self.emit_u16(super_key);
             self.emit_u32(super_key_idx);
-            let super_val = self.gen_expression(super_expr, ctx)?;
             self.emit(Opcode::SetProp);
             self.emit_u16(ctor_reg);
             self.emit_u16(super_key);
             self.emit_u16(super_val);
-            if !matches!(**super_expr, Expression::Literal(Literal::Null)) {
+            if !is_null_heritage {
                 self.emit(Opcode::SetProto);
                 self.emit_u16(ctor_reg);
                 self.emit_u16(super_val);
             }
             self.free_register(super_key);
-            self.free_register(super_val);
         }
 
         if class_slot != ctor_reg {
@@ -10738,8 +10743,8 @@ impl CodeGenerator {
         self.emit(Opcode::NewObject);
         self.emit_u16(proto_reg);
 
-        if let Some(super_expr) = super_class {
-            if matches!(**super_expr, Expression::Literal(Literal::Null)) {
+        if super_val_reg.is_some() {
+            if is_null_heritage {
                 let null_reg = self.alloc_register();
                 self.emit(Opcode::LoadNull);
                 self.emit_u16(null_reg);
@@ -10753,18 +10758,20 @@ impl CodeGenerator {
             self.emit(Opcode::LoadConst);
             self.emit_u16(proto_key);
             self.emit_u32(proto_key_idx);
-            let super_val = self.gen_expression(super_expr, ctx)?;
+            let super_val = super_val_reg.unwrap();
             let super_proto = self.alloc_register();
             self.emit(Opcode::GetProp);
             self.emit_u16(super_proto);
             self.emit_u16(super_val);
             self.emit_u16(proto_key);
-            self.free_register(super_val);
             self.emit(Opcode::SetProto);
             self.emit_u16(proto_reg);
             self.emit_u16(super_proto);
             self.free_register(super_proto);
             self.free_register(proto_key);
+            }
+            if let Some(super_val) = super_val_reg {
+                self.free_register(super_val);
             }
         }
 
