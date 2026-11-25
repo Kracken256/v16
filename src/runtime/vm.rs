@@ -3147,7 +3147,7 @@ impl VM {
             self.mark_instance_elements_pending(new_val, ctor.get_ptr());
         }
 
-        match self.call_function_with_this(ctx, ctor, new_val, args) {
+        match self.call_function_with_this_impl(ctx, ctor, new_val, args, true) {
             Ok(result) => {
                 if result.is_object_like() {
                     Ok(result)
@@ -3165,6 +3165,17 @@ impl VM {
         func: JSValue,
         this_value: JSValue,
         args: &[JSValue],
+    ) -> Result<JSValue, String> {
+        self.call_function_with_this_impl(ctx, func, this_value, args, false)
+    }
+
+    fn call_function_with_this_impl(
+        &mut self,
+        ctx: &mut JSContext,
+        func: JSValue,
+        this_value: JSValue,
+        args: &[JSValue],
+        constructing: bool,
     ) -> Result<JSValue, String> {
         if func.is_object() {
             let obj = func.as_object();
@@ -3196,7 +3207,8 @@ impl VM {
                     }
                 }
                 actual_args.extend_from_slice(args);
-                return self.call_function_with_this(ctx, bound_fn, bound_this, &actual_args);
+                return self
+                    .call_function_with_this_impl(ctx, bound_fn, bound_this, &actual_args, constructing);
             }
         }
 
@@ -3205,6 +3217,13 @@ impl VM {
                 "{} is not a function",
                 self.format_thrown_value(&func, ctx)
             );
+            self.set_pending_type_error(ctx, &msg);
+            self.last_caught_exception = self.pending_throw.take();
+            return Err(msg);
+        }
+
+        if !constructing && func.as_function().is_class_constructor {
+            let msg = "Class constructor cannot be invoked without 'new'".to_string();
             self.set_pending_type_error(ctx, &msg);
             self.last_caught_exception = self.pending_throw.take();
             return Err(msg);
