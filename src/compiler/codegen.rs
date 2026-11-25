@@ -1355,6 +1355,14 @@ impl CodeGenerator {
                     Self::collect_inherited_upvalues_expr(expr, locals, parent_vars, result);
                 }
             }
+            ASTNode::ThrowStatement(stmt) => {
+                Self::collect_inherited_upvalues_expr(
+                    &stmt.argument,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+            }
             ASTNode::BreakStatement(_) | ASTNode::ContinueStatement(_) => {}
             ASTNode::FunctionDeclaration(func) => {
                 let mut func_locals = std::collections::HashSet::new();
