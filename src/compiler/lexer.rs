@@ -608,15 +608,13 @@ impl Lexer {
                 'f' => value.push('\x0c'),
                 'v' => value.push('\x0b'),
                 '0'..='7' => {
-                    had_legacy_escape = true;
                     let first_val = esc as u32 - '0' as u32;
-                    if first_val == 0
-                        && (self.pos + 1 >= self.source.len()
-                            || self.source[self.pos + 1] < '0'
-                            || self.source[self.pos + 1] > '7')
-                    {
+                    let next_is_decimal_digit = self.pos + 1 < self.source.len()
+                        && self.source[self.pos + 1].is_ascii_digit();
+                    if first_val == 0 && !next_is_decimal_digit {
                         value.push('\0');
                     } else {
+                        had_legacy_escape = true;
                         let mut code = first_val;
                         let mut count = 1u32;
                         let mut lookahead = 1;
