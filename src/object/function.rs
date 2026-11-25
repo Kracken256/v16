@@ -34,6 +34,25 @@ impl UpvalueData {
 }
 
 #[repr(C)]
+pub struct InstanceFieldDefinition {
+    pub key: JSValue,
+    pub private_owner: JSValue,
+    pub private_name: Atom,
+    pub initializer: JSValue,
+}
+
+impl Default for InstanceFieldDefinition {
+    fn default() -> Self {
+        InstanceFieldDefinition {
+            key: JSValue::undefined(),
+            private_owner: JSValue::undefined(),
+            private_name: Atom(0),
+            initializer: JSValue::undefined(),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct JSFunction {
     pub base: JSObject,
     pub name: Atom,
@@ -67,6 +86,7 @@ pub struct JSFunction {
     pub is_class_constructor: bool,
     pub has_private_elements: bool,
     pub arrow_enclosing_ctor_ptr: usize,
+    pub instance_fields: Vec<InstanceFieldDefinition>,
 }
 
 impl JSFunction {
@@ -100,6 +120,7 @@ impl JSFunction {
             is_class_constructor: false,
             has_private_elements: false,
             arrow_enclosing_ctor_ptr: 0,
+            instance_fields: Vec::new(),
         }
     }
 

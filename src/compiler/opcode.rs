@@ -199,6 +199,10 @@ pub enum Opcode {
     DefinePrivateField = 235,
     DefinePrivateMethod = 236,
     AddPrivateBrand = 237,
+    AddInstanceField = 238,
+    AddInstancePrivateField = 239,
+    DefineField = 240,
+    GetEvalPrivateOwner = 241,
 }
 
 impl Opcode {
@@ -389,6 +393,10 @@ impl Opcode {
             235 => Some(Opcode::DefinePrivateField),
             236 => Some(Opcode::DefinePrivateMethod),
             237 => Some(Opcode::AddPrivateBrand),
+            238 => Some(Opcode::AddInstanceField),
+            239 => Some(Opcode::AddInstancePrivateField),
+            240 => Some(Opcode::DefineField),
+            241 => Some(Opcode::GetEvalPrivateOwner),
             _ => None,
         }
     }
@@ -544,6 +552,10 @@ impl Opcode {
             Opcode::DefinePrivateField => 9,
             Opcode::DefinePrivateMethod => 9,
             Opcode::AddPrivateBrand => 5,
+            Opcode::AddInstanceField => 7,
+            Opcode::AddInstancePrivateField => 11,
+            Opcode::DefineField => 7,
+            Opcode::GetEvalPrivateOwner => 7,
             Opcode::NewGeneratorFunction => 1,
             Opcode::NewAsyncFunction => 1,
             Opcode::NewAsyncGeneratorFunction => 1,
@@ -993,6 +1005,30 @@ impl Bytecode {
                     let obj = read_u16(1);
                     let owner = read_u16(3);
                     write!(operands, " r{}, r{}", obj, owner).unwrap();
+                }
+                Opcode::AddInstanceField => {
+                    let obj = read_u16(1);
+                    let key = read_u16(3);
+                    let init = read_u16(5);
+                    write!(operands, " r{}, r{}, r{}", obj, key, init).unwrap();
+                }
+                Opcode::AddInstancePrivateField => {
+                    let obj = read_u16(1);
+                    let owner = read_u16(3);
+                    let name = read_u32(5);
+                    let init = read_u16(9);
+                    write!(operands, " r{}, r{}, atom({}), r{}", obj, owner, name, init).unwrap();
+                }
+                Opcode::DefineField => {
+                    let obj = read_u16(1);
+                    let key = read_u16(3);
+                    let val = read_u16(5);
+                    write!(operands, " r{}, r{}, r{}", obj, key, val).unwrap();
+                }
+                Opcode::GetEvalPrivateOwner => {
+                    let dst = read_u16(1);
+                    let name = read_u32(3);
+                    write!(operands, " r{}, atom({})", dst, name).unwrap();
                 }
                 Opcode::SetNamedProp => {
                     let obj = read_u16(1);

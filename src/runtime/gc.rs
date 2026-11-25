@@ -463,6 +463,12 @@ impl GcHeap {
         self.mark_value(&func.home_object);
         self.mark_value(&func.arrow_super_base);
 
+        for field in &func.instance_fields {
+            self.mark_value(&field.key);
+            self.mark_value(&field.private_owner);
+            self.mark_value(&field.initializer);
+        }
+
         if let Some(uv) = func.upvalues_ref() {
             for (_, upvalue) in &uv.upvalues {
                 self.mark_value(upvalue);

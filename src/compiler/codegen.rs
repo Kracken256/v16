@@ -245,6 +245,7 @@ pub struct CodeGenerator {
     in_async_generator: bool,
     pub(crate) in_field_initializer: bool,
     pending_field_init_range: Option<(usize, usize)>,
+    field_init_name: Option<String>,
     pending_labels: Vec<String>,
     all_var_names: Vec<(String, u16)>,
     with_scopes: Vec<WithScope>,
@@ -315,6 +316,7 @@ impl CodeGenerator {
             in_async_generator: false,
             in_field_initializer: false,
             pending_field_init_range: None,
+            field_init_name: None,
             pending_labels: Vec::new(),
             all_var_names: Vec::new(),
             with_scopes: Vec::new(),
@@ -1081,10 +1083,32 @@ impl CodeGenerator {
                 self.emit_u16(slot);
                 Ok((r, true))
             }
-            None => Err(format!(
-                "SyntaxError: Private name #{} is not defined",
-                name.trim_start_matches('#')
-            )),
+            None => {
+                if self.is_eval {
+                    let name_atom = ctx.atom_table_mut().intern(name).0;
+                    let known = ctx
+                        .eval_private_names
+                        .as_ref()
+                        .map_or(true, |names| names.iter().any(|a| a.0 == name_atom));
+                    if known {
+                        let r = self.alloc_register();
+                        self.emit(Opcode::GetEvalPrivateOwner);
+                        self.emit_u16(r);
+                        self.emit_u32(name_atom);
+                        Ok((r, true))
+                    } else {
+                        Err(format!(
+                            "SyntaxError: Private name #{} is not defined",
+                            name.trim_start_matches('#')
+                        ))
+                    }
+                } else {
+                    Err(format!(
+                        "SyntaxError: Private name #{} is not defined",
+                        name.trim_start_matches('#')
+                    ))
+                }
+            }
         }
     }
 
@@ -2444,7 +2468,13 @@ impl CodeGenerator {
 
             if return_last_expr && i == last_nonempty_stmt_idx {
                 if let ASTNode::ExpressionStatement(es) = stmt {
-                    last_expr_reg = Some(self.gen_expression(&es.expression, ctx)?);
+                    if let Some(name) = self.field_init_name.clone() {
+                        last_expr_reg = Some(
+                            self.gen_expression_with_assign_name(&es.expression, &name, ctx)?,
+                        );
+                    } else {
+                        last_expr_reg = Some(self.gen_expression(&es.expression, ctx)?);
+                    }
                 } else if matches!(stmt, ASTNode::FunctionDeclaration(_)) {
                 } else if let Some(reg) = self.gen_statement_as_expression(stmt, ctx)? {
                     last_expr_reg = Some(reg);
@@ -10351,57 +10381,6 @@ impl CodeGenerator {
             }
         });
 
-        let instance_fields: Vec<_> = body
-            .elements
-            .iter()
-            .filter_map(|e| {
-                if let ClassElement::Property(p) = e {
-                    if !p.is_static {
-                        return Some(p.clone());
-                    }
-                }
-                None
-            })
-            .collect();
-
-        let field_init_stmts: Vec<ASTNode> = instance_fields
-            .iter()
-            .filter_map(|f| {
-                let value = f
-                    .value
-                    .clone()
-                    .unwrap_or(Expression::Literal(Literal::Undefined));
-                let (property, computed) = match &f.name {
-                    PropertyKey::Identifier(n) if f.is_private => {
-                        (MemberProperty::PrivateIdentifier(n.clone()), false)
-                    }
-                    PropertyKey::Identifier(n) => (MemberProperty::Identifier(n.clone()), false),
-                    PropertyKey::Literal(Literal::String(s, _, _)) => {
-                        (MemberProperty::Identifier(s.clone()), false)
-                    }
-                    PropertyKey::PrivateIdentifier(n) => {
-                        (MemberProperty::PrivateIdentifier(n.clone()), false)
-                    }
-                    PropertyKey::Computed(expr) => (MemberProperty::Computed(expr.clone()), true),
-                    _ => return None,
-                };
-                Some(ASTNode::ExpressionStatement(ExpressionStatement {
-                    expression: Expression::AssignmentExpression(AssignmentExpression {
-                        op: AssignOp::Assign,
-                        left: AssignmentTarget::MemberExpression(MemberExpression {
-                            object: Box::new(Expression::This),
-                            property,
-                            computed,
-                        }),
-                        right: Box::new(value),
-                        parenthesized: false,
-                        lhs_parenthesized: false,
-                        private_field_init: f.is_private,
-                    }),
-                }))
-            })
-            .collect();
-
         let mut instance_private_names: Vec<String> = Vec::new();
         let mut static_private_names: Vec<String> = Vec::new();
         for element in &body.elements {
@@ -10520,23 +10499,13 @@ impl CodeGenerator {
             );
         }
 
-        let field_init_count = field_init_stmts.len();
         let (ctor_bytecode, ctor_upvalues) = if let Some(ClassElement::Method(m)) = ctor_method {
-            let mut body = m.body.clone();
-            let insert_pos = 0;
-            for (i, stmt) in field_init_stmts.into_iter().enumerate() {
-                body.body.insert(insert_pos + i, stmt);
-                body.lines.insert(insert_pos + i, 0);
-            }
             let mut nested = self.nested_codegen();
             nested.is_strict = true;
             nested.in_derived_constructor = has_super;
-            if field_init_count > 0 {
-                nested.pending_field_init_range = Some((0, field_init_count));
-            }
             nested.compile_function_with_parent(
                 &m.params,
-                &body,
+                &m.body,
                 ctx,
                 class_parent_vars.clone(),
                 None,
@@ -10558,16 +10527,9 @@ impl CodeGenerator {
                 default_body.push(super_call);
                 default_lines.push(0);
             }
-            let field_init_start = default_body.len();
-            default_body.extend(field_init_stmts);
-            default_lines.extend(vec![0; instance_fields.len()]);
             let mut nested = self.nested_codegen();
             nested.is_strict = true;
             nested.in_derived_constructor = has_super;
-            if field_init_count > 0 {
-                nested.pending_field_init_range =
-                    Some((field_init_start, field_init_start + field_init_count));
-            }
             nested.compile_function_with_parent(
                 &[],
                 &BlockStatement {
@@ -10581,123 +10543,124 @@ impl CodeGenerator {
             )?
         };
 
-        let mut instance_methods: Vec<(
-            PropertyKey,
-            Bytecode,
-            Vec<(u32, u16)>,
-            bool,
-            bool,
-            MethodKind,
-            bool,
-        )> = Vec::new();
-        for element in &body.elements {
-            if let ClassElement::Method(m) = element {
-                if m.is_static || m.kind == MethodKind::Constructor {
-                    continue;
-                }
-                let can_handle = match &m.name {
-                    PropertyKey::Identifier(_)
-                    | PropertyKey::Literal(Literal::String(_, _, _))
-                    | PropertyKey::Literal(Literal::Number(_))
-                    | PropertyKey::PrivateIdentifier(_)
-                    | PropertyKey::Computed(_) => true,
-                    _ => false,
-                };
-                if !can_handle {
-                    continue;
-                }
-                let mut nested = self.nested_codegen();
-                nested.is_strict = true;
-                let (method_bc, method_upvalues) = nested.compile_function_with_parent_gen(
-                    &m.params,
-                    &m.body,
-                    ctx,
-                    class_parent_vars.clone(),
-                    None,
-                    false,
-                    m.generator,
-                    m.is_async,
-                )?;
-                instance_methods.push((
-                    m.name.clone(),
-                    method_bc,
-                    method_upvalues,
-                    m.generator,
-                    m.is_async,
-                    m.kind.clone(),
-                    m.is_private,
-                ));
-            }
+        enum ElementPlan {
+            Method {
+                key: PropertyKey,
+                bc: Bytecode,
+                upvalues: Vec<(u32, u16)>,
+                is_gen: bool,
+                is_async: bool,
+                kind: MethodKind,
+                is_private: bool,
+                is_static: bool,
+            },
+            Field {
+                key: PropertyKey,
+                init: Option<(Bytecode, Vec<(u32, u16)>)>,
+                is_static: bool,
+                is_private: bool,
+            },
+            Block {
+                bc: Bytecode,
+                upvalues: Vec<(u32, u16)>,
+            },
         }
 
-        let mut static_methods: Vec<(
-            PropertyKey,
-            Bytecode,
-            Vec<(u32, u16)>,
-            bool,
-            bool,
-            MethodKind,
-            bool,
-        )> = Vec::new();
+        let mut plans: Vec<ElementPlan> = Vec::with_capacity(body.elements.len());
         for element in &body.elements {
-            if let ClassElement::Method(m) = element {
-                if !m.is_static {
-                    continue;
+            match element {
+                ClassElement::Method(m) => {
+                    if m.kind == MethodKind::Constructor && !m.is_static {
+                        continue;
+                    }
+                    let can_handle = matches!(
+                        &m.name,
+                        PropertyKey::Identifier(_)
+                            | PropertyKey::Literal(Literal::String(_, _, _))
+                            | PropertyKey::Literal(Literal::Number(_))
+                            | PropertyKey::PrivateIdentifier(_)
+                            | PropertyKey::Computed(_)
+                    );
+                    if !can_handle {
+                        continue;
+                    }
+                    let mut nested = self.nested_codegen();
+                    nested.is_strict = true;
+                    nested.in_static_method = m.is_static;
+                    let (method_bc, method_upvalues) = nested.compile_function_with_parent_gen(
+                        &m.params,
+                        &m.body,
+                        ctx,
+                        class_parent_vars.clone(),
+                        None,
+                        false,
+                        m.generator,
+                        m.is_async,
+                    )?;
+                    plans.push(ElementPlan::Method {
+                        key: m.name.clone(),
+                        bc: method_bc,
+                        upvalues: method_upvalues,
+                        is_gen: m.generator,
+                        is_async: m.is_async,
+                        kind: m.kind.clone(),
+                        is_private: m.is_private,
+                        is_static: m.is_static,
+                    });
                 }
-                let can_handle = match &m.name {
-                    PropertyKey::Identifier(_)
-                    | PropertyKey::Literal(Literal::String(_, _, _))
-                    | PropertyKey::Literal(Literal::Number(_))
-                    | PropertyKey::PrivateIdentifier(_)
-                    | PropertyKey::Computed(_) => true,
-                    _ => false,
-                };
-                if !can_handle {
-                    continue;
+                ClassElement::Property(p) => {
+                    let init = match &p.value {
+                        Some(value) => {
+                            let mut nested = self.nested_codegen();
+                            nested.is_strict = true;
+                            nested.in_field_initializer = true;
+                            nested.field_init_name =
+                                Self::class_field_key_name(&p.name, p.is_private);
+                            let init_body = BlockStatement {
+                                body: vec![ASTNode::ExpressionStatement(ExpressionStatement {
+                                    expression: value.clone(),
+                                })],
+                                lines: vec![0],
+                            };
+                            let (init_bc, init_upvalues) = nested.compile_function_with_parent(
+                                &[],
+                                &init_body,
+                                ctx,
+                                class_parent_vars.clone(),
+                                None,
+                                true,
+                            )?;
+                            Some((init_bc, init_upvalues))
+                        }
+                        None => None,
+                    };
+                    plans.push(ElementPlan::Field {
+                        key: p.name.clone(),
+                        init,
+                        is_static: p.is_static,
+                        is_private: p.is_private,
+                    });
                 }
-                let mut nested = self.nested_codegen();
-                nested.in_static_method = true;
-                nested.is_strict = true;
-                let (method_bc, method_upvalues) = nested.compile_function_with_parent_gen(
-                    &m.params,
-                    &m.body,
-                    ctx,
-                    class_parent_vars.clone(),
-                    None,
-                    false,
-                    m.generator,
-                    m.is_async,
-                )?;
-                static_methods.push((
-                    m.name.clone(),
-                    method_bc,
-                    method_upvalues,
-                    m.generator,
-                    m.is_async,
-                    m.kind.clone(),
-                    m.is_private,
-                ));
-            }
-        }
-
-        let mut static_blocks: Vec<(Bytecode, Vec<(u32, u16)>)> = Vec::new();
-        for element in &body.elements {
-            if let ClassElement::StaticBlock(block) = element {
-                let mut nested = self.nested_codegen();
-                nested.is_strict = true;
-                nested.in_field_initializer = true;
-                let (block_bc, block_upvalues) = nested.compile_function_with_parent(
-                    &[],
-                    &BlockStatement {
-                        body: block.body.clone(),
-                        lines: block.lines.clone(),
-                    },
-                    ctx,
-                    class_parent_vars.clone(),
-                    None,
-                    false,
-                )?;
-                static_blocks.push((block_bc, block_upvalues));
+                ClassElement::StaticBlock(block) => {
+                    let mut nested = self.nested_codegen();
+                    nested.is_strict = true;
+                    nested.in_field_initializer = true;
+                    let (block_bc, block_upvalues) = nested.compile_function_with_parent(
+                        &[],
+                        &BlockStatement {
+                            body: block.body.clone(),
+                            lines: block.lines.clone(),
+                        },
+                        ctx,
+                        class_parent_vars.clone(),
+                        None,
+                        false,
+                    )?;
+                    plans.push(ElementPlan::Block {
+                        bc: block_bc,
+                        upvalues: block_upvalues,
+                    });
+                }
             }
         }
 
@@ -10734,16 +10697,10 @@ impl CodeGenerator {
             self.free_register(super_key);
         }
 
-        if class_slot != ctor_reg {
-            self.emit(Opcode::Move);
-            self.emit_u16(class_slot);
-            self.emit_u16(ctor_reg);
-        }
-
         self.emit(Opcode::NewObject);
         self.emit_u16(proto_reg);
 
-        if super_val_reg.is_some() {
+        if let Some(super_val) = super_val_reg {
             if is_null_heritage {
                 let null_reg = self.alloc_register();
                 self.emit(Opcode::LoadNull);
@@ -10753,26 +10710,24 @@ impl CodeGenerator {
                 self.emit_u16(null_reg);
                 self.free_register(null_reg);
             } else {
-            let proto_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
-            let proto_key = self.alloc_register();
-            self.emit(Opcode::LoadConst);
-            self.emit_u16(proto_key);
-            self.emit_u32(proto_key_idx);
-            let super_val = super_val_reg.unwrap();
-            let super_proto = self.alloc_register();
-            self.emit(Opcode::GetProp);
-            self.emit_u16(super_proto);
-            self.emit_u16(super_val);
-            self.emit_u16(proto_key);
-            self.emit(Opcode::SetProto);
-            self.emit_u16(proto_reg);
-            self.emit_u16(super_proto);
-            self.free_register(super_proto);
-            self.free_register(proto_key);
+                let proto_key_idx =
+                    self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
+                let proto_key = self.alloc_register();
+                self.emit(Opcode::LoadConst);
+                self.emit_u16(proto_key);
+                self.emit_u32(proto_key_idx);
+                let super_proto = self.alloc_register();
+                self.emit(Opcode::GetProp);
+                self.emit_u16(super_proto);
+                self.emit_u16(super_val);
+                self.emit_u16(proto_key);
+                self.emit(Opcode::SetProto);
+                self.emit_u16(proto_reg);
+                self.emit_u16(super_proto);
+                self.free_register(super_proto);
+                self.free_register(proto_key);
             }
-            if let Some(super_val) = super_val_reg {
-                self.free_register(super_val);
-            }
+            self.free_register(super_val);
         }
 
         let proto_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
@@ -10781,308 +10736,388 @@ impl CodeGenerator {
         self.emit_u16(proto_key);
         self.emit_u32(proto_key_idx);
         self.emit(Opcode::DefineClassPrototype);
-        self.emit_u16(class_slot);
+        self.emit_u16(ctor_reg);
         self.emit_u16(proto_reg);
         self.free_register(proto_key);
 
-        for (method_key, method_bc, method_upvalues, is_gen, is_async, kind, is_private) in
-            instance_methods
-        {
-            let key = self.alloc_register();
-            let method_name_atom = match &method_key {
-                PropertyKey::Identifier(n) | PropertyKey::Literal(Literal::String(n, _, _)) => {
-                    let method_atom = ctx.atom_table_mut().intern(n.as_str());
-                    let method_idx = self.add_constant(JSValue::new_string(method_atom));
-                    self.emit(Opcode::LoadConst);
-                    self.emit_u16(key);
-                    self.emit_u32(method_idx);
-                    method_atom.0
-                }
-                PropertyKey::Literal(Literal::Number(n)) => {
-                    let s = if n.fract() == 0.0 && *n >= i32::MIN as f64 && *n <= i32::MAX as f64 {
-                        (*n as i32).to_string()
-                    } else {
-                        f64_to_js_string(*n)
-                    };
-                    let method_atom = ctx.atom_table_mut().intern(&s);
-                    let method_idx = self.add_constant(JSValue::new_string(method_atom));
-                    self.emit(Opcode::LoadConst);
-                    self.emit_u16(key);
-                    self.emit_u32(method_idx);
-                    method_atom.0
-                }
-                PropertyKey::PrivateIdentifier(n) => {
-                    let method_atom = ctx.atom_table_mut().intern(n.as_str());
-                    let method_idx = self.add_constant(JSValue::new_string(method_atom));
-                    self.emit(Opcode::LoadConst);
-                    self.emit_u16(key);
-                    self.emit_u32(method_idx);
-                    method_atom.0
-                }
-                PropertyKey::Computed(expr) => {
-                    let k = self.gen_expression(expr, ctx)?;
-                    self.emit(Opcode::Move);
-                    self.emit_u16(key);
-                    self.emit_u16(k);
-                    self.free_register(k);
-                    0
-                }
-                _ => {
-                    self.free_register(key);
-                    continue;
-                }
-            };
-            let method_reg = self.alloc_register();
-            self.emit_embedded_function(
-                &method_bc,
-                &method_upvalues,
-                method_name_atom,
-                method_reg,
-                is_gen,
-                is_async,
-                if is_gen { 1 } else { 0 },
-            );
-            match kind {
-                MethodKind::Get if is_private => {
-                    self.emit(Opcode::DefinePrivateAccessor);
-                    self.emit_u16(proto_reg);
-                    self.emit_u16(key);
-                    self.emit_u16(method_reg);
-                    self.emit_u16(u16::MAX);
-                    self.emit_u16(proto_reg);
-                }
-                MethodKind::Set if is_private => {
-                    self.emit(Opcode::DefinePrivateAccessor);
-                    self.emit_u16(proto_reg);
-                    self.emit_u16(key);
-                    self.emit_u16(u16::MAX);
-                    self.emit_u16(method_reg);
-                    self.emit_u16(proto_reg);
-                }
-                MethodKind::Get => {
-                    self.emit(Opcode::DefineClassAccessor);
-                    self.emit_u16(proto_reg);
-                    self.emit_u16(key);
-                    self.emit_u16(method_reg);
-                    self.emit_u16(u16::MAX);
-                }
-                MethodKind::Set => {
-                    self.emit(Opcode::DefineClassAccessor);
-                    self.emit_u16(proto_reg);
-                    self.emit_u16(key);
-                    self.emit_u16(u16::MAX);
-                    self.emit_u16(method_reg);
-                }
-                _ => {
-                    if is_private {
-                        self.emit(Opcode::DefinePrivateMethod);
-                        self.emit_u16(proto_reg);
-                        self.emit_u16(key);
-                        self.emit_u16(method_reg);
-                        self.emit_u16(proto_reg);
-                    } else {
-                        self.emit(Opcode::SetMethodProp);
-                        self.emit_u16(proto_reg);
-                        self.emit_u16(key);
-                        self.emit_u16(method_reg);
-                    }
-                }
-            }
-            self.free_register(key);
-            self.free_register(method_reg);
+        enum StaticPendingKind {
+            Field,
+            PrivateField,
+            Block,
         }
 
-        for (method_key, method_bc, method_upvalues, is_gen, is_async, kind, is_private) in
-            static_methods
-        {
-            let key = self.alloc_register();
-            let method_name_atom = match &method_key {
-                PropertyKey::Identifier(n) | PropertyKey::Literal(Literal::String(n, _, _)) => {
-                    let method_atom = ctx.atom_table_mut().intern(n.as_str());
-                    let method_idx = self.add_constant(JSValue::new_string(method_atom));
-                    self.emit(Opcode::LoadConst);
-                    self.emit_u16(key);
-                    self.emit_u32(method_idx);
-                    method_atom.0
-                }
-                PropertyKey::Literal(Literal::Number(n)) => {
-                    let s = if n.fract() == 0.0 && *n >= i32::MIN as f64 && *n <= i32::MAX as f64 {
-                        (*n as i32).to_string()
-                    } else {
-                        f64_to_js_string(*n)
-                    };
-                    let method_atom = ctx.atom_table_mut().intern(&s);
-                    let method_idx = self.add_constant(JSValue::new_string(method_atom));
-                    self.emit(Opcode::LoadConst);
-                    self.emit_u16(key);
-                    self.emit_u32(method_idx);
-                    method_atom.0
-                }
-                PropertyKey::PrivateIdentifier(n) => {
-                    let method_atom = ctx.atom_table_mut().intern(n.as_str());
-                    let method_idx = self.add_constant(JSValue::new_string(method_atom));
-                    self.emit(Opcode::LoadConst);
-                    self.emit_u16(key);
-                    self.emit_u32(method_idx);
-                    method_atom.0
-                }
-                PropertyKey::Computed(expr) => {
-                    let k = self.gen_expression(expr, ctx)?;
-                    self.emit(Opcode::Move);
-                    self.emit_u16(key);
-                    self.emit_u16(k);
-                    self.free_register(k);
-                    0
-                }
-                _ => {
-                    self.free_register(key);
-                    continue;
-                }
-            };
-            let method_reg = self.alloc_register();
-            self.emit_embedded_function(
-                &method_bc,
-                &method_upvalues,
-                method_name_atom,
-                method_reg,
-                is_gen,
-                is_async,
-                if is_gen { 1 } else { 0 },
-            );
-            match kind {
-                MethodKind::Get if is_private => {
-                    self.emit(Opcode::DefinePrivateAccessor);
-                    self.emit_u16(class_slot);
-                    self.emit_u16(key);
-                    self.emit_u16(method_reg);
-                    self.emit_u16(u16::MAX);
-                    self.emit_u16(class_slot);
-                    self.emit(Opcode::AddPrivateBrand);
-                    self.emit_u16(class_slot);
-                    self.emit_u16(class_slot);
-                }
-                MethodKind::Set if is_private => {
-                    self.emit(Opcode::DefinePrivateAccessor);
-                    self.emit_u16(class_slot);
-                    self.emit_u16(key);
-                    self.emit_u16(u16::MAX);
-                    self.emit_u16(method_reg);
-                    self.emit_u16(class_slot);
-                    self.emit(Opcode::AddPrivateBrand);
-                    self.emit_u16(class_slot);
-                    self.emit_u16(class_slot);
-                }
-                MethodKind::Get => {
-                    self.emit(Opcode::DefineClassAccessor);
-                    self.emit_u16(class_slot);
-                    self.emit_u16(key);
-                    self.emit_u16(method_reg);
-                    self.emit_u16(u16::MAX);
-                }
-                MethodKind::Set => {
-                    self.emit(Opcode::DefineClassAccessor);
-                    self.emit_u16(class_slot);
-                    self.emit_u16(key);
-                    self.emit_u16(u16::MAX);
-                    self.emit_u16(method_reg);
-                }
-                _ => {
-                    if is_private {
-                        self.emit(Opcode::DefinePrivateMethod);
-                        self.emit_u16(class_slot);
-                        self.emit_u16(key);
-                        self.emit_u16(method_reg);
-                        self.emit_u16(class_slot);
-                        self.emit(Opcode::AddPrivateBrand);
-                        self.emit_u16(class_slot);
-                        self.emit_u16(class_slot);
-                    } else {
-                        self.emit(Opcode::SetMethodProp);
-                        self.emit_u16(class_slot);
-                        self.emit_u16(key);
-                        self.emit_u16(method_reg);
-                    }
-                }
-            }
-            self.free_register(key);
-            self.free_register(method_reg);
+        struct StaticPending {
+            kind: StaticPendingKind,
+            key_reg: u16,
+            init_reg: u16,
+            has_init: bool,
         }
 
-        for element in &body.elements {
-            if let ClassElement::Property(p) = element {
-                if !p.is_static {
-                    continue;
-                }
-                let val_reg = if let Some(value) = &p.value {
-                    self.gen_expression(value, ctx)?
-                } else {
-                    let r = self.alloc_register();
-                    self.emit(Opcode::LoadUndefined);
-                    self.emit_u16(r);
-                    r
-                };
-                if let PropertyKey::Computed(key_expr) = &p.name {
-                    let key = self.gen_expression(key_expr, ctx)?;
-                    self.emit(Opcode::SetField);
-                    self.emit_u16(class_slot);
-                    self.emit_u16(key);
-                    self.emit_u16(val_reg);
-                    self.free_register(key);
-                    self.free_register(val_reg);
-                } else {
-                    let field_name = match &p.name {
-                        PropertyKey::Identifier(n) => n.clone(),
-                        PropertyKey::Literal(Literal::String(s, _, _)) => s.clone(),
-                        PropertyKey::PrivateIdentifier(n) => n.clone(),
+        let mut static_pending: Vec<StaticPending> = Vec::new();
+
+        for plan in plans {
+            match plan {
+                ElementPlan::Method {
+                    key,
+                    bc,
+                    upvalues,
+                    is_gen,
+                    is_async,
+                    kind,
+                    is_private,
+                    is_static,
+                } => {
+                    let home = if is_static { ctor_reg } else { proto_reg };
+                    let key_reg = self.alloc_register();
+                    let method_name_atom = match &key {
+                        PropertyKey::Identifier(n)
+                        | PropertyKey::Literal(Literal::String(n, _, _)) => {
+                            let method_atom = ctx.atom_table_mut().intern(n.as_str());
+                            let method_idx = self.add_constant(JSValue::new_string(method_atom));
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key_reg);
+                            self.emit_u32(method_idx);
+                            method_atom.0
+                        }
+                        PropertyKey::Literal(Literal::Number(n)) => {
+                            let s = Self::class_key_number_string(*n);
+                            let method_atom = ctx.atom_table_mut().intern(&s);
+                            let method_idx = self.add_constant(JSValue::new_string(method_atom));
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key_reg);
+                            self.emit_u32(method_idx);
+                            method_atom.0
+                        }
+                        PropertyKey::PrivateIdentifier(n) => {
+                            let method_atom = ctx.atom_table_mut().intern(n.as_str());
+                            let method_idx = self.add_constant(JSValue::new_string(method_atom));
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key_reg);
+                            self.emit_u32(method_idx);
+                            method_atom.0
+                        }
+                        PropertyKey::Computed(expr) => {
+                            let k = self.gen_expression(expr, ctx)?;
+                            self.emit(Opcode::Move);
+                            self.emit_u16(key_reg);
+                            self.emit_u16(k);
+                            self.free_register(k);
+                            0
+                        }
                         _ => {
-                            self.free_register(val_reg);
+                            self.free_register(key_reg);
                             continue;
                         }
                     };
-                    let field_idx = self.intern_and_add_const(ctx, &field_name);
-                    let key = self.alloc_register();
-                    self.emit(Opcode::LoadConst);
-                    self.emit_u16(key);
-                    self.emit_u32(field_idx);
-                    if p.is_private {
-                        self.emit(Opcode::DefinePrivateField);
-                        self.emit_u16(class_slot);
-                        self.emit_u16(key);
-                        self.emit_u16(val_reg);
-                        self.emit_u16(class_slot);
-                    } else {
-                        self.emit(Opcode::SetProp);
-                        self.emit_u16(class_slot);
-                        self.emit_u16(key);
-                        self.emit_u16(val_reg);
+                    let method_reg = self.alloc_register();
+                    self.emit_embedded_function(
+                        &bc,
+                        &upvalues,
+                        method_name_atom,
+                        method_reg,
+                        is_gen,
+                        is_async,
+                        if is_gen { 1 } else { 0 },
+                    );
+                    match kind {
+                        MethodKind::Get if is_private => {
+                            self.emit(Opcode::DefinePrivateAccessor);
+                            self.emit_u16(home);
+                            self.emit_u16(key_reg);
+                            self.emit_u16(method_reg);
+                            self.emit_u16(u16::MAX);
+                            self.emit_u16(home);
+                        }
+                        MethodKind::Set if is_private => {
+                            self.emit(Opcode::DefinePrivateAccessor);
+                            self.emit_u16(home);
+                            self.emit_u16(key_reg);
+                            self.emit_u16(u16::MAX);
+                            self.emit_u16(method_reg);
+                            self.emit_u16(home);
+                        }
+                        MethodKind::Get => {
+                            self.emit(Opcode::DefineClassAccessor);
+                            self.emit_u16(home);
+                            self.emit_u16(key_reg);
+                            self.emit_u16(method_reg);
+                            self.emit_u16(u16::MAX);
+                        }
+                        MethodKind::Set => {
+                            self.emit(Opcode::DefineClassAccessor);
+                            self.emit_u16(home);
+                            self.emit_u16(key_reg);
+                            self.emit_u16(u16::MAX);
+                            self.emit_u16(method_reg);
+                        }
+                        _ => {
+                            if is_private {
+                                self.emit(Opcode::DefinePrivateMethod);
+                                self.emit_u16(home);
+                                self.emit_u16(key_reg);
+                                self.emit_u16(method_reg);
+                                self.emit_u16(home);
+                            } else {
+                                self.emit(Opcode::SetMethodProp);
+                                self.emit_u16(home);
+                                self.emit_u16(key_reg);
+                                self.emit_u16(method_reg);
+                            }
+                        }
                     }
-                    self.free_register(key);
-                    self.free_register(val_reg);
+                    if is_private && is_static {
+                        self.emit(Opcode::AddPrivateBrand);
+                        self.emit_u16(ctor_reg);
+                        self.emit_u16(ctor_reg);
+                    }
+                    self.free_register(key_reg);
+                    self.free_register(method_reg);
+                }
+                ElementPlan::Field {
+                    key,
+                    init,
+                    is_static,
+                    is_private,
+                } => {
+                    let (init_reg, init_is_fn) = self.emit_field_initializer(&init);
+                    if !is_static {
+                        if init_is_fn {
+                            self.emit(Opcode::SetHomeObject);
+                            self.emit_u16(init_reg);
+                            self.emit_u16(proto_reg);
+                        }
+                        if is_private {
+                            let name = Self::private_field_name(&key);
+                            let name_atom = ctx.atom_table_mut().intern(&name).0;
+                            self.emit(Opcode::AddInstancePrivateField);
+                            self.emit_u16(ctor_reg);
+                            self.emit_u16(proto_reg);
+                            self.emit_u32(name_atom);
+                            self.emit_u16(init_reg);
+                        } else {
+                            let key_reg = self.emit_field_key_reg(&key, ctx)?;
+                            self.emit(Opcode::AddInstanceField);
+                            self.emit_u16(ctor_reg);
+                            self.emit_u16(key_reg);
+                            self.emit_u16(init_reg);
+                            self.free_register(key_reg);
+                        }
+                        self.free_register(init_reg);
+                    } else if is_private {
+                        if init_is_fn {
+                            self.emit(Opcode::SetHomeObject);
+                            self.emit_u16(init_reg);
+                            self.emit_u16(ctor_reg);
+                        }
+                        let name = Self::private_field_name(&key);
+                        let name_atom = ctx.atom_table_mut().intern(&name);
+                        let key_reg = self.alloc_register();
+                        let key_idx = self.add_constant(JSValue::new_string(name_atom));
+                        self.emit(Opcode::LoadConst);
+                        self.emit_u16(key_reg);
+                        self.emit_u32(key_idx);
+                        static_pending.push(StaticPending {
+                            kind: StaticPendingKind::PrivateField,
+                            key_reg,
+                            init_reg,
+                            has_init: init_is_fn,
+                        });
+                    } else {
+                        if init_is_fn {
+                            self.emit(Opcode::SetHomeObject);
+                            self.emit_u16(init_reg);
+                            self.emit_u16(ctor_reg);
+                        }
+                        let key_reg = self.emit_field_key_reg(&key, ctx)?;
+                        static_pending.push(StaticPending {
+                            kind: StaticPendingKind::Field,
+                            key_reg,
+                            init_reg,
+                            has_init: init_is_fn,
+                        });
+                    }
+                }
+                ElementPlan::Block { bc, upvalues } => {
+                    let block_reg = self.alloc_register();
+                    self.emit_embedded_function(&bc, &upvalues, 0, block_reg, false, false, 0);
+                    self.emit(Opcode::SetHomeObject);
+                    self.emit_u16(block_reg);
+                    self.emit_u16(ctor_reg);
+                    static_pending.push(StaticPending {
+                        kind: StaticPendingKind::Block,
+                        key_reg: 0,
+                        init_reg: block_reg,
+                        has_init: true,
+                    });
                 }
             }
         }
 
-        for (block_bc, block_upvalues) in static_blocks {
-            let block_reg = self.alloc_register();
-            self.emit_embedded_function(
-                &block_bc,
-                &block_upvalues,
-                0,
-                block_reg,
-                false,
-                false,
-                0,
-            );
-            self.emit(Opcode::Call);
-            self.emit_u16(block_reg);
-            self.emit_u16(block_reg);
-            self.emit_u16(0);
-            self.free_register(block_reg);
+        if class_slot != ctor_reg {
+            self.emit(Opcode::Move);
+            self.emit_u16(class_slot);
+            self.emit_u16(ctor_reg);
+        }
+
+        for pending in static_pending {
+            match pending.kind {
+                StaticPendingKind::Block => {
+                    self.emit(Opcode::CallMethod);
+                    self.emit_u16(pending.init_reg);
+                    self.emit_u16(ctor_reg);
+                    self.emit_u16(pending.init_reg);
+                    self.emit_u16(0);
+                }
+                StaticPendingKind::Field => {
+                    let val_reg = self.alloc_register();
+                    if pending.has_init {
+                        self.emit(Opcode::CallMethod);
+                        self.emit_u16(val_reg);
+                        self.emit_u16(ctor_reg);
+                        self.emit_u16(pending.init_reg);
+                        self.emit_u16(0);
+                    } else {
+                        self.emit(Opcode::LoadUndefined);
+                        self.emit_u16(val_reg);
+                    }
+                    self.emit(Opcode::DefineField);
+                    self.emit_u16(ctor_reg);
+                    self.emit_u16(pending.key_reg);
+                    self.emit_u16(val_reg);
+                    self.free_register(val_reg);
+                    self.free_register(pending.key_reg);
+                }
+                StaticPendingKind::PrivateField => {
+                    let val_reg = self.alloc_register();
+                    if pending.has_init {
+                        self.emit(Opcode::CallMethod);
+                        self.emit_u16(val_reg);
+                        self.emit_u16(ctor_reg);
+                        self.emit_u16(pending.init_reg);
+                        self.emit_u16(0);
+                    } else {
+                        self.emit(Opcode::LoadUndefined);
+                        self.emit_u16(val_reg);
+                    }
+                    self.emit(Opcode::AddPrivateBrand);
+                    self.emit_u16(ctor_reg);
+                    self.emit_u16(ctor_reg);
+                    self.emit(Opcode::DefinePrivateField);
+                    self.emit_u16(ctor_reg);
+                    self.emit_u16(pending.key_reg);
+                    self.emit_u16(val_reg);
+                    self.emit_u16(ctor_reg);
+                    self.free_register(val_reg);
+                    self.free_register(pending.key_reg);
+                }
+            }
+            self.free_register(pending.init_reg);
         }
 
         self.pop_scope();
 
         Ok(class_name_atom)
+    }
+
+    fn class_key_number_string(n: f64) -> String {
+        if n.fract() == 0.0 && n >= i32::MIN as f64 && n <= i32::MAX as f64 {
+            (n as i32).to_string()
+        } else {
+            f64_to_js_string(n)
+        }
+    }
+
+    fn class_field_key_name(key: &PropertyKey, is_private: bool) -> Option<String> {
+        match key {
+            PropertyKey::PrivateIdentifier(n) => Some(n.clone()),
+            PropertyKey::Identifier(n) if is_private => {
+                if n.starts_with('#') {
+                    Some(n.clone())
+                } else {
+                    Some(format!("#{}", n))
+                }
+            }
+            PropertyKey::Identifier(n) => Some(n.clone()),
+            PropertyKey::Literal(Literal::String(s, _, _)) => Some(s.clone()),
+            PropertyKey::Literal(Literal::Number(n)) => Some(Self::class_key_number_string(*n)),
+            _ => None,
+        }
+    }
+
+    fn private_field_name(key: &PropertyKey) -> String {
+        match key {
+            PropertyKey::PrivateIdentifier(n) => n.clone(),
+            PropertyKey::Identifier(n) => {
+                if n.starts_with('#') {
+                    n.clone()
+                } else {
+                    format!("#{}", n)
+                }
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn emit_field_key_reg(
+        &mut self,
+        key: &PropertyKey,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        let key_reg = self.alloc_register();
+        match key {
+            PropertyKey::Identifier(n) => {
+                let atom = ctx.atom_table_mut().intern(n.as_str());
+                let idx = self.add_constant(JSValue::new_string(atom));
+                self.emit(Opcode::LoadConst);
+                self.emit_u16(key_reg);
+                self.emit_u32(idx);
+            }
+            PropertyKey::Literal(Literal::String(s, _, _)) => {
+                let atom = ctx.atom_table_mut().intern(s.as_str());
+                let idx = self.add_constant(JSValue::new_string(atom));
+                self.emit(Opcode::LoadConst);
+                self.emit_u16(key_reg);
+                self.emit_u32(idx);
+            }
+            PropertyKey::Literal(Literal::Number(n)) => {
+                let s = Self::class_key_number_string(*n);
+                let atom = ctx.atom_table_mut().intern(&s);
+                let idx = self.add_constant(JSValue::new_string(atom));
+                self.emit(Opcode::LoadConst);
+                self.emit_u16(key_reg);
+                self.emit_u32(idx);
+            }
+            PropertyKey::Computed(expr) => {
+                let k = self.gen_expression(expr, ctx)?;
+                self.emit(Opcode::Move);
+                self.emit_u16(key_reg);
+                self.emit_u16(k);
+                self.free_register(k);
+                self.emit(Opcode::ToPropertyKey);
+                self.emit_u16(key_reg);
+            }
+            _ => {
+                self.free_register(key_reg);
+                return Err("SyntaxError: Invalid property key".to_string());
+            }
+        }
+        Ok(key_reg)
+    }
+
+    fn emit_field_initializer(&mut self, init: &Option<(Bytecode, Vec<(u32, u16)>)>) -> (u16, bool) {
+        match init {
+            Some((bc, upvalues)) => {
+                let init_reg = self.alloc_register();
+                self.emit_embedded_function(bc, upvalues, 0, init_reg, false, false, 0);
+                (init_reg, true)
+            }
+            None => {
+                let init_reg = self.alloc_register();
+                self.emit(Opcode::LoadUndefined);
+                self.emit_u16(init_reg);
+                (init_reg, false)
+            }
+        }
     }
 }
 

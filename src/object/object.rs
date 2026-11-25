@@ -959,6 +959,16 @@ impl JSObject {
             })
     }
 
+    pub fn for_each_private_kind(&self, mut f: impl FnMut(PrivateKey, PrivateKind)) {
+        if let Some(ref extra) = self.extra {
+            if let Some(ref kinds) = extra.private_kinds {
+                for (&key, &kind) in kinds.iter() {
+                    f(key, kind);
+                }
+            }
+        }
+    }
+
     pub fn for_each_private_method(&self, mut f: impl FnMut(PrivateKey, JSValue)) {
         if let Some(ref extra) = self.extra {
             if let Some(ref methods) = extra.private_methods {
