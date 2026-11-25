@@ -7,7 +7,8 @@ use crate::value::JSValue;
 
 #[derive(Debug)]
 struct BreakableFrame {
-    label: Option<String>,
+    labels: Vec<String>,
+    is_label: bool,
     break_patches: Vec<usize>,
     continue_patches: Vec<usize>,
     continue_target: Option<usize>,
@@ -228,7 +229,7 @@ pub struct CodeGenerator {
     is_arrow: bool,
     in_static_method: bool,
     in_async_generator: bool,
-    pending_label: Option<String>,
+    pending_labels: Vec<String>,
     all_var_names: Vec<(String, u16)>,
     with_scopes: Vec<WithScope>,
     function_id: u32,
@@ -295,7 +296,7 @@ impl CodeGenerator {
             is_arrow: false,
             in_static_method: false,
             in_async_generator: false,
-            pending_label: None,
+            pending_labels: Vec::new(),
             all_var_names: Vec::new(),
             with_scopes: Vec::new(),
             function_id: 0,
@@ -312,6 +313,17 @@ impl CodeGenerator {
             opt_tiny_inline: self.opt_tiny_inline,
             opt_branch_result_prealloc: self.opt_branch_result_prealloc,
         }
+    }
+
+    fn statement_is_iteration_statement(stmt: &ASTNode) -> bool {
+        matches!(
+            stmt,
+            ASTNode::ForStatement(_)
+                | ASTNode::ForInStatement(_)
+                | ASTNode::ForOfStatement(_)
+                | ASTNode::WhileStatement(_)
+                | ASTNode::DoWhileStatement(_)
+        )
     }
 
     fn nested_codegen(&self) -> Self {
@@ -2412,105 +2424,50 @@ impl CodeGenerator {
                 self.gen_switch_statement(stmt, ctx)?;
             }
             ASTNode::BreakStatement(stmt) => {
-                if stmt.label.is_some() {
-                    if !self
-                        .breakable_frames
-                        .iter()
-                        .any(|f| f.label.as_deref() == stmt.label.as_deref())
-                    {
-                        return Err(format!(
-                            "SyntaxError: Label '{}' not found",
-                            stmt.label.as_deref().unwrap()
-                        ));
-                    }
-                } else if self.breakable_frames.is_empty() {
-                    return Err("SyntaxError: Illegal break statement".to_string());
-                }
-                let depth = if let Some(label) = &stmt.label {
+                let target = if let Some(label) = &stmt.label {
                     self.breakable_frames
                         .iter()
-                        .rev()
-                        .find(|f| f.label.as_deref() == Some(label))
-                        .map(|f| f.handler_depth)
-                        .unwrap_or(self.handler_depth)
+                        .rposition(|f| f.labels.iter().any(|l| l == label))
                 } else {
-                    self.breakable_frames
-                        .last()
-                        .map(|f| f.handler_depth)
-                        .unwrap_or(self.handler_depth)
+                    self.breakable_frames.iter().rposition(|f| !f.is_label)
                 };
+                let Some(index) = target else {
+                    return Err(match &stmt.label {
+                        Some(label) => format!("SyntaxError: Label '{}' not found", label),
+                        None => "SyntaxError: Illegal break statement".to_string(),
+                    });
+                };
+                let depth = self.breakable_frames[index].handler_depth;
                 self.emit(Opcode::JumpBreak);
                 self.emit_u16(depth as u16);
                 let patch = self.code.len();
                 self.emit_i32(0);
-                if let Some(label) = &stmt.label {
-                    if let Some(frame) = self
-                        .breakable_frames
-                        .iter_mut()
-                        .rev()
-                        .find(|f| f.label.as_deref() == Some(label))
-                    {
-                        frame.break_patches.push(patch);
-                    }
-                } else if let Some(frame) = self.breakable_frames.last_mut() {
-                    frame.break_patches.push(patch);
-                }
+                self.breakable_frames[index].break_patches.push(patch);
             }
             ASTNode::ContinueStatement(stmt) => {
-                if stmt.label.is_some() {
-                    let found = self.breakable_frames.iter().any(|f| {
-                        f.label.as_deref() == stmt.label.as_deref() && f.continue_target.is_some()
-                    });
-                    if !found {
-                        return Err(format!(
-                            "SyntaxError: Continue target '{}' not found",
-                            stmt.label.as_deref().unwrap()
-                        ));
-                    }
-                } else if !self
-                    .breakable_frames
-                    .iter()
-                    .any(|f| f.continue_target.is_some())
-                {
-                    return Err("SyntaxError: Illegal continue statement".to_string());
-                }
-                let depth = if let Some(label) = &stmt.label {
-                    self.breakable_frames
-                        .iter()
-                        .rev()
-                        .find(|f| {
-                            f.label.as_deref() == Some(label) && f.continue_target.is_some()
-                        })
-                        .map(|f| f.continue_depth)
-                        .unwrap_or(self.handler_depth)
+                let target = if let Some(label) = &stmt.label {
+                    self.breakable_frames.iter().rposition(|f| {
+                        f.continue_target.is_some() && f.labels.iter().any(|l| l == label)
+                    })
                 } else {
                     self.breakable_frames
                         .iter()
-                        .rev()
-                        .find(|f| f.continue_target.is_some())
-                        .map(|f| f.continue_depth)
-                        .unwrap_or(self.handler_depth)
+                        .rposition(|f| f.continue_target.is_some())
                 };
+                let Some(index) = target else {
+                    return Err(match &stmt.label {
+                        Some(label) => {
+                            format!("SyntaxError: Continue target '{}' not found", label)
+                        }
+                        None => "SyntaxError: Illegal continue statement".to_string(),
+                    });
+                };
+                let depth = self.breakable_frames[index].continue_depth;
                 self.emit(Opcode::JumpBreak);
                 self.emit_u16(depth as u16);
                 let patch = self.code.len();
                 self.emit_i32(0);
-                if let Some(label) = &stmt.label {
-                    let found =
-                        self.breakable_frames.iter_mut().rev().find(|f| {
-                            f.label.as_deref() == Some(label) && f.continue_target.is_some()
-                        });
-                    if let Some(frame) = found {
-                        frame.continue_patches.push(patch);
-                    }
-                } else if let Some(frame) = self
-                    .breakable_frames
-                    .iter_mut()
-                    .rev()
-                    .find(|f| f.continue_target.is_some())
-                {
-                    frame.continue_patches.push(patch);
-                }
+                self.breakable_frames[index].continue_patches.push(patch);
             }
             ASTNode::ReturnStatement(stmt) => {
                 if self.is_script_level {
@@ -2549,26 +2506,36 @@ impl CodeGenerator {
             }
             ASTNode::EmptyStatement => {}
             ASTNode::LabelledStatement(stmt) => {
-                let saved = self.pending_label.clone();
-                self.pending_label = None;
-                self.breakable_frames.push(BreakableFrame {
-                    label: Some(stmt.label.clone()),
-                    handler_depth: self.handler_depth,
-                    continue_depth: self.handler_depth,
-                    break_patches: Vec::new(),
-                    continue_patches: Vec::new(),
-                    continue_target: None,
-                });
-                let saved_label = self.pending_label.clone();
-                self.pending_label = Some(stmt.label.clone());
-                self.gen_statement(&stmt.body, ctx)?;
-                self.pending_label = saved_label;
-                let frame = self.breakable_frames.pop().unwrap();
-                let end_pos = self.code.len();
-                for patch in frame.break_patches {
-                    self.patch_jump(patch, end_pos);
+                let mut chain: Vec<String> = vec![stmt.label.clone()];
+                let mut terminal: &ASTNode = &stmt.body;
+                while let ASTNode::LabelledStatement(current) = terminal {
+                    chain.push(current.label.clone());
+                    terminal = &current.body;
                 }
-                self.pending_label = saved;
+                let saved_pending = std::mem::take(&mut self.pending_labels);
+                if Self::statement_is_iteration_statement(terminal) {
+                    self.pending_labels = chain;
+                    let result = self.gen_statement(terminal, ctx);
+                    self.pending_labels = saved_pending;
+                    result?;
+                } else {
+                    self.breakable_frames.push(BreakableFrame {
+                        labels: chain,
+                        is_label: true,
+                        handler_depth: self.handler_depth,
+                        continue_depth: self.handler_depth,
+                        break_patches: Vec::new(),
+                        continue_patches: Vec::new(),
+                        continue_target: None,
+                    });
+                    self.gen_statement(terminal, ctx)?;
+                    let frame = self.breakable_frames.pop().unwrap();
+                    let end_pos = self.code.len();
+                    for patch in frame.break_patches {
+                        self.patch_jump(patch, end_pos);
+                    }
+                    self.pending_labels = saved_pending;
+                }
             }
             _ => {}
         }
@@ -3510,28 +3477,37 @@ impl CodeGenerator {
                 Ok(None)
             }
             ASTNode::LabelledStatement(labeled) => {
-                self.pending_label = Some(labeled.label.clone());
-                self.breakable_frames.push(BreakableFrame {
-                    label: Some(labeled.label.clone()),
-                    handler_depth: self.handler_depth,
-                    continue_depth: self.handler_depth,
-                    break_patches: Vec::new(),
-                    continue_patches: Vec::new(),
-                    continue_target: None,
-                });
-                let result = self.gen_statement_as_expression(&labeled.body, ctx);
-                let frame = self.breakable_frames.pop().unwrap();
-                let end_pos = self.code.len();
-                for patch in frame.break_patches {
-                    self.patch_jump(patch, end_pos);
+                let mut chain: Vec<String> = vec![labeled.label.clone()];
+                let mut terminal: &ASTNode = &labeled.body;
+                while let ASTNode::LabelledStatement(current) = terminal {
+                    chain.push(current.label.clone());
+                    terminal = &current.body;
                 }
-                for patch in frame.continue_patches {
-                    if let Some(ct) = frame.continue_target {
-                        self.patch_jump(patch, ct);
+                let saved_pending = std::mem::take(&mut self.pending_labels);
+                if Self::statement_is_iteration_statement(terminal) {
+                    self.pending_labels = chain;
+                    let result = self.gen_statement_as_expression(terminal, ctx);
+                    self.pending_labels = saved_pending;
+                    result
+                } else {
+                    self.breakable_frames.push(BreakableFrame {
+                        labels: chain,
+                        is_label: true,
+                        handler_depth: self.handler_depth,
+                        continue_depth: self.handler_depth,
+                        break_patches: Vec::new(),
+                        continue_patches: Vec::new(),
+                        continue_target: None,
+                    });
+                    let result = self.gen_statement_as_expression(terminal, ctx);
+                    let frame = self.breakable_frames.pop().unwrap();
+                    let end_pos = self.code.len();
+                    for patch in frame.break_patches {
+                        self.patch_jump(patch, end_pos);
                     }
+                    self.pending_labels = saved_pending;
+                    result
                 }
-                self.pending_label = None;
-                result
             }
             ASTNode::WithStatement(with_stmt) => {
                 let result_reg = self.alloc_register();
@@ -4015,7 +3991,8 @@ impl CodeGenerator {
         };
 
         self.breakable_frames.push(BreakableFrame {
-            label: self.pending_label.take(),
+            labels: std::mem::take(&mut self.pending_labels),
+            is_label: false,
             handler_depth: self.handler_depth,
             continue_depth: self.handler_depth,
             break_patches: vec![break_jump],
@@ -4152,7 +4129,8 @@ impl CodeGenerator {
 
         let loop_start_for_continue = loop_start;
         self.breakable_frames.push(BreakableFrame {
-            label: self.pending_label.take(),
+            labels: std::mem::take(&mut self.pending_labels),
+            is_label: false,
             handler_depth: self.handler_depth,
             continue_depth: self.handler_depth,
             break_patches: if stmt.test.is_some() {
@@ -4324,7 +4302,8 @@ impl CodeGenerator {
         self.free_register(cmp_reg);
 
         self.breakable_frames.push(BreakableFrame {
-            label: self.pending_label.take(),
+            labels: std::mem::take(&mut self.pending_labels),
+            is_label: false,
             handler_depth: self.handler_depth,
             continue_depth: self.handler_depth,
             break_patches: Vec::new(),
@@ -4535,7 +4514,8 @@ impl CodeGenerator {
         }
 
         self.breakable_frames.push(BreakableFrame {
-            label: self.pending_label.take(),
+            labels: std::mem::take(&mut self.pending_labels),
+            is_label: false,
             handler_depth: outer_depth,
             continue_depth: self.handler_depth,
             break_patches: Vec::new(),
@@ -4628,7 +4608,8 @@ impl CodeGenerator {
         let loop_start = self.code.len();
 
         self.breakable_frames.push(BreakableFrame {
-            label: self.pending_label.take(),
+            labels: std::mem::take(&mut self.pending_labels),
+            is_label: false,
             handler_depth: self.handler_depth,
             continue_depth: self.handler_depth,
             break_patches: Vec::new(),
@@ -4715,7 +4696,8 @@ impl CodeGenerator {
         self.emit_i32(0);
 
         self.breakable_frames.push(BreakableFrame {
-            label: self.pending_label.take(),
+            labels: std::mem::take(&mut self.pending_labels),
+            is_label: false,
             handler_depth: self.handler_depth,
             continue_depth: self.handler_depth,
             break_patches: Vec::new(),
