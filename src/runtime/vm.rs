@@ -11230,7 +11230,7 @@ impl VM {
         self.get_prop_value(ctx, src_val, atom)
     }
 
-    fn get_prop_value(
+    pub fn get_prop_value(
         &mut self,
         ctx: &mut JSContext,
         obj: JSValue,
@@ -13284,28 +13284,6 @@ impl VM {
         }
     }
 
-    fn get_method_for_primitive(
-        &self,
-        obj: &crate::object::JSObject,
-        method_atom: crate::runtime::atom::Atom,
-        ctx: &JSContext,
-    ) -> Option<JSValue> {
-        if let Some(v) = obj.get(method_atom) {
-            return Some(v);
-        }
-
-        if obj.obj_type() == crate::object::object::ObjectType::Function {
-            if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
-                unsafe {
-                    if let Some(v) = (*fn_proto_ptr).get(method_atom) {
-                        return Some(v);
-                    }
-                }
-            }
-        }
-        None
-    }
-
     fn get_symbol_to_primitive_atom(
         &self,
         ctx: &mut JSContext,
@@ -13526,15 +13504,17 @@ impl VM {
             (value_of_atom, to_string_atom)
         };
         for &method_atom in &[first_try, second_try] {
-            if let Some(f) = self.get_method_for_primitive(obj, method_atom, ctx) {
-                if f.is_function() {
-                    let result = self.call_function_safe(ctx, f, *v, &[]);
-                    match result {
-                        Ok(r) if !r.is_object() && !r.is_function() => return r,
-                        Ok(_) => {}
-                        Err(_) => {
-                            return JSValue::undefined();
-                        }
+            let method = match self.get_prop_value(ctx, *v, method_atom) {
+                Ok(value) => value,
+                Err(_) => return JSValue::undefined(),
+            };
+            if method.is_function() {
+                let result = self.call_function_safe(ctx, method, *v, &[]);
+                match result {
+                    Ok(r) if !r.is_object() && !r.is_function() => return r,
+                    Ok(_) => {}
+                    Err(_) => {
+                        return JSValue::undefined();
                     }
                 }
             }

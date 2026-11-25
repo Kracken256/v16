@@ -2250,32 +2250,36 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
 
         let value_of_atom = ctx.intern("valueOf");
         let to_string_atom = ctx.intern("toString");
-        if let Some(valueof_fn) = obj.get(value_of_atom) {
-            if valueof_fn.is_function() {
-                let result = vm.call_function_with_this(ctx, valueof_fn, v.clone(), &[]);
-                if ctx.pending_exception.is_some() {
-                    return None;
-                }
-                if let Ok(val) = result {
-                    if !val.is_object() && !val.is_function() {
-                        return Some(val);
-                    }
+        let valueof_fn = match vm.get_prop_value(ctx, v.clone(), value_of_atom) {
+            Ok(val) => val,
+            Err(_) => return None,
+        };
+        if valueof_fn.is_function() {
+            let result = vm.call_function_with_this(ctx, valueof_fn, v.clone(), &[]);
+            if ctx.pending_exception.is_some() {
+                return None;
+            }
+            if let Ok(val) = result {
+                if !val.is_object() && !val.is_function() {
+                    return Some(val);
                 }
             }
         }
         if ctx.pending_exception.is_some() {
             return None;
         }
-        if let Some(tostring_fn) = obj.get(to_string_atom) {
-            if tostring_fn.is_function() {
-                let result = vm.call_function_with_this(ctx, tostring_fn, v.clone(), &[]);
-                if ctx.pending_exception.is_some() {
-                    return None;
-                }
-                if let Ok(val) = result {
-                    if !val.is_object() && !val.is_function() {
-                        return Some(val);
-                    }
+        let tostring_fn = match vm.get_prop_value(ctx, v.clone(), to_string_atom) {
+            Ok(val) => val,
+            Err(_) => return None,
+        };
+        if tostring_fn.is_function() {
+            let result = vm.call_function_with_this(ctx, tostring_fn, v.clone(), &[]);
+            if ctx.pending_exception.is_some() {
+                return None;
+            }
+            if let Ok(val) = result {
+                if !val.is_object() && !val.is_function() {
+                    return Some(val);
                 }
             }
         }
