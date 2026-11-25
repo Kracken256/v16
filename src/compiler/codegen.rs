@@ -3124,9 +3124,16 @@ impl CodeGenerator {
                 self.gen_variable_declaration(decl, ctx)?;
             }
             ASTNode::FunctionDeclaration(func) => {
-                let slot = self
-                    .lookup_var_slot(&func.name)
-                    .unwrap_or_else(|| self.declare_var(&func.name, VariableKind::Var));
+                let block_scoped = self.is_strict && self.depth > 0;
+                let slot = if block_scoped {
+                    match self.scope_stack.last().and_then(|scope| scope.get(&func.name)) {
+                        Some(entry) => entry.slot,
+                        None => self.declare_var(&func.name, VariableKind::Let),
+                    }
+                } else {
+                    self.lookup_var_slot(&func.name)
+                        .unwrap_or_else(|| self.declare_var(&func.name, VariableKind::Var))
+                };
                 let reg = self.gen_function_expression(
                     &func.params,
                     &func.body,
@@ -3144,7 +3151,7 @@ impl CodeGenerator {
                     self.emit_u16(reg);
                 }
 
-                if self.is_global_scope() && !(self.is_strict && self.is_eval) {
+                if !block_scoped && self.is_global_scope() && !(self.is_strict && self.is_eval) {
                     let atom = ctx.intern(&func.name);
                     let idx = self.add_constant(JSValue::new_string(atom));
                     if self.is_eval {
