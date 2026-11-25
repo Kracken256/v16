@@ -1242,7 +1242,12 @@ impl Lexer {
                         "??".to_string()
                     }
                 }
-                '?' if next == '.' => {
+                '?' if next == '.'
+                    && !self
+                        .source
+                        .get(self.pos + 1)
+                        .is_some_and(|c| c.is_ascii_digit()) =>
+                {
                     self.advance();
                     "?.".to_string()
                 }
