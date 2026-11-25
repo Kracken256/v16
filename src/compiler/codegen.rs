@@ -1011,7 +1011,7 @@ impl CodeGenerator {
     }
 
     fn is_global_var(&self, name: &str) -> bool {
-        if !self.is_global_scope() {
+        if !self.is_global_scope() || (self.is_strict && self.is_eval) {
             return false;
         }
         let mut position = None;
