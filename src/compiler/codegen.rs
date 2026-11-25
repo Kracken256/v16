@@ -2705,6 +2705,23 @@ impl CodeGenerator {
                         self.pre_scan_binding(&d.id, decl.kind);
                     }
                 }
+                ASTNode::ExportNamedDeclaration(export) => match &export.declaration {
+                    Some(crate::compiler::ast::ExportDeclaration::Variable(decl))
+                        if decl.kind != VariableKind::Var =>
+                    {
+                        for d in &decl.declarations {
+                            self.pre_scan_binding(&d.id, decl.kind);
+                        }
+                    }
+                    Some(crate::compiler::ast::ExportDeclaration::Class(class)) => {
+                        if let Some(last) = self.scope_stack.last() {
+                            if !last.contains_key(&class.name) {
+                                self.declare_var(&class.name, VariableKind::Let);
+                            }
+                        }
+                    }
+                    _ => {}
+                },
                 ASTNode::ClassDeclaration(class) => {
                     if let Some(last) = self.scope_stack.last() {
                         if !last.contains_key(&class.name) {
@@ -2859,6 +2876,23 @@ impl CodeGenerator {
                     for d in &decl.declarations {
                         self.emit_tdz_for_binding(&d.id)?;
                     }
+                }
+            } else if let ASTNode::ExportNamedDeclaration(export) = node {
+                match &export.declaration {
+                    Some(crate::compiler::ast::ExportDeclaration::Variable(decl))
+                        if decl.kind != VariableKind::Var =>
+                    {
+                        for d in &decl.declarations {
+                            self.emit_tdz_for_binding(&d.id)?;
+                        }
+                    }
+                    Some(crate::compiler::ast::ExportDeclaration::Class(class)) => {
+                        if let Some(slot) = self.lookup_var_slot(&class.name) {
+                            self.emit(Opcode::LoadTdz);
+                            self.emit_u16(slot);
+                        }
+                    }
+                    _ => {}
                 }
             } else if let ASTNode::ClassDeclaration(class) = node {
                 if let Some(slot) = self.lookup_var_slot(&class.name) {
