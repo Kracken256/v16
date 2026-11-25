@@ -2080,6 +2080,14 @@ impl Parser {
     fn parse_exponentiation(&mut self) -> Result<Expression, String> {
         let left = self.parse_unary()?;
         if self.at_punct("**") {
+            let unparenthesized_unary = match &left {
+                Expression::UnaryExpression(u) => !u.parenthesized,
+                Expression::AwaitExpression(a) => !a.parenthesized,
+                _ => false,
+            };
+            if unparenthesized_unary {
+                return Err("SyntaxError: Unary expression used as base of exponentiation operator".to_string());
+            }
             self.advance();
             let right = self.parse_exponentiation()?;
             return Ok(Expression::BinaryExpression(BinaryExpression {
@@ -2099,6 +2107,7 @@ impl Parser {
                 op: UnaryOp::Not,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
 
@@ -2109,6 +2118,7 @@ impl Parser {
                 op: UnaryOp::BitNot,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
 
@@ -2119,6 +2129,7 @@ impl Parser {
                 op: UnaryOp::Minus,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
 
@@ -2129,6 +2140,7 @@ impl Parser {
                 op: UnaryOp::Plus,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
         if self.at_keyword("typeof") {
@@ -2138,6 +2150,7 @@ impl Parser {
                 op: UnaryOp::TypeOf,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
         if self.at_keyword("void") {
@@ -2147,6 +2160,7 @@ impl Parser {
                 op: UnaryOp::Void,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
         if self.at_keyword("delete") {
@@ -2156,6 +2170,7 @@ impl Parser {
                 op: UnaryOp::Delete,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
 
@@ -2166,6 +2181,7 @@ impl Parser {
                 op: UpdateOp::Increment,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
         if self.at_punct("--") {
@@ -2175,6 +2191,7 @@ impl Parser {
                 op: UpdateOp::Decrement,
                 argument: Box::new(arg),
                 prefix: true,
+                parenthesized: false,
             }));
         }
 
@@ -2183,6 +2200,7 @@ impl Parser {
             let arg = self.parse_unary()?;
             return Ok(Expression::AwaitExpression(AwaitExpression {
                 argument: Box::new(arg),
+                parenthesized: false,
             }));
         }
 
@@ -2198,6 +2216,7 @@ impl Parser {
                 op: UpdateOp::Increment,
                 argument: Box::new(expr),
                 prefix: false,
+                parenthesized: false,
             }));
         }
         if self.at_punct("--") && !self.has_line_terminator() {
@@ -2206,6 +2225,7 @@ impl Parser {
                 op: UpdateOp::Decrement,
                 argument: Box::new(expr),
                 prefix: false,
+                parenthesized: false,
             }));
         }
 
@@ -2341,6 +2361,9 @@ impl Parser {
                 Expression::YieldExpression(y) => y.parenthesized = true,
                 Expression::AssignmentExpression(a) => a.parenthesized = true,
                 Expression::Identifier(id) => id.parenthesized = true,
+                Expression::UnaryExpression(u) => u.parenthesized = true,
+                Expression::UpdateExpression(u) => u.parenthesized = true,
+                Expression::AwaitExpression(a) => a.parenthesized = true,
                 _ => {}
             }
             return Ok(expr);

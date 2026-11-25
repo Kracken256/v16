@@ -188,6 +188,7 @@ pub struct UnaryExpression {
     pub op: UnaryOp,
     pub argument: Box<Expression>,
     pub prefix: bool,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,6 +207,7 @@ pub struct UpdateExpression {
     pub op: UpdateOp,
     pub argument: Box<Expression>,
     pub prefix: bool,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -377,6 +379,7 @@ pub enum ArrowBody {
 #[derive(Debug, Clone)]
 pub struct AwaitExpression {
     pub argument: Box<Expression>,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]
