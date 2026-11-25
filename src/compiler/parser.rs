@@ -1058,6 +1058,13 @@ impl Parser {
             return self.parse_for_rest(Some(ForInit::VariableDeclaration(decl)));
         }
 
+        if self.at_keyword("async")
+            && !self.current.as_ref().map_or(false, |t| t.had_escape)
+            && self.peek_at("of")
+        {
+            return Err(self.error("Unexpected token 'of' after 'async'"));
+        }
+
         let expr = self.parse_expression_no_in()?;
         if self.at_keyword("in") {
             self.advance();
