@@ -149,7 +149,11 @@ impl<'a> ExecContext<'a> {
         let mut captures: Vec<(Option<usize>, Option<usize>)> =
             vec![(None, None); self.capture_count];
 
-        while pos < char_len {
+        if pos > char_len {
+            return None;
+        }
+
+        loop {
             let mut regs = RegisterFile::default();
             regs.r[REG_POS] = pos;
 
@@ -165,7 +169,7 @@ impl<'a> ExecContext<'a> {
                 });
             }
 
-            if is_sticky {
+            if is_sticky || pos >= char_len {
                 break;
             }
             pos += 1;
