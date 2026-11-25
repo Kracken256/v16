@@ -2192,6 +2192,19 @@ impl CodeGenerator {
         result
     }
 
+    pub fn compile_module(
+        &mut self,
+        body: &BlockStatement,
+        ctx: &mut JSContext,
+    ) -> Result<(Bytecode, Vec<(u32, u16)>), String> {
+        let saved_scope_is_global = self.scope_is_global.clone();
+        self.scope_is_global = vec![false];
+        let result =
+            self.compile_function_with_parent(&[], body, ctx, FxHashMap::default(), None, true);
+        self.scope_is_global = saved_scope_is_global;
+        result
+    }
+
     fn compile_function_with_parent(
         &mut self,
         params: &[Parameter],

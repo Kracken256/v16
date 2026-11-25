@@ -1018,7 +1018,7 @@ pub fn load_and_evaluate_module_with_attributes(
             body: ast.body,
             lines: ast.lines,
         };
-        let (mut rb, _) = codegen.compile_script(&block, ctx)?;
+        let (mut rb, _) = codegen.compile_module(&block, ctx)?;
         peephole::optimize_with_level(&mut rb, opt_level);
         rb
     };
