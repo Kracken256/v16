@@ -5,6 +5,17 @@ use crate::runtime::context::JSContext;
 use crate::util::FxHashMap;
 use crate::value::JSValue;
 
+enum ChainStep {
+    Member {
+        property: MemberProperty,
+        optional: bool,
+    },
+    Call {
+        arguments: Vec<Argument>,
+        optional: bool,
+    },
+}
+
 #[derive(Debug)]
 struct BreakableFrame {
     labels: Vec<String>,
@@ -5713,6 +5724,7 @@ impl CodeGenerator {
             Expression::AssignmentExpression(assign) => self.gen_assignment_expression(assign, ctx),
             Expression::ConditionalExpression(cond) => self.gen_conditional_expression(cond, ctx),
             Expression::MemberExpression(member) => self.gen_member_expression(member, ctx),
+            Expression::ChainExpression(chain) => self.gen_chain_expression(chain, ctx),
             Expression::OptionalMemberExpression(opt) => {
                 let obj_reg = self.gen_expression(&opt.object, ctx)?;
                 let result = self.alloc_register();
@@ -8495,6 +8507,315 @@ impl CodeGenerator {
         Ok(result)
     }
 
+    fn flatten_chain(expr: &Expression, steps: &mut Vec<ChainStep>) -> Expression {
+        match expr {
+            Expression::MemberExpression(member) => {
+                steps.push(ChainStep::Member {
+                    property: member.property.clone(),
+                    optional: false,
+                });
+                Self::flatten_chain(&member.object, steps)
+            }
+            Expression::OptionalMemberExpression(member) => {
+                steps.push(ChainStep::Member {
+                    property: member.property.clone(),
+                    optional: true,
+                });
+                (*member.object).clone()
+            }
+            Expression::CallExpression(call) => {
+                steps.push(ChainStep::Call {
+                    arguments: call.arguments.clone(),
+                    optional: false,
+                });
+                Self::flatten_chain(&call.callee, steps)
+            }
+            Expression::OptionalCallExpression(call) => {
+                steps.push(ChainStep::Call {
+                    arguments: call.arguments.clone(),
+                    optional: true,
+                });
+                (*call.callee).clone()
+            }
+            other => other.clone(),
+        }
+    }
+
+    fn gen_chain_expression(
+        &mut self,
+        chain: &Expression,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        let (value, this_reg) = self.gen_chain_expression_with_this(chain, ctx)?;
+        self.free_register(this_reg);
+        Ok(value)
+    }
+
+    fn gen_chain_expression_with_this(
+        &mut self,
+        chain: &Expression,
+        ctx: &mut JSContext,
+    ) -> Result<(u16, u16), String> {
+        let mut steps = Vec::new();
+        let base = Self::flatten_chain(chain, &mut steps);
+        steps.reverse();
+
+        let result = self.alloc_register();
+        let base_is_super = matches!(base, Expression::Super);
+        let mut base_this = None;
+        if base_is_super {
+            self.emit(Opcode::GetSuperBase);
+            self.emit_u16(result);
+        } else if let Expression::ChainExpression(inner) = &base {
+            let (value, this) = self.gen_chain_expression_with_this(inner, ctx)?;
+            self.emit(Opcode::Move);
+            self.emit_u16(result);
+            self.emit_u16(value);
+            self.free_register(value);
+            base_this = Some(this);
+        } else if matches!(
+            base,
+            Expression::MemberExpression(_)
+                | Expression::OptionalMemberExpression(_)
+                | Expression::OptionalCallExpression(_)
+        ) {
+            let (value, this) = self.gen_chain_expression_with_this(&base, ctx)?;
+            self.emit(Opcode::Move);
+            self.emit_u16(result);
+            self.emit_u16(value);
+            self.free_register(value);
+            base_this = Some(this);
+        } else {
+            let base_reg = self.gen_expression(&base, ctx)?;
+            if base_reg != result {
+                self.emit(Opcode::Move);
+                self.emit_u16(result);
+                self.emit_u16(base_reg);
+                self.free_register(base_reg);
+            }
+        }
+
+        let this_reg = match base_this {
+            Some(reg) => reg,
+            None => {
+                let reg = self.alloc_register();
+                self.emit(Opcode::LoadUndefined);
+                self.emit_u16(reg);
+                reg
+            }
+        };
+        let mut has_this = base_this.is_some();
+
+        let mut short_jumps = Vec::new();
+        let mut first_member = true;
+
+        for step in steps {
+            match step {
+                ChainStep::Member { property, optional } => {
+                    if first_member && base_is_super {
+                        first_member = false;
+                        self.emit(Opcode::Move);
+                        self.emit_u16(this_reg);
+                        self.emit_u16(0);
+                        has_this = true;
+                        match property {
+                            MemberProperty::Identifier(name) => {
+                                let key = self.alloc_register();
+                                let key_idx = self.intern_and_add_const(ctx, &name);
+                                self.emit(Opcode::LoadConst);
+                                self.emit_u16(key);
+                                self.emit_u32(key_idx);
+                                self.emit(Opcode::GetSuperProp);
+                                self.emit_u16(result);
+                                self.emit_u16(result);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.free_register(key);
+                            }
+                            MemberProperty::Computed(key_expr) => {
+                                let key = self.gen_expression(&key_expr, ctx)?;
+                                self.emit(Opcode::GetSuperProp);
+                                self.emit_u16(result);
+                                self.emit_u16(result);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.free_register(key);
+                            }
+                            MemberProperty::PrivateIdentifier(_) => {
+                                return Err(
+                                    "Private identifiers cannot be accessed through super".to_string()
+                                );
+                            }
+                        }
+                        continue;
+                    }
+                    first_member = false;
+                    let obj = self.alloc_register();
+                    self.emit(Opcode::Move);
+                    self.emit_u16(obj);
+                    self.emit_u16(result);
+                    if optional {
+                        short_jumps.push(self.emit_jump_if_nullish(obj));
+                    }
+                    self.emit(Opcode::Move);
+                    self.emit_u16(this_reg);
+                    self.emit_u16(obj);
+                    has_this = true;
+                    match property {
+                        MemberProperty::Identifier(name) => {
+                            let atom = ctx.intern(&name);
+                            self.emit(Opcode::GetNamedProp);
+                            self.emit_u16(result);
+                            self.emit_u16(obj);
+                            self.emit_u32(atom.0);
+                        }
+                        MemberProperty::Computed(key_expr) => {
+                            let key = self.gen_expression(&key_expr, ctx)?;
+                            self.emit(Opcode::GetField);
+                            self.emit_u16(result);
+                            self.emit_u16(obj);
+                            self.emit_u16(key);
+                            self.free_register(key);
+                        }
+                        MemberProperty::PrivateIdentifier(name) => {
+                            let key_idx = self.intern_and_add_const(ctx, &name);
+                            let key = self.alloc_register();
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key);
+                            self.emit_u32(key_idx);
+                            self.emit(Opcode::GetPrivate);
+                            self.emit_u16(result);
+                            self.emit_u16(obj);
+                            self.emit_u16(key);
+                            self.free_register(key);
+                        }
+                    }
+                    self.free_register(obj);
+                }
+                ChainStep::Call { arguments, optional } => {
+                    if optional {
+                        short_jumps.push(self.emit_jump_if_nullish(result));
+                    }
+                    self.emit_chain_call(result, this_reg, has_this, &arguments, ctx)?;
+                    self.emit(Opcode::LoadUndefined);
+                    self.emit_u16(this_reg);
+                    has_this = false;
+                }
+            }
+        }
+
+        self.emit(Opcode::Jump);
+        let end_jump = self.code.len();
+        self.emit_i32(0);
+        let short_pos = self.code.len();
+        for patch in short_jumps {
+            self.patch_jump(patch, short_pos);
+        }
+        self.emit(Opcode::LoadUndefined);
+        self.emit_u16(result);
+        let end_pos = self.code.len();
+        self.patch_jump(end_jump, end_pos);
+
+        Ok((result, this_reg))
+    }
+
+    fn emit_chain_call(
+        &mut self,
+        dst: u16,
+        this_reg: u16,
+        has_this: bool,
+        arguments: &[Argument],
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        let has_spread = arguments.iter().any(|a| matches!(a, Argument::Spread(_)));
+        if has_spread {
+            let arr = self.alloc_register();
+            self.emit(Opcode::NewArray);
+            self.emit_u16(arr);
+            self.emit_u16(0);
+            for arg in arguments {
+                match arg {
+                    Argument::Expression(expr) => {
+                        let val = self.gen_expression(expr, ctx)?;
+                        self.emit(Opcode::ArrayPush);
+                        self.emit_u16(arr);
+                        self.emit_u16(val);
+                        self.free_register(val);
+                    }
+                    Argument::Spread(expr) => {
+                        let val = self.gen_expression(expr, ctx)?;
+                        self.emit_spread_into_array(arr, val, ctx)?;
+                    }
+                }
+            }
+            if has_this {
+                self.emit(Opcode::CallMethodSpread);
+                self.emit_u16(dst);
+                self.emit_u16(this_reg);
+                self.emit_u16(dst);
+                self.emit_u16(arr);
+            } else {
+                self.emit(Opcode::CallSpread);
+                self.emit_u16(dst);
+                self.emit_u16(dst);
+                self.emit_u16(arr);
+            }
+            self.free_register(arr);
+            return Ok(());
+        }
+
+        let mut arg_regs = Vec::new();
+        for arg in arguments {
+            if let Argument::Expression(expr) = arg {
+                arg_regs.push(self.gen_expression(expr, ctx)?);
+            }
+        }
+        if has_this {
+            self.emit(Opcode::CallMethod);
+            self.emit_u16(dst);
+            self.emit_u16(this_reg);
+            self.emit_u16(dst);
+            self.emit_u16(arg_regs.len() as u16);
+            for reg in &arg_regs {
+                self.emit_u16(*reg);
+            }
+        } else {
+            match arg_regs.len() {
+                0 => {
+                    self.emit(Opcode::Call0);
+                    self.emit_u16(dst);
+                    self.emit_u16(dst);
+                }
+                1 => {
+                    self.emit(Opcode::Call1);
+                    self.emit_u16(dst);
+                    self.emit_u16(dst);
+                    self.emit_u16(arg_regs[0]);
+                }
+                2 => {
+                    self.emit(Opcode::Call2);
+                    self.emit_u16(dst);
+                    self.emit_u16(dst);
+                    self.emit_u16(arg_regs[0]);
+                    self.emit_u16(arg_regs[1]);
+                }
+                _ => {
+                    self.emit(Opcode::Call);
+                    self.emit_u16(dst);
+                    self.emit_u16(dst);
+                    self.emit_u16(arg_regs.len() as u16);
+                    for reg in &arg_regs {
+                        self.emit_u16(*reg);
+                    }
+                }
+            }
+        }
+        for reg in arg_regs {
+            self.free_register(reg);
+        }
+        Ok(())
+    }
+
     fn gen_member_expression(
         &mut self,
         member: &MemberExpression,
@@ -8809,6 +9130,10 @@ impl CodeGenerator {
                 } else {
                     (func_reg, Some(obj_reg), None)
                 }
+            }
+            Expression::ChainExpression(inner) => {
+                let (func_reg, this_reg) = self.gen_chain_expression_with_this(inner, ctx)?;
+                (func_reg, Some(this_reg), None)
             }
             other => {
                 let func_reg = self.gen_expression(other, ctx)?;

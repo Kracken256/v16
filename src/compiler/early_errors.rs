@@ -1327,6 +1327,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             }
             Ok(())
         }
+        Expression::ChainExpression(inner) => validate_expression(inner, ctx),
         Expression::NewExpression(n) => {
             validate_expression(&n.callee, ctx)?;
             for a in &n.arguments {
@@ -1400,7 +1401,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
 
 fn expression_contains_optional_chain(expr: &Expression) -> bool {
     match expr {
-        Expression::OptionalMemberExpression(_) => true,
+        Expression::ChainExpression(_) | Expression::OptionalMemberExpression(_) => true,
         Expression::MemberExpression(m) => expression_contains_optional_chain(&m.object),
         Expression::CallExpression(c) => expression_contains_optional_chain(&c.callee),
         _ => false,
@@ -1546,6 +1547,7 @@ fn expr_contains(expr: &Expression, mode: Scan) -> bool {
         Expression::OptionalCallExpression(c) => {
             expr_contains(&c.callee, mode) || c.arguments.iter().any(|a| arg_contains(a, mode))
         }
+        Expression::ChainExpression(inner) => expr_contains(inner, mode),
         Expression::NewExpression(n) => {
             expr_contains(&n.callee, mode) || n.arguments.iter().any(|a| arg_contains(a, mode))
         }

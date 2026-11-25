@@ -2260,6 +2260,7 @@ impl Parser {
 
     fn parse_member_expression(&mut self) -> Result<Expression, String> {
         let mut expr = self.parse_primary()?;
+        let mut saw_optional = false;
 
         loop {
             if self.at_punct(".") {
@@ -2283,6 +2284,7 @@ impl Parser {
                     });
                 }
             } else if self.at_punct("?.") {
+                saw_optional = true;
                 self.advance();
                 if self.at_punct("[") {
                     self.advance();
@@ -2353,6 +2355,9 @@ impl Parser {
             }
         }
 
+        if saw_optional && !matches!(expr, Expression::ChainExpression(_)) {
+            expr = Expression::ChainExpression(Box::new(expr));
+        }
         Ok(expr)
     }
 

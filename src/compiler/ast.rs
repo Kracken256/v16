@@ -75,6 +75,7 @@ pub enum Expression {
     NewExpression(NewExpression),
     OptionalMemberExpression(OptionalMemberExpression),
     OptionalCallExpression(OptionalCallExpression),
+    ChainExpression(Box<Expression>),
 
     ArrowFunction(ArrowFunction),
     AwaitExpression(AwaitExpression),
