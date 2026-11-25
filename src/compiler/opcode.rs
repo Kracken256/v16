@@ -212,6 +212,7 @@ pub enum Opcode {
     AsyncIteratorCloseFinally = 248,
     AddDisposableResource = 249,
     DisposeResourcesFinally = 250,
+    SetUpvalueDirect = 251,
 }
 
 impl Opcode {
@@ -415,6 +416,7 @@ impl Opcode {
             248 => Some(Opcode::AsyncIteratorCloseFinally),
             249 => Some(Opcode::AddDisposableResource),
             250 => Some(Opcode::DisposeResourcesFinally),
+            251 => Some(Opcode::SetUpvalueDirect),
             _ => None,
         }
     }
@@ -428,7 +430,7 @@ impl Opcode {
         match op {
             Opcode::Nop | Opcode::End | Opcode::Catch | Opcode::Finally | Opcode::EndFinally => 1,
             Opcode::ParamInitMark => 2,
-            Opcode::MarkDirectEval => 2,
+            Opcode::MarkDirectEval => 8,
             Opcode::ResetPerIterVar => 3,
             Opcode::Return => 3,
             Opcode::LoadTrue
@@ -495,7 +497,7 @@ impl Opcode {
             | Opcode::GetGlobal
             | Opcode::SetGlobal
             | Opcode::CheckRef => 7,
-            Opcode::GetUpvalue | Opcode::SetUpvalue => 5,
+            Opcode::GetUpvalue | Opcode::SetUpvalue | Opcode::SetUpvalueDirect => 5,
             Opcode::NewArray => 5,
             Opcode::GetField | Opcode::GetProp => 7,
             Opcode::SetField | Opcode::SetProp => 7,
@@ -793,12 +795,17 @@ impl Bytecode {
                 | Opcode::End
                 | Opcode::Catch
                 | Opcode::CheckThisInitialized
-                | Opcode::MarkDirectEval
                 | Opcode::Finally
                 | Opcode::EndFinally => {}
                 Opcode::ParamInitMark => {
                     let a = read_u8(1);
                     write!(operands, " {}", a).unwrap();
+                }
+                Opcode::MarkDirectEval => {
+                    let flags = read_u8(1);
+                    let start = read_u32(2);
+                    let count = read_u16(6);
+                    write!(operands, " {}, {}, {}", flags, start, count).unwrap();
                 }
                 Opcode::ResetPerIterVar => {
                     let a = read_u16(1);
@@ -986,7 +993,7 @@ impl Bytecode {
                     let src = read_u16(5);
                     write!(operands, " {}, r{}", idx, src).unwrap();
                 }
-                Opcode::GetUpvalue | Opcode::SetUpvalue => {
+                Opcode::GetUpvalue | Opcode::SetUpvalue | Opcode::SetUpvalueDirect => {
                     let a = read_u16(1);
                     let b = read_u16(3);
                     write!(operands, " r{}, r{}", a, b).unwrap();

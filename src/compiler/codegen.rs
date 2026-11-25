@@ -298,6 +298,7 @@ pub struct CodeGenerator {
     in_static_method: bool,
     in_async_generator: bool,
     pub(crate) in_field_initializer: bool,
+    in_parameter_initializer: bool,
     in_default_derived_constructor: bool,
     pending_field_init_range: Option<(usize, usize)>,
     field_init_name: Option<String>,
@@ -374,6 +375,7 @@ impl CodeGenerator {
             in_static_method: false,
             in_async_generator: false,
             in_field_initializer: false,
+            in_parameter_initializer: false,
             in_default_derived_constructor: false,
             pending_field_init_range: None,
             field_init_name: None,
@@ -849,6 +851,40 @@ impl CodeGenerator {
     fn intern_and_add_const(&mut self, ctx: &mut JSContext, name: &str) -> u32 {
         let atom = ctx.atom_table_mut().intern(name);
         self.add_constant(JSValue::new_string(atom))
+    }
+
+    fn emit_mark_direct_eval(&mut self, ctx: &mut JSContext) {
+        let mut names: Vec<String> = if self.in_parameter_initializer {
+            self.scope_stack
+                .first()
+                .map(|scope| {
+                    scope
+                        .iter()
+                        .filter(|(_, entry)| {
+                            entry.kind != VariableKind::Var && !entry.is_function_name
+                        })
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            self.scope_stack
+                .iter()
+                .skip(1)
+                .flat_map(|scope| scope.keys().cloned())
+                .collect()
+        };
+        names.sort();
+        names.dedup();
+        let start = self.constants.len() as u32;
+        for name in &names {
+            let atom = ctx.intern(name);
+            self.add_constant(JSValue::new_string(atom));
+        }
+        self.emit(Opcode::MarkDirectEval);
+        self.emit_u8(if self.in_field_initializer { 1 } else { 0 });
+        self.emit_u32(start);
+        self.emit_u16(names.len() as u16);
     }
 
     fn emit_throw_const_assignment(&mut self, name: &str, ctx: &mut JSContext) {
@@ -2502,12 +2538,12 @@ impl CodeGenerator {
             }
         }
 
+        self.in_parameter_initializer = true;
         for (index, param) in params.iter().enumerate() {
             let value_reg = (index as u16) + 1;
             let saved_tmp = arg_saves[index];
 
             if let Some(tmp) = saved_tmp {
-                // Restore the argument value from the saved temp, overwriting TDZ.
                 self.emit(Opcode::Move);
                 self.emit_u16(value_reg);
                 self.emit_u16(tmp);
@@ -2549,6 +2585,7 @@ impl CodeGenerator {
                 Parameter::RestElement(_) => break,
             }
         }
+        self.in_parameter_initializer = false;
 
         if !is_simple_params {
             self.emit(Opcode::ParamInitMark);
@@ -8576,6 +8613,98 @@ impl CodeGenerator {
                     return Ok(current);
                 }
 
+                if let Some(opcode) = is_compound {
+                    let resolved = self.resolve_var(name, ctx);
+                    let mut needs_tdz = false;
+                    if let Some(entry) = self.lookup_var(name) {
+                        needs_tdz = entry.kind != VariableKind::Var && !entry.initialized;
+                    } else if let Some(parent_var) = self.parent_vars.get(name) {
+                        if !parent_var.is_inherited {
+                            needs_tdz =
+                                parent_var.kind != VariableKind::Var && !parent_var.initialized;
+                        }
+                    }
+                    let current = match resolved {
+                        Some(VarLocation::Local(slot)) => {
+                            if needs_tdz {
+                                self.emit(Opcode::CheckTdz);
+                                self.emit_u16(slot);
+                            }
+                            let current = self.alloc_register();
+                            self.emit(Opcode::Move);
+                            self.emit_u16(current);
+                            self.emit_u16(slot);
+                            current
+                        }
+                        Some(VarLocation::Upvalue(slot)) => {
+                            let current = self.alloc_register();
+                            self.emit(Opcode::GetUpvalue);
+                            self.emit_u16(current);
+                            self.emit_u16(slot);
+                            if needs_tdz {
+                                self.emit(Opcode::CheckTdz);
+                                self.emit_u16(current);
+                            }
+                            current
+                        }
+                        None => {
+                            let atom = ctx.intern(name);
+                            let idx = self.add_constant(JSValue::new_string(atom));
+                            let current = self.alloc_register();
+                            self.emit(Opcode::GetGlobal);
+                            self.emit_u16(current);
+                            self.emit_u32(idx);
+                            if !self.suppress_ref_error {
+                                self.emit(Opcode::CheckRef);
+                                self.emit_u16(current);
+                                self.emit_u32(idx);
+                            }
+                            current
+                        }
+                    };
+                    let val = self.gen_expression(&assign.right, ctx)?;
+                    self.emit(opcode);
+                    self.emit_u16(current);
+                    self.emit_u16(current);
+                    self.emit_u16(val);
+                    self.free_register(val);
+                    match resolved {
+                        Some(VarLocation::Local(slot)) => {
+                            if slot != current {
+                                self.emit(Opcode::Move);
+                                self.emit_u16(slot);
+                                self.emit_u16(current);
+                            }
+                            if self.is_global_var(name) {
+                                let idx = self.add_constant(JSValue::new_string(ctx.intern(name)));
+                                if self.is_eval {
+                                    self.emit(Opcode::SetGlobalVar);
+                                } else {
+                                    self.emit(Opcode::SetGlobal);
+                                }
+                                self.emit_u32(idx);
+                                self.emit_u16(current);
+                            }
+                        }
+                        Some(VarLocation::Upvalue(slot)) => {
+                            self.emit(Opcode::SetUpvalueDirect);
+                            self.emit_u16(slot);
+                            self.emit_u16(current);
+                        }
+                        None => {
+                            let idx = self.add_constant(JSValue::new_string(ctx.intern(name)));
+                            if self.is_eval {
+                                self.emit(Opcode::SetGlobalVar);
+                            } else {
+                                self.emit(Opcode::SetGlobal);
+                            }
+                            self.emit_u32(idx);
+                            self.emit_u16(current);
+                        }
+                    }
+                    return Ok(current);
+                }
+
                 let val = if assign.lhs_parenthesized {
                     self.gen_expression(&assign.right, ctx)?
                 } else {
@@ -8653,7 +8782,7 @@ impl CodeGenerator {
                                 self.emit_u16(tmp);
                                 self.free_register(tmp);
                             }
-                            self.emit(Opcode::SetUpvalue);
+                            self.emit(Opcode::SetUpvalueDirect);
                             self.emit_u16(slot);
                             self.emit_u16(val);
                         }
@@ -10490,8 +10619,7 @@ impl CodeGenerator {
                 }
             }
             if is_direct_eval {
-                self.emit(Opcode::MarkDirectEval);
-                self.emit_u8(if self.in_field_initializer { 1 } else { 0 });
+                self.emit_mark_direct_eval(ctx);
             }
             if let Some(obj_reg) = obj {
                 self.emit(Opcode::CallMethodSpread);
@@ -10524,8 +10652,7 @@ impl CodeGenerator {
                 }
             }
             if is_direct_eval {
-                self.emit(Opcode::MarkDirectEval);
-                self.emit_u8(if self.in_field_initializer { 1 } else { 0 });
+                self.emit_mark_direct_eval(ctx);
             }
             if let Some(obj_reg) = obj {
                 self.emit(Opcode::CallMethod);

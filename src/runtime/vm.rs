@@ -728,6 +728,7 @@ pub struct VM {
     cached_ic_table_ptr: *mut crate::compiler::InlineCacheTable,
 
     cached_upvalue_slot_ptr: *const std::rc::Rc<std::cell::Cell<JSValue>>,
+    cached_upvalue_atom_ptr: *const crate::runtime::atom::Atom,
     cached_upvalues_len: usize,
 
     exception_handlers: Vec<ExceptionHandler>,
@@ -752,6 +753,10 @@ pub struct VM {
     eval_binding_frames: u32,
 
     eval_direct_flags: u8,
+
+    eval_direct_scope_start: u32,
+
+    eval_direct_scope_count: u16,
 
     pending_instance_elements: Option<(JSValue, usize)>,
 
@@ -828,6 +833,7 @@ impl VM {
             cached_upvalue_sync_bitset: 0,
             cached_ic_table_ptr: std::ptr::null_mut(),
             cached_upvalue_slot_ptr: std::ptr::null(),
+            cached_upvalue_atom_ptr: std::ptr::null(),
             cached_upvalues_len: 0,
             exception_handlers: Vec::new(),
             pending_throw: None,
@@ -843,6 +849,8 @@ impl VM {
             caller_vm: None,
             eval_binding_frames: 0,
             eval_direct_flags: 0,
+            eval_direct_scope_start: 0,
+            eval_direct_scope_count: 0,
             pending_instance_elements: None,
             pending_super_rebind_error: false,
             cached_has_instance_atom: crate::runtime::atom::Atom(0),
@@ -1153,17 +1161,21 @@ impl VM {
                 if let Some(uv) = func.upvalues.as_ref() {
                     let slots = &uv.upvalue_slots;
                     self.cached_upvalue_slot_ptr = slots.as_ptr();
+                    self.cached_upvalue_atom_ptr = uv.upvalue_slot_atoms.as_ptr();
                     self.cached_upvalues_len = slots.len();
                 } else {
                     self.cached_upvalue_slot_ptr = std::ptr::null();
+                    self.cached_upvalue_atom_ptr = std::ptr::null();
                     self.cached_upvalues_len = 0;
                 }
             } else {
                 self.cached_upvalue_slot_ptr = std::ptr::null();
+                self.cached_upvalue_atom_ptr = std::ptr::null();
                 self.cached_upvalues_len = 0;
             }
         } else {
             self.cached_upvalue_slot_ptr = std::ptr::null();
+            self.cached_upvalue_atom_ptr = std::ptr::null();
             self.cached_upvalues_len = 0;
         }
     }
@@ -1329,17 +1341,21 @@ impl VM {
                 if let Some(uv) = func.upvalues.as_ref() {
                     let slots = &uv.upvalue_slots;
                     self.cached_upvalue_slot_ptr = slots.as_ptr();
+                    self.cached_upvalue_atom_ptr = uv.upvalue_slot_atoms.as_ptr();
                     self.cached_upvalues_len = slots.len();
                 } else {
                     self.cached_upvalue_slot_ptr = std::ptr::null();
+                    self.cached_upvalue_atom_ptr = std::ptr::null();
                     self.cached_upvalues_len = 0;
                 }
             } else {
                 self.cached_upvalue_slot_ptr = std::ptr::null();
+                self.cached_upvalue_atom_ptr = std::ptr::null();
                 self.cached_upvalues_len = 0;
             }
         } else {
             self.cached_upvalue_slot_ptr = std::ptr::null();
+            self.cached_upvalue_atom_ptr = std::ptr::null();
             self.cached_upvalues_len = 0;
         }
     }
@@ -1480,17 +1496,21 @@ impl VM {
                 if let Some(uv) = func.upvalues.as_ref() {
                     let slots = &uv.upvalue_slots;
                     self.cached_upvalue_slot_ptr = slots.as_ptr();
+                    self.cached_upvalue_atom_ptr = uv.upvalue_slot_atoms.as_ptr();
                     self.cached_upvalues_len = slots.len();
                 } else {
                     self.cached_upvalue_slot_ptr = std::ptr::null();
+                    self.cached_upvalue_atom_ptr = std::ptr::null();
                     self.cached_upvalues_len = 0;
                 }
             } else {
                 self.cached_upvalue_slot_ptr = std::ptr::null();
+                self.cached_upvalue_atom_ptr = std::ptr::null();
                 self.cached_upvalues_len = 0;
             }
         } else {
             self.cached_upvalue_slot_ptr = std::ptr::null();
+            self.cached_upvalue_atom_ptr = std::ptr::null();
             self.cached_upvalues_len = 0;
         }
     }
@@ -1782,45 +1802,40 @@ impl VM {
     ) -> bool {
         if let Some(ptr) = self.caller_vm {
             let caller = unsafe { &mut *(ptr as *mut VM) };
-            for fi in (0..=caller.frame_index).rev() {
-                if let Some(ref eb) = caller.frames[fi].eval_bindings {
-                    if eb.contains_key(&name_atom) {
-                        return true;
-                    }
-                }
-                if !caller.frames[fi].var_name_map.is_null() {
-                    let map = unsafe { &*caller.frames[fi].var_name_map };
-                    if map.iter().any(|&(an, _, tag)| an == name_atom && tag == 0) {
-                        return true;
-                    }
-                }
-            }
-
-            for fi in (0..=caller.frame_index).rev() {
-                if caller.frames[fi].function_ptr.is_some() || fi == 0 {
-                    if caller.frames[fi].eval_bindings.is_none() {
-                        caller.frames[fi].eval_bindings =
-                            Some(Box::new(std::collections::HashMap::new()));
-                        caller.eval_binding_frames += 1;
-                    }
-                    caller.frames[fi]
-                        .eval_bindings
-                        .as_mut()
-                        .unwrap()
-                        .insert(name_atom, value);
-                    if fi == 0 {
-                        let global = ctx.global();
-                        if global.is_object() {
-                            global.as_object_mut().set_cached(
-                                crate::runtime::atom::Atom(name_atom),
-                                value,
-                                ctx.shape_cache_mut(),
-                            );
-                        }
-                    }
+            let fi = caller.frame_index;
+            if let Some(ref eb) = caller.frames[fi].eval_bindings {
+                if eb.contains_key(&name_atom) {
                     return true;
                 }
             }
+            if !caller.frames[fi].var_name_map.is_null() {
+                let map = unsafe { &*caller.frames[fi].var_name_map };
+                if map.iter().any(|&(an, _, tag)| an == name_atom && tag == 0) {
+                    return true;
+                }
+            }
+
+            if caller.frames[fi].eval_bindings.is_none() {
+                caller.frames[fi].eval_bindings =
+                    Some(Box::new(std::collections::HashMap::new()));
+                caller.eval_binding_frames += 1;
+            }
+            caller.frames[fi]
+                .eval_bindings
+                .as_mut()
+                .unwrap()
+                .insert(name_atom, value);
+            if fi == 0 {
+                let global = ctx.global();
+                if global.is_object() {
+                    global.as_object_mut().set_cached(
+                        crate::runtime::atom::Atom(name_atom),
+                        value,
+                        ctx.shape_cache_mut(),
+                    );
+                }
+            }
+            return true;
         }
         false
     }
@@ -5216,8 +5231,59 @@ impl VM {
         result
     }
 
+    fn eval_direct_scope_contains(&self, name_atom: u32) -> bool {
+        let count = self.eval_direct_scope_count as usize;
+        if count == 0 {
+            return false;
+        }
+        let frame = &self.frames[self.frame_index];
+        if frame.constants_ptr.is_null() {
+            return false;
+        }
+        let start = self.eval_direct_scope_start as usize;
+        for index in start..start.saturating_add(count) {
+            if index >= frame.constants_len {
+                break;
+            }
+            let value = unsafe { *frame.constants_ptr.add(index) };
+            if value.is_string() && value.get_atom().0 == name_atom {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn direct_eval(&mut self, ctx: &mut JSContext, source: &str) -> Result<JSValue, String> {
         let is_strict_caller = self.frames[self.frame_index].is_strict_frame;
+
+        if !is_strict_caller && self.eval_direct_scope_count > 0 {
+            if let Some(var_names) = crate::compiler::eval_source_var_names(source) {
+                for name in var_names {
+                    let atom = ctx.intern(&name);
+                    if self.eval_direct_scope_contains(atom.0) {
+                        let mut err = crate::object::object::JSObject::new();
+                        err.set(
+                            ctx.intern("name"),
+                            JSValue::new_string(ctx.intern("SyntaxError")),
+                        );
+                        err.set(
+                            ctx.intern("message"),
+                            JSValue::new_string(ctx.intern(&format!(
+                                "Identifier '{}' has already been declared",
+                                name
+                            ))),
+                        );
+                        if let Some(proto) = ctx.get_syntax_error_prototype() {
+                            err.prototype = Some(proto);
+                        }
+                        let ptr = Box::into_raw(Box::new(err)) as usize;
+                        ctx.runtime_mut().gc_heap_mut().track(ptr);
+                        ctx.pending_exception = Some(JSValue::new_object(ptr));
+                        return Ok(JSValue::undefined());
+                    }
+                }
+            }
+        }
 
         if !is_strict_caller {
             let frame = &self.frames[self.frame_index];
@@ -7800,7 +7866,7 @@ impl VM {
                 Opcode::GetUpvalue => {
                     let dst = self.read_u16_pc();
                     let slot = self.read_u16_pc() as usize;
-                    let result = if !self.cached_upvalue_slot_ptr.is_null()
+                    let mut result = if !self.cached_upvalue_slot_ptr.is_null()
                         && slot < self.cached_upvalues_len
                     {
                         let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
@@ -7808,9 +7874,26 @@ impl VM {
                     } else {
                         JSValue::undefined()
                     };
+                    if self.eval_binding_frames > 0 && !self.cached_upvalue_atom_ptr.is_null() {
+                        if let Some(ref eb) = self.frames[self.frame_index].eval_bindings {
+                            let atom = unsafe { *self.cached_upvalue_atom_ptr.add(slot) };
+                            if let Some(value) = eb.get(&atom.0) {
+                                result = *value;
+                            }
+                        }
+                    }
                     self.set_reg(dst, result);
                 }
                 Opcode::SetUpvalue => {
+                    let slot = self.read_u16_pc() as usize;
+                    let src = self.read_u16_pc();
+                    let val = self.get_reg(src);
+                    if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
+                        let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
+                        unsafe { (*std::rc::Rc::as_ptr(rc)).as_ptr().write(val) };
+                    }
+                }
+                Opcode::SetUpvalueDirect => {
                     let slot = self.read_u16_pc() as usize;
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
@@ -10102,6 +10185,8 @@ impl VM {
                 }
                 Opcode::MarkDirectEval => {
                     self.eval_direct_flags = self.read_u8();
+                    self.eval_direct_scope_start = self.read_u32();
+                    self.eval_direct_scope_count = self.read_u16_pc();
                     self.eval_direct_call = true;
                 }
                 Opcode::CheckThisInitialized => {

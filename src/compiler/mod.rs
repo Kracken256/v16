@@ -222,19 +222,24 @@ fn collect_assignment_target_names(target: &ast::AssignmentTarget, out: &mut Vec
     }
 }
 
-pub fn eval_source_declares_var(source: &str, name: &str) -> bool {
+pub fn eval_source_var_names(source: &str) -> Option<Vec<String>> {
     let mut parser = parser::Parser::new(source);
     let Ok(program) = parser.parse() else {
-        return false;
+        return None;
     };
     if program_has_use_strict_directive(&program) {
-        return false;
+        return None;
     }
     let mut names = Vec::new();
     for stmt in &program.body {
         collect_var_declared_names(stmt, &mut names);
     }
-    names.iter().any(|declared| declared == name)
+    Some(names)
+}
+
+pub fn eval_source_declares_var(source: &str, name: &str) -> bool {
+    eval_source_var_names(source)
+        .map_or(false, |names| names.iter().any(|declared| declared == name))
 }
 
 pub fn compile_script_to_bytecode_with_opt_level(
