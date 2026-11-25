@@ -52,6 +52,14 @@ pub struct AsyncState {
     pub yield_is_result: bool,
 
     pub pending_yield: bool,
+
+    pub pending_finally_return: Option<(usize, JSValue)>,
+
+    pub pending_finally_rethrow: Option<(usize, JSValue)>,
+
+    pub pending_finally_jump: Option<(usize, usize, usize)>,
+
+    pub pending_finally_depth: usize,
 }
 
 pub struct AsyncGeneratorRequest {

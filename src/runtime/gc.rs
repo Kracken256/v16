@@ -608,6 +608,12 @@ impl GcHeap {
                     self.mark_value(exc);
                 }
                 self.mark_value(&state.resume_value);
+                if let Some((_, value)) = &state.pending_finally_return {
+                    self.mark_value(value);
+                }
+                if let Some((_, value)) = &state.pending_finally_rethrow {
+                    self.mark_value(value);
+                }
             }
 
             if let Some(state) = obj.get_async_generator_state() {

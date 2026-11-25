@@ -208,6 +208,10 @@ pub fn start_async_call(
         resume_value: JSValue::undefined(),
         yield_is_result: false,
         pending_yield: false,
+        pending_finally_return: None,
+        pending_finally_rethrow: None,
+        pending_finally_jump: None,
+        pending_finally_depth: 0,
     });
     let holder_ptr = Box::into_raw(Box::new(holder)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(holder_ptr);
@@ -248,6 +252,10 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
     let outcome = step_vm.execute_async_step(ctx, &state, is_generator);
     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
+    let pending_finally_return = step_vm.pending_finally_return;
+    let pending_finally_rethrow = step_vm.pending_finally_rethrow;
+    let pending_finally_jump = step_vm.pending_finally_jump;
+    let pending_finally_depth = step_vm.pending_finally_depth;
 
     let promise_atom = ctx.intern("__v16_promise__");
     let awaiting_atom = ctx.intern("__v16_awaiting__");
@@ -291,6 +299,10 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
             state.handlers = handlers;
             state.send_reg = Some(src);
             state.pending_throw = None;
+            state.pending_finally_return = pending_finally_return;
+            state.pending_finally_rethrow = pending_finally_rethrow;
+            state.pending_finally_jump = pending_finally_jump;
+            state.pending_finally_depth = pending_finally_depth;
             holder.set(awaiting_atom, p);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, false);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, true);
@@ -303,6 +315,10 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
             state.yield_is_result = is_result;
             state.pending_throw = None;
             state.pending_yield = true;
+            state.pending_finally_return = pending_finally_return;
+            state.pending_finally_rethrow = pending_finally_rethrow;
+            state.pending_finally_jump = pending_finally_jump;
+            state.pending_finally_depth = pending_finally_depth;
             holder.set(awaiting_atom, p);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, false);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, true);
@@ -4379,6 +4395,10 @@ impl VM {
                         resume_value: JSValue::undefined(),
                         yield_is_result: result_yield_is_result,
                         pending_yield: false,
+                        pending_finally_return: None,
+                        pending_finally_rethrow: None,
+                        pending_finally_jump: None,
+                        pending_finally_depth: 0,
                     });
                     gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                         queue: Vec::new(),
@@ -11726,6 +11746,10 @@ impl VM {
         if let Some(exc) = state.pending_throw.clone() {
             self.pending_throw = Some(exc);
         }
+        self.pending_finally_return = state.pending_finally_return;
+        self.pending_finally_rethrow = state.pending_finally_rethrow;
+        self.pending_finally_jump = state.pending_finally_jump;
+        self.pending_finally_depth = state.pending_finally_depth;
 
         let saved_vm_ptr = ctx.get_register_vm_ptr();
         ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
@@ -11895,6 +11919,10 @@ impl VM {
                 resume_value: JSValue::undefined(),
                 yield_is_result: result_yield_is_result,
                 pending_yield: false,
+                pending_finally_return: None,
+                pending_finally_rethrow: None,
+                pending_finally_jump: None,
+                pending_finally_depth: 0,
             });
             gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                 queue: Vec::new(),
