@@ -5298,6 +5298,7 @@ impl VM {
             frame.super_base = caller_frame.super_base;
             frame.new_target = caller_frame.new_target;
             frame.this_initialized = caller_frame.this_initialized;
+            frame.with_env = caller_frame.with_env.clone();
         }
 
         self.frame_index = 0;
@@ -7446,6 +7447,32 @@ impl VM {
                             Self::scan_eval_bindings(&self.frames, self.frame_index, atom.0)
                         {
                             self.set_reg(dst, val);
+                            resolved = true;
+                        }
+                    }
+                    if !resolved
+                        && self.caller_vm.is_some()
+                        && self.frames[self.frame_index].with_env.is_some()
+                    {
+                        let object = self.with_find_object(ctx, atom, usize::MAX, dst);
+                        if self.pending_throw.is_some() {
+                            let exc = self.pending_throw.take().unwrap();
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        if let Some(object) = object {
+                            self.get_named_prop_result(ctx, dst, object, atom, usize::MAX);
+                            if self.pending_throw.is_some() {
+                                let exc = self.pending_throw.take().unwrap();
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
                             resolved = true;
                         }
                     }
