@@ -348,7 +348,7 @@ impl<'a> ExecContext<'a> {
 
             let opcode_byte = self.bytecode[pc];
 
-            let opcode = if likely(opcode_byte <= OpCode::Halt as u8) {
+            let opcode = if likely(opcode_byte <= OpCode::JmpNoProgress as u8) {
                 unsafe { std::mem::transmute(opcode_byte) }
             } else {
                 return None;
@@ -618,6 +618,20 @@ impl<'a> ExecContext<'a> {
                     continue;
                 }
 
+                OpCode::JmpNoProgress => {
+                    let reg = self.bytecode[pc + 1] as usize;
+                    let offset = self.read_i32(pc + 2);
+                    let pos = regs.r[REG_POS];
+
+                    if pos == regs.r[reg] {
+                        pc = (pc as i32 + 6 + offset) as usize;
+                    } else {
+                        regs.r[reg] = pos;
+                        pc += 6;
+                    }
+                    continue;
+                }
+
                 OpCode::MovImm => {
                     let reg = self.bytecode[pc + 1] as usize;
                     let imm = self.read_u32(pc + 2);
@@ -693,7 +707,14 @@ impl<'a> ExecContext<'a> {
                     self.backtrack_pool.push(super::pool::BacktrackState {
                         pc: fail_target as u32,
                         pos: regs.r[REG_POS] as u32,
-                        counter: regs.r[REG_COUNTER] as u32,
+                        scratch: [
+                            regs.r[1] as u32,
+                            regs.r[2] as u32,
+                            regs.r[3] as u32,
+                            regs.r[4] as u32,
+                            regs.r[5] as u32,
+                            regs.r[6] as u32,
+                        ],
                         capture_start: captures
                             .get(0)
                             .and_then(|c| c.0)
@@ -821,7 +842,9 @@ impl<'a> ExecContext<'a> {
     ) -> Option<usize> {
         while let Some(state) = self.backtrack_pool.pop() {
             regs.r[REG_POS] = state.pos as usize;
-            regs.r[REG_COUNTER] = state.counter as usize;
+            for (i, value) in state.scratch.iter().enumerate() {
+                regs.r[i + 1] = *value as usize;
+            }
 
             if state.capture_start != u32::MAX && state.capture_end != u32::MAX {
                 if !captures.is_empty() {

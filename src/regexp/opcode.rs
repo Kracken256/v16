@@ -93,11 +93,13 @@ pub enum OpCode {
     Fail = 41,
 
     Halt = 42,
+
+    JmpNoProgress = 43,
 }
 
 impl OpCode {
     pub fn from_u8(v: u8) -> Option<Self> {
-        if v <= 42 {
+        if v <= 43 {
             Some(unsafe { std::mem::transmute(v) })
         } else {
             None
@@ -149,6 +151,7 @@ impl OpCode {
             OpCode::Success => 1,
             OpCode::Fail => 1,
             OpCode::Halt => 1,
+            OpCode::JmpNoProgress => 6,
         }
     }
 }

@@ -12,6 +12,8 @@ pub struct Compiler {
     char_ranges: Vec<super::charclass::CharRange>,
 
     named_groups: Vec<(String, usize)>,
+
+    repeat_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +77,7 @@ impl Compiler {
             ignore_case: (flags & FLAG_IGNORE_CASE) != 0,
             char_ranges: Vec::new(),
             named_groups: Vec::new(),
+            repeat_depth: 0,
         }
     }
 
@@ -350,74 +353,113 @@ impl Compiler {
         inner: &Ast,
         min: usize,
         max: usize,
-        _greedy: bool,
+        greedy: bool,
     ) -> Result<(), String> {
-        let counter_reg = REG_COUNTER;
+        let counter_reg = match self.repeat_depth {
+            0 => REG_COUNTER,
+            1 => REG_SAVE0,
+            2 => REG_SAVE1,
+            3 => REG_SAVE2,
+            _ => REG_SAVE3,
+        };
+
+        self.repeat_depth += 1;
 
         self.emit_mov_imm(counter_reg, 0);
 
-        let min_start = self.bytecode.len();
+        let loop_start = self.bytecode.len();
 
-        self.bytecode.push(OpCode::CmpImm as u8);
-        self.bytecode.push(counter_reg as u8);
-        self.bytecode.extend_from_slice(&(min as u32).to_le_bytes());
+        let max_check = if max < usize::MAX {
+            let eq_pos = self.bytecode.len();
+            self.bytecode.push(OpCode::JmpEq as u8);
+            self.bytecode.push(counter_reg as u8);
+            self.bytecode.extend_from_slice(&(max as u32).to_le_bytes());
+            self.bytecode.extend_from_slice(&0i32.to_le_bytes());
+            Some(eq_pos)
+        } else {
+            None
+        };
 
-        let cmp_pos = self.bytecode.len();
-        self.bytecode.push(OpCode::JmpNe as u8);
-        self.bytecode.push(counter_reg as u8);
-        self.bytecode.extend_from_slice(&(min as u32).to_le_bytes());
+        let min_check = if min > 0 {
+            let lt_pos = self.bytecode.len();
+            self.bytecode.push(OpCode::JmpLt as u8);
+            self.bytecode.push(counter_reg as u8);
+            self.bytecode.extend_from_slice(&(min as u32).to_le_bytes());
+            self.bytecode.extend_from_slice(&0i32.to_le_bytes());
+            Some(lt_pos)
+        } else {
+            None
+        };
+
+        let push_pos = self.bytecode.len();
+        self.bytecode.push(OpCode::PushBacktrack as u8);
         self.bytecode.extend_from_slice(&0i32.to_le_bytes());
+
+        let body_pos;
+        let skip_jmp_pos;
+        if greedy {
+            body_pos = push_pos + 5;
+            skip_jmp_pos = None;
+        } else {
+            let jmp_pos = self.bytecode.len();
+            self.bytecode.push(OpCode::Jmp as u8);
+            self.bytecode.extend_from_slice(&0i32.to_le_bytes());
+            body_pos = jmp_pos + 5;
+            skip_jmp_pos = Some(jmp_pos);
+        }
+
+        self.bytecode.push(OpCode::MovReg as u8);
+        self.bytecode.push(REG_TEMP as u8);
+        self.bytecode.push(REG_POS as u8);
 
         self.compile_node(inner)?;
 
         self.bytecode.push(OpCode::Inc as u8);
         self.bytecode.push(counter_reg as u8);
 
+        let progress_jmp_pos = if max == u32::MAX as usize {
+            let pos = self.bytecode.len();
+            self.bytecode.push(OpCode::JmpNoProgress as u8);
+            self.bytecode.push(REG_TEMP as u8);
+            self.bytecode.extend_from_slice(&0i32.to_le_bytes());
+            Some(pos)
+        } else {
+            None
+        };
+
+        let back_jmp_pos = self.bytecode.len();
         self.bytecode.push(OpCode::Jmp as u8);
-        let loop_offset = (min_start as i32 - self.bytecode.len() as i32 - 5) as i32;
-        self.bytecode.extend_from_slice(&loop_offset.to_le_bytes());
+        let back_offset = (loop_start as i32 - back_jmp_pos as i32 - 5) as i32;
+        self.bytecode.extend_from_slice(&back_offset.to_le_bytes());
 
-        let opt_start = self.bytecode.len();
-        let jmp_offset = (opt_start as i32 - cmp_pos as i32 - 10) as i32;
-        self.bytecode[cmp_pos + 6..cmp_pos + 10].copy_from_slice(&jmp_offset.to_le_bytes());
+        let done_pos = self.bytecode.len();
 
-        if max > min && max < usize::MAX {
-            self.emit_mov_imm(counter_reg, 0);
-
-            let opt_loop_start = self.bytecode.len();
-
-            self.bytecode.push(OpCode::CmpImm as u8);
-            self.bytecode.push(counter_reg as u8);
-            self.bytecode
-                .extend_from_slice(&((max - min) as u32).to_le_bytes());
-
-            let cmp2_pos = self.bytecode.len();
-            self.bytecode.push(OpCode::JmpNe as u8);
-            self.bytecode.push(counter_reg as u8);
-            self.bytecode
-                .extend_from_slice(&((max - min) as u32).to_le_bytes());
-            self.bytecode.extend_from_slice(&0i32.to_le_bytes());
-
-            let push_pos = self.bytecode.len();
-            self.bytecode.push(OpCode::PushBacktrack as u8);
-            self.bytecode.extend_from_slice(&0i32.to_le_bytes());
-
-            self.compile_node(inner)?;
-
-            self.bytecode.push(OpCode::Inc as u8);
-            self.bytecode.push(counter_reg as u8);
-
-            self.bytecode.push(OpCode::Jmp as u8);
-            let loop2_offset = (opt_loop_start as i32 - self.bytecode.len() as i32 - 5) as i32;
-            self.bytecode.extend_from_slice(&loop2_offset.to_le_bytes());
-
-            let end_pos = self.bytecode.len();
-            let push2_offset = (end_pos as i32 - push_pos as i32 - 5) as i32;
-            self.bytecode[push_pos + 1..push_pos + 5].copy_from_slice(&push2_offset.to_le_bytes());
-
-            let jmp2_offset = (end_pos as i32 - cmp2_pos as i32 - 10) as i32;
-            self.bytecode[cmp2_pos + 6..cmp2_pos + 10].copy_from_slice(&jmp2_offset.to_le_bytes());
+        if let Some(progress_pos) = progress_jmp_pos {
+            let progress_offset = (done_pos as i32 - progress_pos as i32 - 6) as i32;
+            self.bytecode[progress_pos + 2..progress_pos + 6]
+                .copy_from_slice(&progress_offset.to_le_bytes());
         }
+
+        let push_target = if greedy { done_pos } else { body_pos };
+        let push_offset = (push_target as i32 - push_pos as i32 - 5) as i32;
+        self.bytecode[push_pos + 1..push_pos + 5].copy_from_slice(&push_offset.to_le_bytes());
+
+        if let Some(jmp_pos) = skip_jmp_pos {
+            let skip_offset = (done_pos as i32 - jmp_pos as i32 - 5) as i32;
+            self.bytecode[jmp_pos + 1..jmp_pos + 5].copy_from_slice(&skip_offset.to_le_bytes());
+        }
+
+        if let Some(eq_pos) = max_check {
+            let eq_offset = (done_pos as i32 - eq_pos as i32 - 10) as i32;
+            self.bytecode[eq_pos + 6..eq_pos + 10].copy_from_slice(&eq_offset.to_le_bytes());
+        }
+
+        if let Some(lt_pos) = min_check {
+            let lt_offset = (body_pos as i32 - lt_pos as i32 - 10) as i32;
+            self.bytecode[lt_pos + 6..lt_pos + 10].copy_from_slice(&lt_offset.to_le_bytes());
+        }
+
+        self.repeat_depth -= 1;
 
         Ok(())
     }

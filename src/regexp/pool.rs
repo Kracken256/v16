@@ -6,7 +6,7 @@ pub struct BacktrackState {
 
     pub pos: u32,
 
-    pub counter: u32,
+    pub scratch: [u32; 6],
 
     pub capture_start: u32,
     pub capture_end: u32,
@@ -18,7 +18,7 @@ impl Default for BacktrackState {
         Self {
             pc: 0,
             pos: 0,
-            counter: 0,
+            scratch: [0; 6],
             capture_start: u32::MAX,
             capture_end: u32::MAX,
         }
