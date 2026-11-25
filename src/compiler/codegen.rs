@@ -3715,6 +3715,7 @@ impl CodeGenerator {
                         name: None,
                         super_class: class.super_class.clone(),
                         body: class.body.clone(),
+                        decorators: class.decorators.clone(),
                     });
                     let reg = self.gen_expression_with_assign_name(
                         &expression,

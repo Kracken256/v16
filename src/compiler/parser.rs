@@ -268,7 +268,11 @@ impl Parser {
                 }
                 self.parse_function_declaration(true, generator)
             }
-            Some((TokenType::Keyword, "class")) => self.parse_class_declaration(),
+            Some((TokenType::Keyword, "class")) => self.parse_class_declaration(Vec::new()),
+            Some((TokenType::Punctuator, "@")) => {
+                let decorators = self.parse_decorator_list()?;
+                self.parse_class_declaration(decorators)
+            }
             Some((TokenType::Keyword, "if")) => self.parse_if_statement(),
             Some((TokenType::Keyword, "for")) => self.parse_for_statement(),
             Some((TokenType::Keyword, "while")) => self.parse_while_statement(),
@@ -693,7 +697,7 @@ impl Parser {
         result
     }
 
-    fn parse_class_declaration(&mut self) -> Result<ASTNode, String> {
+    fn parse_class_declaration(&mut self, decorators: Vec<Expression>) -> Result<ASTNode, String> {
         self.expect("class")?;
         let name = self.cur_value().to_string();
         if !self.is_identifier_name() || is_reserved_word(&name) {
@@ -713,10 +717,11 @@ impl Parser {
             name,
             super_class,
             body,
+            decorators,
         }))
     }
 
-    fn parse_class_expression(&mut self) -> Result<Expression, String> {
+    fn parse_class_expression(&mut self, decorators: Vec<Expression>) -> Result<Expression, String> {
         self.expect("class")?;
         let name = if self.is_identifier_name() && !self.at_keyword("extends") {
             let n = self.cur_value().to_string();
@@ -741,7 +746,32 @@ impl Parser {
             name,
             super_class,
             body,
+            decorators,
         }))
+    }
+
+    fn parse_decorator_list(&mut self) -> Result<Vec<Expression>, String> {
+        let mut decorators = Vec::new();
+        while self.at_punct("@") {
+            self.advance();
+            if self.at_punct("(") {
+                self.advance();
+                let expr = self.with_allow_in(Self::parse_expression)?;
+                self.expect(")")?;
+                decorators.push(expr);
+                continue;
+            }
+            let mut expr = self.parse_member_expression()?;
+            if self.at_punct("(") {
+                let arguments = self.parse_arguments()?;
+                expr = Expression::CallExpression(CallExpression {
+                    callee: Box::new(expr),
+                    arguments,
+                });
+            }
+            decorators.push(expr);
+        }
+        Ok(decorators)
     }
 
     fn parse_class_heritage(&mut self) -> Result<Box<Expression>, String> {
@@ -766,6 +796,8 @@ impl Parser {
                 continue;
             }
 
+            let decorators = self.parse_decorator_list()?;
+
             let is_static = if self.at_keyword("static")
                 && !self.peek_at("(")
                 && !self.peek_at("=")
@@ -779,6 +811,9 @@ impl Parser {
             };
 
             if is_static && self.at_punct("{") {
+                if !decorators.is_empty() {
+                    return Err(self.error("Decorators cannot be applied to static blocks"));
+                }
                 self.expect("{")?;
                 let saved_static_block = self.in_static_block;
                 self.in_static_block = true;
@@ -830,6 +865,7 @@ impl Parser {
                     value,
                     is_static,
                     is_private,
+                    decorators,
                 }));
                 if self.at_punct(";") {
                     self.advance();
@@ -848,6 +884,7 @@ impl Parser {
                     value: None,
                     is_static,
                     is_private,
+                    decorators,
                 }));
                 continue;
             }
@@ -864,6 +901,7 @@ impl Parser {
                     value: None,
                     is_static,
                     is_private,
+                    decorators,
                 }));
                 continue;
             }
@@ -893,6 +931,7 @@ impl Parser {
                 generator: is_generator,
                 is_static,
                 is_private,
+                decorators,
             }));
         }
         let body = ClassBody { elements };
@@ -1779,7 +1818,7 @@ impl Parser {
                 ExportDefaultDeclarationKind::Function(func)
             } else if self.at_keyword("class") {
                 self.advance();
-                let cls = self.parse_class_declaration_inner()?;
+                let cls = self.parse_class_declaration_inner(Vec::new())?;
                 ExportDefaultDeclarationKind::Class(cls)
             } else if self.at_keyword("async") {
                 self.advance();
@@ -1898,7 +1937,7 @@ impl Parser {
         }
         if self.at_keyword("class") {
             self.advance();
-            let cls = self.parse_class_declaration_inner()?;
+            let cls = self.parse_class_declaration_inner(Vec::new())?;
             return Ok(ASTNode::ExportNamedDeclaration(ExportNamedDeclaration {
                 declaration: Some(ExportDeclaration::Class(cls)),
                 specifiers: vec![],
@@ -1938,7 +1977,10 @@ impl Parser {
         })
     }
 
-    fn parse_class_declaration_inner(&mut self) -> Result<ClassDeclaration, String> {
+    fn parse_class_declaration_inner(
+        &mut self,
+        decorators: Vec<Expression>,
+    ) -> Result<ClassDeclaration, String> {
         let name = self.cur_value().to_string();
         self.advance();
         let super_class = if self.at_keyword("extends") {
@@ -1954,6 +1996,7 @@ impl Parser {
             name,
             super_class,
             body,
+            decorators,
         })
     }
 
@@ -2714,6 +2757,14 @@ impl Parser {
             return Ok(expr);
         }
 
+        if self.at_punct("@") {
+            let decorators = self.parse_decorator_list()?;
+            if !self.at_keyword("class") {
+                return Err(self.error("Unexpected token after decorator list"));
+            }
+            return self.parse_class_expression(decorators);
+        }
+
         if self.at_keyword("new") {
             return self.parse_new_expression();
         }
@@ -2861,7 +2912,7 @@ impl Parser {
         }
 
         if self.at_keyword("class") {
-            return self.parse_class_expression();
+            return self.parse_class_expression(Vec::new());
         }
 
         if self.at_punct("[") {

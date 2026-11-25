@@ -164,6 +164,7 @@ pub struct ClassExpression {
     pub name: Option<String>,
     pub super_class: Option<Box<Expression>>,
     pub body: ClassBody,
+    pub decorators: Vec<Expression>,
 }
 
 #[derive(Debug, Clone)]
@@ -524,6 +525,7 @@ pub struct ClassDeclaration {
     pub name: String,
     pub super_class: Option<Box<Expression>>,
     pub body: ClassBody,
+    pub decorators: Vec<Expression>,
 }
 
 #[derive(Debug, Clone)]
@@ -548,6 +550,7 @@ pub struct ClassMethod {
     pub generator: bool,
     pub is_static: bool,
     pub is_private: bool,
+    pub decorators: Vec<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -564,6 +567,7 @@ pub struct ClassProperty {
     pub value: Option<Expression>,
     pub is_static: bool,
     pub is_private: bool,
+    pub decorators: Vec<Expression>,
 }
 
 #[derive(Debug, Clone)]
