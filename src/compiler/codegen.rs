@@ -7237,7 +7237,8 @@ impl CodeGenerator {
                             self.emit(Opcode::SetUpvalue);
                             self.emit_u16(slot);
                             self.emit_u16(tmp);
-                            self.free_register(tmp);
+                            self.free_register(val);
+                            return Ok(tmp);
                         } else {
                             if needs_tdz {
                                 let tmp = self.alloc_register();
@@ -7274,8 +7275,8 @@ impl CodeGenerator {
                             self.emit(Opcode::SetGlobal);
                             self.emit_u32(idx);
                             self.emit_u16(tmp);
-                            self.free_register(tmp);
-                            Ok(val)
+                            self.free_register(val);
+                            return Ok(tmp);
                         } else {
                             self.emit(Opcode::SetGlobal);
                             self.emit_u32(idx);
