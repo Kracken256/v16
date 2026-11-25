@@ -6618,7 +6618,16 @@ impl VM {
                                 &mut *(ptr as *mut crate::object::array_obj::JSArrayObject)
                             };
                             if idx < arr.elements.len() {
-                                arr.elements[idx] = value;
+                                if js_obj.frozen() {
+                                    if self.frames[self.frame_index].is_strict_frame {
+                                        self.set_pending_type_error(
+                                            ctx,
+                                            "Cannot assign to read only property",
+                                        );
+                                    }
+                                } else {
+                                    arr.elements[idx] = value;
+                                }
                             } else {
                                 // Check prototype chain for setters when EXTENDING the array
                                 let mut proto = js_obj.prototype;
@@ -6651,6 +6660,13 @@ impl VM {
                                                 }
                                             }
                                         }
+                                    }
+                                } else if !js_obj.extensible() {
+                                    if self.frames[self.frame_index].is_strict_frame {
+                                        self.set_pending_type_error(
+                                            ctx,
+                                            "Cannot define property, object is not extensible",
+                                        );
                                     }
                                 } else if idx > 100_000 {
                                     let len_atom = ctx.common_atoms.length;
@@ -6724,115 +6740,42 @@ impl VM {
                                 }
                             } else if idx >= 0 && js_obj.maybe_set_indexed(idx as usize, value) {
                             } else {
-                                js_obj.set_cached(atom, value, ctx.shape_cache_mut());
+                                let pre_offset = js_obj.find_offset(atom);
+                                let own_accessor =
+                                    js_obj.get_own_accessor_entry(atom).is_some();
+                                if !own_accessor
+                                    && pre_offset.is_some()
+                                    && js_obj.is_prop_writable_at(pre_offset)
+                                {
+                                    js_obj.set_cached(atom, value, ctx.shape_cache_mut());
+                                } else {
+                                    self.set_named_prop(ctx, obj_val, value, atom, usize::MAX);
+                                }
                             }
                         }
-                    } else if obj_val.is_object_like() && key_val.is_string() {
+                    } else if obj_val.is_object_like()
+                        && (key_val.is_string()
+                            || key_val.is_float()
+                            || key_val.is_symbol())
+                    {
                         let js_obj = unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
-                        let atom = key_val.get_atom();
-
-                        let setter = js_obj.get_own_accessor_entry(atom).and_then(|e| e.set);
-                        if let Some(s) = setter {
-                            if s.is_function() {
-                                match self.call_function_with_this(ctx, s, obj_val, &[value]) {
-                                    Ok(_) => {}
-                                    Err(_) => {}
-                                }
-                            }
+                        let atom = if key_val.is_string() {
+                            key_val.get_atom()
+                        } else if key_val.is_symbol() {
+                            crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id())
                         } else {
-                            let pre_offset = js_obj.find_offset(atom);
-                            if pre_offset.is_some() && !js_obj.is_prop_writable_at(pre_offset) {
-                                if self.frames[self.frame_index].is_strict_frame {
-                                    self.set_pending_type_error(
-                                        ctx,
-                                        "Cannot assign to read only property",
-                                    );
-                                    if let Some(exc) = self.pending_throw.take() {
-                                        match self.dispatch_throw_value(ctx, exc) {
-                                            ThrowDispatch::Caught => {}
-                                            ThrowDispatch::Uncaught(e) => return Err(e),
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            } else if js_obj.find_offset(atom).is_none()
-                                && self.prototype_rejects_typed_array_set(ctx, obj_val, atom)
-                            {
-                                if self.frames[self.frame_index].is_strict_frame {
-                                    self.set_pending_type_error(
-                                        ctx,
-                                        "Cannot create property on typed array prototype",
-                                    );
-                                }
-                            } else {
-                                js_obj.set_cached(atom, value, ctx.shape_cache_mut());
-                            }
-                        }
-                    } else if obj_val.is_object_like() && key_val.is_float() {
-                        let js_obj = unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
-                        let s = VM::js_to_string(&key_val, ctx);
-                        let atom = s.get_atom();
-
-                        let setter = js_obj.get_own_accessor_entry(atom).and_then(|e| e.set);
-                        if let Some(s) = setter {
-                            if s.is_function() {
-                                match self.call_function_with_this(ctx, s, obj_val, &[value]) {
-                                    Ok(_) => {}
-                                    Err(_) => {}
-                                }
-                            }
+                            let s = VM::js_to_string(&key_val, ctx);
+                            s.get_atom()
+                        };
+                        let pre_offset = js_obj.find_offset(atom);
+                        let own_accessor = js_obj.get_own_accessor_entry(atom).is_some();
+                        if !own_accessor
+                            && pre_offset.is_some()
+                            && js_obj.is_prop_writable_at(pre_offset)
+                        {
+                            js_obj.set_cached(atom, value, ctx.shape_cache_mut());
                         } else {
-                            let pre_offset = js_obj.find_offset(atom);
-                            if pre_offset.is_some() && !js_obj.is_prop_writable_at(pre_offset) {
-                                if self.frames[self.frame_index].is_strict_frame {
-                                    self.set_pending_type_error(
-                                        ctx,
-                                        "Cannot assign to read only property",
-                                    );
-                                    if let Some(exc) = self.pending_throw.take() {
-                                        match self.dispatch_throw_value(ctx, exc) {
-                                            ThrowDispatch::Caught => {}
-                                            ThrowDispatch::Uncaught(e) => return Err(e),
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            } else {
-                                js_obj.set_cached(atom, value, ctx.shape_cache_mut());
-                            }
-                        }
-                    } else if obj_val.is_object_like() && key_val.is_symbol() {
-                        let js_obj = unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
-                        let sym_key =
-                            crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
-
-                        let setter = js_obj.get_own_accessor_entry(sym_key).and_then(|e| e.set);
-                        if let Some(s) = setter {
-                            if s.is_function() {
-                                match self.call_function_with_this(ctx, s, obj_val, &[value]) {
-                                    Ok(_) => {}
-                                    Err(_) => {}
-                                }
-                            }
-                        } else {
-                            let pre_offset = js_obj.find_offset(sym_key);
-                            if pre_offset.is_some() && !js_obj.is_prop_writable_at(pre_offset) {
-                                if self.frames[self.frame_index].is_strict_frame {
-                                    self.set_pending_type_error(
-                                        ctx,
-                                        "Cannot assign to read only property",
-                                    );
-                                    if let Some(exc) = self.pending_throw.take() {
-                                        match self.dispatch_throw_value(ctx, exc) {
-                                            ThrowDispatch::Caught => {}
-                                            ThrowDispatch::Uncaught(e) => return Err(e),
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            } else {
-                                js_obj.set_cached(sym_key, value, ctx.shape_cache_mut());
-                            }
+                            self.set_named_prop(ctx, obj_val, value, atom, usize::MAX);
                         }
                     } else if !obj_val.is_object_like() && self.frames[self.frame_index].is_strict_frame {
                         self.set_pending_type_error(ctx, "Cannot assign to a primitive value");
@@ -6842,6 +6785,13 @@ impl VM {
                                 ThrowDispatch::Uncaught(e) => return Err(e),
                                 _ => {}
                             }
+                        }
+                    }
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
                         }
                     }
                     self.set_reg(obj_reg, obj_val);
