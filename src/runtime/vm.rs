@@ -9736,11 +9736,27 @@ impl VM {
                             }
             }
         } else if func_val.is_object() && !is_call_new {
-                        let result =
-                            self.call_function_with_this(ctx, func_val, this_val, &args)?;
-                        self.set_reg(dst, result);
-                        if is_super_call {
-                            self.bind_super_call_result(dst);
+                        match self.call_function_with_this(ctx, func_val, this_val, &args) {
+                            Ok(result) => {
+                                self.set_reg(dst, result);
+                                if is_super_call {
+                                    self.bind_super_call_result(dst);
+                                }
+                            }
+                            Err(_) => {
+                                let msg = format!(
+                                    "{} is not a function",
+                                    self.format_thrown_value(&func_val, ctx)
+                                );
+                                self.set_pending_type_error(ctx, &msg);
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                            }
                         }
                     } else {
                         let msg = format!(
