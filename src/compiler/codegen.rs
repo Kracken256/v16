@@ -10721,6 +10721,8 @@ impl CodeGenerator {
                 self.emit_u16(super_proto);
                 self.emit_u16(super_val);
                 self.emit_u16(proto_key);
+                self.emit(Opcode::CheckObjectOrNull);
+                self.emit_u16(super_proto);
                 self.emit(Opcode::SetProto);
                 self.emit_u16(proto_reg);
                 self.emit_u16(super_proto);

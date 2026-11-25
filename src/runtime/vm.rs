@@ -7715,6 +7715,23 @@ impl VM {
                         }
                     }
                 }
+                Opcode::CheckObjectOrNull => {
+                    let reg = self.read_u16_pc();
+                    let value = self.get_reg(reg);
+                    if !value.is_object_like() && !value.is_null() {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Class extends value does not have a valid prototype property",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
+                }
                 Opcode::HasPrivate => {
                     let dst = self.read_u16_pc();
                     let obj_reg = self.read_u16_pc();

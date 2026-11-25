@@ -203,6 +203,7 @@ pub enum Opcode {
     AddInstancePrivateField = 239,
     DefineField = 240,
     GetEvalPrivateOwner = 241,
+    CheckObjectOrNull = 242,
 }
 
 impl Opcode {
@@ -397,6 +398,7 @@ impl Opcode {
             239 => Some(Opcode::AddInstancePrivateField),
             240 => Some(Opcode::DefineField),
             241 => Some(Opcode::GetEvalPrivateOwner),
+            242 => Some(Opcode::CheckObjectOrNull),
             _ => None,
         }
     }
@@ -556,6 +558,7 @@ impl Opcode {
             Opcode::AddInstancePrivateField => 11,
             Opcode::DefineField => 7,
             Opcode::GetEvalPrivateOwner => 7,
+            Opcode::CheckObjectOrNull => 3,
             Opcode::NewGeneratorFunction => 1,
             Opcode::NewAsyncFunction => 1,
             Opcode::NewAsyncGeneratorFunction => 1,
@@ -1029,6 +1032,10 @@ impl Bytecode {
                     let dst = read_u16(1);
                     let name = read_u32(3);
                     write!(operands, " r{}, atom({})", dst, name).unwrap();
+                }
+                Opcode::CheckObjectOrNull => {
+                    let reg = read_u16(1);
+                    write!(operands, " r{}", reg).unwrap();
                 }
                 Opcode::SetNamedProp => {
                     let obj = read_u16(1);

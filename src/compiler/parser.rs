@@ -686,7 +686,6 @@ impl Parser {
         } else {
             None
         };
-        self.check_class_heritage(&super_class)?;
         self.expect("{")?;
         let body = self.parse_class_body()?;
         self.expect("}")?;
@@ -715,7 +714,6 @@ impl Parser {
         } else {
             None
         };
-        self.check_class_heritage(&super_class)?;
         self.expect("{")?;
         let body = self.parse_class_body()?;
         self.expect("}")?;
@@ -959,18 +957,6 @@ impl Parser {
             }
         }
 
-        Ok(())
-    }
-
-    fn check_class_heritage(&self, super_class: &Option<Box<Expression>>) -> Result<(), String> {
-        if let Some(expr) = super_class {
-            match &**expr {
-                Expression::ArrowFunction(_) => {
-                    return Err(self.error("class heritage may not be an arrow function"));
-                }
-                _ => {}
-            }
-        }
         Ok(())
     }
 
@@ -1709,7 +1695,6 @@ impl Parser {
         } else {
             None
         };
-        self.check_class_heritage(&super_class)?;
         self.expect("{")?;
         let body = self.parse_class_body()?;
         self.expect("}")?;
