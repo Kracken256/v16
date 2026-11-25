@@ -2843,14 +2843,8 @@ impl VM {
                 let ptr = Box::into_raw(Box::new(err)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                 let exc = JSValue::new_object(ptr);
-                match self.dispatch_throw_value(ctx, exc) {
-                    ThrowDispatch::Caught => Ok(JSValue::undefined()),
-                    ThrowDispatch::Uncaught(e) => Err(e),
-                    ThrowDispatch::AsyncComplete(o) => match o {
-                        ExecutionOutcome::Complete(v) => Ok(v),
-                        _ => Err("async eval error".to_string()),
-                    },
-                }
+                ctx.pending_exception = Some(exc);
+                Ok(JSValue::undefined())
             } else {
                 let raw_value = if let Ok(n) = value_str.parse::<i64>() {
                     JSValue::new_int(n)
@@ -2867,14 +2861,8 @@ impl VM {
                 } else {
                     JSValue::undefined()
                 };
-                match self.dispatch_throw_value(ctx, raw_value) {
-                    ThrowDispatch::Caught => Ok(JSValue::undefined()),
-                    ThrowDispatch::Uncaught(e) => Err(e),
-                    ThrowDispatch::AsyncComplete(o) => match o {
-                        ExecutionOutcome::Complete(v) => Ok(v),
-                        _ => Err("async eval error".to_string()),
-                    },
-                }
+                ctx.pending_exception = Some(raw_value);
+                Ok(JSValue::undefined())
             }
         } else if e.starts_with("Parse error") || e.starts_with("SyntaxError") {
             let mut err = crate::object::object::JSObject::new();
@@ -2889,14 +2877,8 @@ impl VM {
             let ptr = Box::into_raw(Box::new(err)) as usize;
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             let exc = JSValue::new_object(ptr);
-            match self.dispatch_throw_value(ctx, exc) {
-                ThrowDispatch::Caught => Ok(JSValue::undefined()),
-                ThrowDispatch::Uncaught(e) => Err(e),
-                ThrowDispatch::AsyncComplete(o) => match o {
-                    ExecutionOutcome::Complete(v) => Ok(v),
-                    _ => Err("async eval error".to_string()),
-                },
-            }
+            ctx.pending_exception = Some(exc);
+            Ok(JSValue::undefined())
         } else if e.starts_with("ReferenceError") {
             let mut err = crate::object::object::JSObject::new();
             err.set(
@@ -2910,14 +2892,8 @@ impl VM {
             let ptr = Box::into_raw(Box::new(err)) as usize;
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             let exc = JSValue::new_object(ptr);
-            match self.dispatch_throw_value(ctx, exc) {
-                ThrowDispatch::Caught => Ok(JSValue::undefined()),
-                ThrowDispatch::Uncaught(e) => Err(e),
-                ThrowDispatch::AsyncComplete(o) => match o {
-                    ExecutionOutcome::Complete(v) => Ok(v),
-                    _ => Err("async eval error".to_string()),
-                },
-            }
+            ctx.pending_exception = Some(exc);
+            Ok(JSValue::undefined())
         } else if e.starts_with("TypeError") {
             let mut err = crate::object::object::JSObject::new();
             err.set(
@@ -2931,14 +2907,8 @@ impl VM {
             let ptr = Box::into_raw(Box::new(err)) as usize;
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             let exc = JSValue::new_object(ptr);
-            match self.dispatch_throw_value(ctx, exc) {
-                ThrowDispatch::Caught => Ok(JSValue::undefined()),
-                ThrowDispatch::Uncaught(e) => Err(e),
-                ThrowDispatch::AsyncComplete(o) => match o {
-                    ExecutionOutcome::Complete(v) => Ok(v),
-                    _ => Err("async eval error".to_string()),
-                },
-            }
+            ctx.pending_exception = Some(exc);
+            Ok(JSValue::undefined())
         } else {
             Err(e)
         }
