@@ -387,26 +387,28 @@ fn parse_char_class(state: &mut ParseState) -> Result<Ast, String> {
     loop {
         match state.peek() {
             None => return Err("Unterminated character class".to_string()),
-            Some(']') if prev_char.is_some() => {
-                state.next();
-                break;
-            }
-            Some(']') if ranges.is_empty() => {
-                state.next();
-                ranges.add_char(']');
-                prev_char = Some(']');
-            }
             Some(']') => {
                 state.next();
                 break;
             }
             Some('-') if prev_char.is_some() && state.peek_at(1) != Some(']') => {
-                state.next();
-                let end = parse_class_atom(state)?;
-                if let Some(start) = prev_char {
-                    ranges.add_range(start as u32, end as u32);
+                let next_is_set_escape = state.peek_at(1) == Some('\\')
+                    && matches!(
+                        state.peek_at(2),
+                        Some('d' | 'D' | 's' | 'S' | 'w' | 'W')
+                    );
+                if next_is_set_escape && !state.is_unicode {
+                    state.next();
+                    ranges.add_char('-');
+                    prev_char = None;
+                } else {
+                    state.next();
+                    let end = parse_class_atom(state)?;
+                    if let Some(start) = prev_char {
+                        ranges.add_range(start as u32, end as u32);
+                    }
+                    prev_char = None;
                 }
-                prev_char = None;
             }
             Some('-') => {
                 state.next();
@@ -414,20 +416,23 @@ fn parse_char_class(state: &mut ParseState) -> Result<Ast, String> {
                 prev_char = Some('-');
             }
             Some('\\') => {
-                let atom = parse_class_escape(state)?;
-                if let Some(c) = atom {
-                    ranges.add_char(c);
-                    prev_char = Some(c);
-                } else {
-                    if state.is_unicode
-                        && state.peek() == Some('-')
-                        && state.peek_at(1) != Some(']')
-                    {
-                        return Err(
-                            "Invalid class range: multi-character escape".to_string()
-                        );
+                match parse_class_escape(state)? {
+                    ClassEscape::Char(c) => {
+                        ranges.add_char(c);
+                        prev_char = Some(c);
                     }
-                    prev_char = None;
+                    ClassEscape::Set(set) => {
+                        ranges.union(&set);
+                        if state.is_unicode
+                            && state.peek() == Some('-')
+                            && state.peek_at(1) != Some(']')
+                        {
+                            return Err(
+                                "Invalid class range: multi-character escape".to_string()
+                            );
+                        }
+                        prev_char = None;
+                    }
                 }
             }
             Some(c) => {
@@ -442,14 +447,19 @@ fn parse_char_class(state: &mut ParseState) -> Result<Ast, String> {
         ranges.invert();
     }
 
-    Ok(Ast::Class(CharClass { negated, ranges }))
+    Ok(Ast::Class(CharClass {
+        negated: false,
+        ranges,
+    }))
 }
 
 fn parse_class_atom(state: &mut ParseState) -> Result<char, String> {
     match state.peek() {
         None => Err("Unexpected end in character class".to_string()),
-        Some('\\') => parse_class_escape(state)?
-            .ok_or_else(|| "Class escapes not allowed in range".to_string()),
+        Some('\\') => match parse_class_escape(state)? {
+            ClassEscape::Char(c) => Ok(c),
+            ClassEscape::Set(_) => Err("Class escapes not allowed in range".to_string()),
+        },
         Some(c) => {
             state.next();
             Ok(c)
@@ -457,7 +467,12 @@ fn parse_class_atom(state: &mut ParseState) -> Result<char, String> {
     }
 }
 
-fn parse_class_escape(state: &mut ParseState) -> Result<Option<char>, String> {
+enum ClassEscape {
+    Char(char),
+    Set(CharRange),
+}
+
+fn parse_class_escape(state: &mut ParseState) -> Result<ClassEscape, String> {
     state.expect('\\')?;
 
     let c = state
@@ -465,39 +480,60 @@ fn parse_class_escape(state: &mut ParseState) -> Result<Option<char>, String> {
         .ok_or_else(|| "Unexpected end after \\".to_string())?;
 
     match c {
-        'b' => Ok(Some('\x08')),
-        'f' => Ok(Some('\x0C')),
-        'n' => Ok(Some('\n')),
-        'r' => Ok(Some('\r')),
-        't' => Ok(Some('\t')),
-        'v' => Ok(Some('\x0B')),
-        'x' => parse_hex_escape_char(state, 2),
-        'u' => parse_unicode_escape_char(state),
+        'b' => Ok(ClassEscape::Char('\x08')),
+        'f' => Ok(ClassEscape::Char('\x0C')),
+        'n' => Ok(ClassEscape::Char('\n')),
+        'r' => Ok(ClassEscape::Char('\r')),
+        't' => Ok(ClassEscape::Char('\t')),
+        'v' => Ok(ClassEscape::Char('\x0B')),
+        'x' => Ok(ClassEscape::Char(
+            parse_hex_escape_char(state, 2)?.ok_or("Invalid hex escape")?,
+        )),
+        'u' => Ok(ClassEscape::Char(
+            parse_unicode_escape_char(state)?.ok_or("Invalid unicode escape")?,
+        )),
         '0' if state.is_unicode => {
             if state.peek().map_or(false, |c| c.is_ascii_digit()) {
                 Err("Invalid octal escape".to_string())
             } else {
-                Ok(Some('\0'))
+                Ok(ClassEscape::Char('\0'))
             }
         }
 
-        'd' | 'D' | 's' | 'S' | 'w' | 'W' => Ok(None),
+        'd' => Ok(ClassEscape::Set(class_digit())),
+        'D' => {
+            let mut set = class_digit();
+            set.invert();
+            Ok(ClassEscape::Set(set))
+        }
+        's' => Ok(ClassEscape::Set(class_space())),
+        'S' => {
+            let mut set = class_space();
+            set.invert();
+            Ok(ClassEscape::Set(set))
+        }
+        'w' => Ok(ClassEscape::Set(class_word())),
+        'W' => {
+            let mut set = class_word();
+            set.invert();
+            Ok(ClassEscape::Set(set))
+        }
         'c' => {
             if state.is_unicode {
                 return Err("Invalid class escape: \\c".to_string());
             }
             let next = state.next().ok_or_else(|| "Unexpected end after \\c".to_string())?;
             if next.is_ascii_alphabetic() {
-                Ok(Some(((next as u32) % 32) as u8 as char))
+                Ok(ClassEscape::Char(((next as u32) % 32) as u8 as char))
             } else {
-                Ok(Some('c'))
+                Ok(ClassEscape::Char('c'))
             }
         }
         c => {
             if state.is_unicode && !is_unicode_identity_escape(c) {
                 return Err(format!("Invalid identity escape: \\{}", c));
             }
-            Ok(Some(c))
+            Ok(ClassEscape::Char(c))
         }
     }
 }
