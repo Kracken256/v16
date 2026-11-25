@@ -6074,6 +6074,16 @@ impl CodeGenerator {
             }
         }
 
+        let left = if self.reserved_slots.contains(&left) {
+            let dst = self.alloc_register();
+            self.emit(Opcode::Move);
+            self.emit_u16(dst);
+            self.emit_u16(left);
+            dst
+        } else {
+            left
+        };
+
         let right = self.gen_expression(&bin.right, ctx)?;
 
         let op = match bin.op {
