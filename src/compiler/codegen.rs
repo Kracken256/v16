@@ -3614,7 +3614,11 @@ impl CodeGenerator {
                                         }
                                         kreg
                                     }
-                                    _ => return Err("Invalid property key".to_string()),
+                                    _ => {
+                                        return Err(
+                                            "SyntaxError: Invalid property key".to_string()
+                                        )
+                                    }
                                 }
                             };
                             let elem_reg = self.alloc_register();
@@ -8787,7 +8791,9 @@ impl CodeGenerator {
                                 }
                                 kreg
                             }
-                            _ => return Err("Invalid property key".to_string()),
+                            _ => {
+                                return Err("SyntaxError: Invalid property key".to_string())
+                            }
                         }
                     };
 
