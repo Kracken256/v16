@@ -9549,6 +9549,7 @@ impl CodeGenerator {
                 body.lines.insert(insert_pos + i, 0);
             }
             let mut nested = self.nested_codegen();
+            nested.is_strict = true;
             nested.compile_function_with_parent(
                 &m.params,
                 &body,
@@ -9576,6 +9577,7 @@ impl CodeGenerator {
             default_body.extend(field_init_stmts);
             default_lines.extend(vec![0; instance_fields.len()]);
             let mut nested = self.nested_codegen();
+            nested.is_strict = true;
             nested.compile_function_with_parent(
                 &[],
                 &BlockStatement {
@@ -9615,6 +9617,7 @@ impl CodeGenerator {
                     continue;
                 }
                 let mut nested = self.nested_codegen();
+                nested.is_strict = true;
                 let (method_bc, method_upvalues) = nested.compile_function_with_parent_gen(
                     &m.params,
                     &m.body,
@@ -9664,6 +9667,7 @@ impl CodeGenerator {
                 }
                 let mut nested = self.nested_codegen();
                 nested.in_static_method = true;
+                nested.is_strict = true;
                 let (method_bc, method_upvalues) = nested.compile_function_with_parent_gen(
                     &m.params,
                     &m.body,
@@ -9690,6 +9694,7 @@ impl CodeGenerator {
         for element in &body.elements {
             if let ClassElement::StaticBlock(block) = element {
                 let mut nested = self.nested_codegen();
+                nested.is_strict = true;
                 let (block_bc, block_upvalues) = nested.compile_function_with_parent(
                     &[],
                     &BlockStatement {
@@ -9744,6 +9749,15 @@ impl CodeGenerator {
         self.emit_u16(proto_reg);
 
         if let Some(super_expr) = super_class {
+            if matches!(**super_expr, Expression::Literal(Literal::Null)) {
+                let null_reg = self.alloc_register();
+                self.emit(Opcode::LoadNull);
+                self.emit_u16(null_reg);
+                self.emit(Opcode::SetProto);
+                self.emit_u16(proto_reg);
+                self.emit_u16(null_reg);
+                self.free_register(null_reg);
+            } else {
             let proto_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
             let proto_key = self.alloc_register();
             self.emit(Opcode::LoadConst);
@@ -9761,6 +9775,7 @@ impl CodeGenerator {
             self.emit_u16(super_proto);
             self.free_register(super_proto);
             self.free_register(proto_key);
+            }
         }
 
         let proto_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
