@@ -2381,8 +2381,17 @@ impl CodeGenerator {
         for stmt in &body.body {
             Self::collect_hoisted_var_names(stmt, &mut hoisted_vars);
         }
+        let mut new_var_slots: Vec<u16> = Vec::new();
         for name in &hoisted_vars {
-            let _ = self.declare_var(name, VariableKind::Var);
+            let already_declared = self.scope_stack[0].contains_key(name);
+            let slot = self.declare_var(name, VariableKind::Var);
+            if !already_declared {
+                new_var_slots.push(slot);
+            }
+        }
+        for slot in new_var_slots {
+            self.emit(Opcode::LoadUndefined);
+            self.emit_u16(slot);
         }
 
         self.push_scope();
