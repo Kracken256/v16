@@ -621,8 +621,25 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
         ASTNode::TryStatement(t) => {
             validate_block(&t.block, ctx)?;
             if let Some(h) = &t.handler {
+                let mut bound: Vec<(String, bool)> = Vec::new();
                 if let Some(p) = &h.param {
                     validate_binding_pattern(p, ctx)?;
+                    collect_binding_pattern_names(p, &mut bound);
+                }
+                let mut seen: HashSet<String> = HashSet::new();
+                for (name, _) in &bound {
+                    if !seen.insert(name.clone()) {
+                        return Err(redeclaration_error(name));
+                    }
+                }
+                let mut lexical: Vec<(String, bool)> = Vec::new();
+                for stmt in &h.body.body {
+                    collect_lexical_names(stmt, false, &mut lexical);
+                }
+                for (name, _) in &lexical {
+                    if seen.contains(name) {
+                        return Err(redeclaration_error(name));
+                    }
                 }
                 validate_block(&h.body, ctx)?;
             }
