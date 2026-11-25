@@ -206,6 +206,7 @@ pub enum Opcode {
     CheckObjectOrNull = 242,
     ArrayPushAll = 243,
     LoadCaughtException = 244,
+    SetFunctionName = 245,
 }
 
 impl Opcode {
@@ -403,6 +404,7 @@ impl Opcode {
             242 => Some(Opcode::CheckObjectOrNull),
             243 => Some(Opcode::ArrayPushAll),
             244 => Some(Opcode::LoadCaughtException),
+            245 => Some(Opcode::SetFunctionName),
             _ => None,
         }
     }
@@ -565,6 +567,7 @@ impl Opcode {
             Opcode::CheckObjectOrNull => 3,
             Opcode::ArrayPushAll => 5,
             Opcode::LoadCaughtException => 3,
+            Opcode::SetFunctionName => 5,
             Opcode::NewGeneratorFunction => 1,
             Opcode::NewAsyncFunction => 1,
             Opcode::NewAsyncGeneratorFunction => 1,
@@ -1051,6 +1054,11 @@ impl Bytecode {
                 Opcode::LoadCaughtException => {
                     let dst = read_u16(1);
                     write!(operands, " r{}", dst).unwrap();
+                }
+                Opcode::SetFunctionName => {
+                    let func = read_u16(1);
+                    let key = read_u16(3);
+                    write!(operands, " r{}, r{}", func, key).unwrap();
                 }
                 Opcode::SetNamedProp => {
                     let obj = read_u16(1);

@@ -10096,6 +10096,7 @@ impl CodeGenerator {
         &mut self,
         value: &Expression,
         is_method: bool,
+        name: Option<&str>,
         ctx: &mut JSContext,
     ) -> Result<u16, String> {
         if is_method {
@@ -10111,6 +10112,15 @@ impl CodeGenerator {
                     true,
                 );
             }
+        }
+        let anonymous = match value {
+            Expression::FunctionExpression(func) => func.name.is_none(),
+            Expression::ArrowFunction(_) => true,
+            Expression::ClassExpression(class) => class.name.is_none(),
+            _ => false,
+        };
+        if let (Some(name), true) = (name, anonymous) {
+            return self.gen_expression_with_assign_name(value, name, ctx);
         }
         self.gen_expression(value, ctx)
     }
@@ -10141,7 +10151,7 @@ impl CodeGenerator {
                         );
                     }
                     if *getter || *setter {
-                        let func_reg = self.gen_property_function_value(value, *method, ctx)?;
+                        let func_reg = self.gen_property_function_value(value, *method, None, ctx)?;
                         let key_reg = match key {
                             PropertyKey::Identifier(name)
                             | PropertyKey::Literal(Literal::String(name, _, _)) => {
@@ -10187,7 +10197,8 @@ impl CodeGenerator {
                         }
                         PropertyKey::Identifier(name)
                         | PropertyKey::Literal(Literal::String(name, _, _)) => {
-                            let val = self.gen_property_function_value(value, *method, ctx)?;
+                            let val =
+                                self.gen_property_function_value(value, *method, Some(name), ctx)?;
                             let atom = ctx.intern(name);
                             self.emit(Opcode::SetNamedProp);
                             self.emit_u16(dst);
@@ -10218,10 +10229,30 @@ impl CodeGenerator {
                                     }
                                     k
                                 }
-                                PropertyKey::Computed(expr) => self.gen_expression(expr, ctx)?,
+                                PropertyKey::Computed(expr) => {
+                                    let k = self.gen_expression(expr, ctx)?;
+                                    let key_reg = self.alloc_register();
+                                    self.emit(Opcode::Move);
+                                    self.emit_u16(key_reg);
+                                    self.emit_u16(k);
+                                    self.free_register(k);
+                                    self.emit(Opcode::ToPropertyKey);
+                                    self.emit_u16(key_reg);
+                                    key_reg
+                                }
                                 _ => self.alloc_register(),
                             };
-                            let val = self.gen_property_function_value(value, *method, ctx)?;
+                            let val =
+                                self.gen_property_function_value(value, *method, None, ctx)?;
+                            let needs_name = *method
+                                || matches!(&**value, Expression::FunctionExpression(f) if f.name.is_none())
+                                || matches!(&**value, Expression::ArrowFunction(_))
+                                || matches!(&**value, Expression::ClassExpression(c) if c.name.is_none());
+                            if needs_name {
+                                self.emit(Opcode::SetFunctionName);
+                                self.emit_u16(val);
+                                self.emit_u16(key_reg);
+                            }
                             self.emit(Opcode::SetField);
                             self.emit_u16(dst);
                             self.emit_u16(key_reg);

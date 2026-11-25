@@ -8368,6 +8368,13 @@ impl VM {
                         .unwrap_or_else(JSValue::undefined);
                     self.set_reg(dst, value);
                 }
+                Opcode::SetFunctionName => {
+                    let fn_reg = self.read_u16_pc();
+                    let key_reg = self.read_u16_pc();
+                    let fn_val = self.get_reg(fn_reg);
+                    let key_val = self.get_reg(key_reg);
+                    self.set_function_display_name(ctx, fn_val, key_val, None);
+                }
                 Opcode::SetProto => {
                     let obj_reg = self.read_u16_pc();
                     let proto_reg = self.read_u16_pc();
