@@ -7108,6 +7108,13 @@ impl VM {
                     let this_val = self.get_reg(this_reg);
                     let key_val = self.get_reg(key_reg);
                     let atom = self.super_key_atom(ctx, key_val);
+                    if let Some(exc) = self.take_pending_exception(ctx) {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
                     if let Some(result) = self.get_named_prop_result_with_receiver(
                         ctx,
                         dst,
@@ -7135,7 +7142,7 @@ impl VM {
                     let key_val = self.get_reg(key_reg);
                     let value = self.get_reg(val_reg);
                     self.set_super_prop(ctx, base, receiver, key_val, value);
-                    if let Some(exc) = self.pending_throw.take() {
+                    if let Some(exc) = self.take_pending_exception(ctx) {
                         match self.dispatch_throw_value(ctx, exc) {
                             ThrowDispatch::Caught => continue,
                             ThrowDispatch::Uncaught(e) => return Err(e),
@@ -10863,6 +10870,9 @@ impl VM {
             return false;
         }
         let atom = self.super_key_atom(ctx, key_val);
+        if self.pending_throw.is_some() || ctx.pending_exception.is_some() {
+            return false;
+        }
         let mut found: Option<(bool, Option<JSValue>, bool)> = None;
         if base.is_object_like() {
             let mut current = base;
