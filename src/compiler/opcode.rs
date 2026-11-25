@@ -607,6 +607,7 @@ pub struct Bytecode {
     pub shared_const_ptr: *const crate::value::JSValue,
     pub shared_const_len: usize,
     pub uses_arguments: bool,
+    pub has_simple_parameters: bool,
     pub is_strict: bool,
     pub var_name_to_slot: std::rc::Rc<Vec<(u32, u16, u8)>>,
     pub nested_bytecodes: Vec<(u32, std::sync::Arc<NestedBytecode>)>,
@@ -625,6 +626,7 @@ pub struct NestedBytecode {
     pub locals_count: u32,
     pub param_count: u16,
     pub uses_arguments: bool,
+    pub has_simple_parameters: bool,
     pub is_strict: bool,
     pub function_kind: u8,
     pub var_name_to_slot: std::rc::Rc<Vec<(u32, u16, u8)>>,
@@ -666,6 +668,7 @@ impl Bytecode {
             locals_count: 0,
             param_count: 0,
             uses_arguments: false,
+            has_simple_parameters: false,
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             line_number_table: None,
@@ -1427,13 +1430,15 @@ impl Bytecode {
 
         out.extend_from_slice(b"SAFC");
 
-        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
 
         out.extend_from_slice(&self.locals_count.to_le_bytes());
 
         out.extend_from_slice(&self.param_count.to_le_bytes());
 
         out.push(self.uses_arguments as u8);
+
+        out.push(self.has_simple_parameters as u8);
 
         out.extend_from_slice(&(self.code.len() as u64).to_le_bytes());
 
@@ -1455,7 +1460,7 @@ impl Bytecode {
             return Err("Invalid .jsc: bad magic".to_string());
         }
         let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        if version != 1 {
+        if version != 2 {
             return Err(format!("Unsupported .jsc version: {}", version));
         }
         let mut offset = 8usize;
@@ -1487,6 +1492,8 @@ impl Bytecode {
         let param_count = read_u16(&mut offset);
         let uses_arguments = data[offset] != 0;
         offset += 1;
+        let has_simple_parameters = data[offset] != 0;
+        offset += 1;
         let code_len = read_u64(&mut offset) as usize;
         if offset + code_len > data.len() {
             return Err("Invalid .jsc: code truncated".to_string());
@@ -1508,6 +1515,7 @@ impl Bytecode {
             locals_count,
             param_count,
             uses_arguments,
+            has_simple_parameters,
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             line_number_table: None,
@@ -1603,6 +1611,7 @@ mod tests {
             ic_table: crate::compiler::InlineCacheTable::new(),
             shared_ic_table_ptr: std::ptr::null_mut(),
             uses_arguments: false,
+            has_simple_parameters: false,
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             nested_bytecodes: Vec::new(),
@@ -1667,6 +1676,7 @@ mod tests {
             ic_table: crate::compiler::InlineCacheTable::new(),
             shared_ic_table_ptr: std::ptr::null_mut(),
             uses_arguments: false,
+            has_simple_parameters: false,
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             nested_bytecodes: Vec::new(),
@@ -1725,6 +1735,7 @@ mod tests {
             ic_table: crate::compiler::InlineCacheTable::new(),
             shared_ic_table_ptr: std::ptr::null_mut(),
             uses_arguments: false,
+            has_simple_parameters: false,
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             nested_bytecodes: Vec::new(),

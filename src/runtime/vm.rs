@@ -6293,33 +6293,6 @@ impl VM {
                                     JSValue::undefined()
                                 }
                             }
-                        } else if js_obj.is_mapped_arguments() {
-                            let fi = js_obj.mapped_args_frame_index();
-                            let param_count = js_obj.mapped_args_param_count();
-                            let idx = key_val.get_int();
-                            if idx >= 0 && fi < self.frames.len() {
-                                let idx_u = idx as usize;
-                                if idx_u < param_count as usize {
-                                    let base = self.frames[fi].registers_base;
-                                    let register_index = base + 1 + param_count as usize + idx_u;
-                                    if register_index < self.registers.len() {
-                                        self.set_reg(dst, self.registers[register_index]);
-                                        continue;
-                                    }
-                                } else if let Some(val) = js_obj.get_indexed(idx_u) {
-                                    self.set_reg(dst, val);
-                                    continue;
-                                }
-                            }
-                            let idx = key_val.get_int();
-                            if idx >= 0 {
-                                if let Some(val) = js_obj.get_indexed(idx as usize) {
-                                    self.set_reg(dst, val);
-                                    continue;
-                                }
-                            }
-                            let atom = self.int_atom(idx as usize, ctx);
-                            js_obj.get(atom).unwrap_or(JSValue::undefined())
                         } else if js_obj.obj_type() == crate::object::object::ObjectType::TypedArray {
                             let idx = key_val.get_int() as usize;
                             if let Some(val) = crate::builtins::typedarray::ta_get_element(ctx, js_obj, idx) {
@@ -6921,27 +6894,6 @@ impl VM {
                             let idx = key_val.get_int();
                             let js_obj_check =
                                 unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
-                            if js_obj_check.is_mapped_arguments() {
-                                let fi = js_obj_check.mapped_args_frame_index();
-                                let param_count = js_obj_check.mapped_args_param_count();
-                                if idx >= 0 && fi < self.frames.len() {
-                                    let idx_u = idx as usize;
-                                    if (idx as u32) < param_count {
-                                        let base = self.frames[fi].registers_base;
-                                        let reg_idx = base + 1 + param_count as usize + idx_u;
-                                        if reg_idx < self.registers.len() {
-                                            self.set_reg(dst, self.registers[reg_idx]);
-                                            continue;
-                                        }
-                                    } else {
-                                        let saved = &self.frames[fi].saved_args;
-                                        if idx_u < saved.len() {
-                                            self.set_reg(dst, saved[idx_u]);
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
 
                             if idx >= 0 {
                                 if let Some(val) = js_obj_check.get_indexed(idx as usize) {
@@ -7031,23 +6983,6 @@ impl VM {
                             crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
                         self.set_named_prop(ctx, obj_val, value, sym_key, usize::MAX);
                     } else if key_val.is_int() && obj_val.is_object_like() {
-                        if obj_val.is_object() {
-                            let js_obj_check =
-                                unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
-                            if js_obj_check.is_mapped_arguments() {
-                                let fi = js_obj_check.mapped_args_frame_index();
-                                let param_count = js_obj_check.mapped_args_param_count();
-                                let idx = key_val.get_int();
-                                if idx >= 0 && (idx as u32) < param_count && fi < self.frames.len()
-                                {
-                                    let base = self.frames[fi].registers_base;
-                                    let reg_idx = base + 1 + param_count as usize + idx as usize;
-                                    if reg_idx < self.registers.len() {
-                                        self.registers[reg_idx] = value;
-                                    }
-                                }
-                            }
-                        }
                         let atom = self.int_atom(key_val.get_int() as usize, ctx);
                         self.set_named_prop(ctx, obj_val, value, atom, usize::MAX);
                     } else if key_val.is_float() && obj_val.is_object_like() {
@@ -8401,6 +8336,27 @@ impl VM {
                                 if !seen.contains(&idx_atom.0) {
                                     seen.push(idx_atom.0);
                                     int_keys.push(i as i64);
+                                }
+                            }
+                        }
+                        if js_obj.is_mapped_arguments() {
+                            if let Some(entries) = js_obj.argument_entries() {
+                                for entry in entries {
+                                    if !entry.present || seen.contains(&entry.atom.0) {
+                                        continue;
+                                    }
+                                    seen.push(entry.atom.0);
+                                    if !entry.enumerable() {
+                                        continue;
+                                    }
+                                    let key_str = ctx.get_atom_str(entry.atom);
+                                    if let Ok(n) = key_str.parse::<i64>() {
+                                        if n >= 0 && key_str == n.to_string() {
+                                            int_keys.push(n);
+                                            continue;
+                                        }
+                                    }
+                                    str_keys.push(entry.atom);
                                 }
                             }
                         }
@@ -9854,6 +9810,7 @@ impl VM {
                         locals_count,
                         param_count,
                         uses_arguments,
+                        has_simple_parameters,
                         is_strict,
                         function_kind,
                         func_var_name_to_slot,
@@ -9870,6 +9827,7 @@ impl VM {
                             nb.locals_count,
                             nb.param_count,
                             nb.uses_arguments,
+                            nb.has_simple_parameters,
                             nb.is_strict,
                             nb.function_kind,
                             nb.var_name_to_slot.clone(),
@@ -9881,6 +9839,7 @@ impl VM {
                         let param_count = self.read_u16_pc();
                         let uses_arguments = self.read_u8() != 0;
                         let is_strict = self.read_u8() != 0;
+                        let has_simple_parameters = self.read_u8() != 0;
                         let function_kind = self.read_u8();
                         let locals_count = self.read_u16_pc() as u32;
                         let bytecode_len = self.read_u32();
@@ -10001,6 +9960,7 @@ impl VM {
                                             locals_count,
                                             param_count,
                                             uses_arguments,
+                                            has_simple_parameters,
                                             is_strict,
                                             function_kind,
                                             var_name_to_slot: func_var_name_to_slot.clone(),
@@ -10038,6 +9998,7 @@ impl VM {
                             locals_count,
                             param_count,
                             uses_arguments,
+                            has_simple_parameters,
                             is_strict,
                             function_kind,
                             func_var_name_to_slot,
@@ -10107,6 +10068,7 @@ impl VM {
                         shared_const_ptr: std::ptr::null(),
                         shared_const_len: 0,
                         uses_arguments,
+                        has_simple_parameters,
                         is_strict,
                         var_name_to_slot: func_var_name_to_slot,
                         nested_bytecodes: Vec::new(),
@@ -10610,12 +10572,9 @@ impl VM {
                     if let Some(cached_ptr) = self.frames[fi].cached_arguments {
                         self.set_reg(dst, JSValue::new_object(cached_ptr));
                     } else {
-                        let frame = &self.frames[fi];
-                        let func_ptr = frame.function_ptr;
-                        let saved_args = &frame.saved_args;
-                        let arg_count = saved_args.len();
-                        let is_strict = frame.is_strict_frame;
-                        let use_mapped = !is_strict && func_ptr.is_some();
+                        let func_ptr = self.frames[fi].function_ptr;
+                        let arg_count = self.frames[fi].saved_args.len();
+                        let is_strict = self.frames[fi].is_strict_frame;
                         use crate::object::object::{
                             ATTR_CONFIGURABLE, ATTR_WRITABLE, PropertyDescriptor,
                         };
@@ -10631,41 +10590,83 @@ impl VM {
                             ATTR_WRITABLE | ATTR_CONFIGURABLE,
                             args_shape,
                         );
-                        let declared_param_count = if use_mapped {
-                            if let Some(ptr) = func_ptr {
-                                let js_func = unsafe { JSValue::function_from_ptr(ptr) };
-                                js_func.param_count
-                            } else {
-                                0
+                        let declared_param_count: usize = if !is_strict {
+                            match func_ptr {
+                                Some(ptr) => {
+                                    let js_func =
+                                        unsafe { JSValue::function_from_ptr(ptr) };
+                                    if js_func
+                                        .bytecode
+                                        .as_ref()
+                                        .map_or(false, |bc| bc.has_simple_parameters)
+                                    {
+                                        js_func.param_count as usize
+                                    } else {
+                                        0
+                                    }
+                                }
+                                None => 0,
                             }
                         } else {
                             0
                         };
-                        if use_mapped {
+                        let mapped_limit = declared_param_count.min(arg_count);
+                        if !is_strict {
                             args_obj
                                 .set_obj_type(crate::object::object::ObjectType::MappedArguments);
-                            {
-                                let extra = args_obj.ensure_extra();
-                                extra.mapped_args_frame_index = fi;
-                                extra.mapped_args_param_count = declared_param_count;
+                        }
+                        let mut entries: Vec<crate::object::object::ArgumentEntry> =
+                            Vec::with_capacity(mapped_limit);
+                        for i in 0..arg_count {
+                            let val = self.frames[fi].saved_args[i];
+                            let atom = ctx.int_atom_mut(i);
+                            if i < mapped_limit {
+                                let local_idx = (1 + declared_param_count + i) as u16;
+                                let registers_base = self.frames[fi].registers_base;
+                                let register_index = registers_base + local_idx as usize;
+                                let initial = if register_index < self.registers.len() {
+                                    self.registers[register_index]
+                                } else {
+                                    val
+                                };
+                                let existing = self.frames[fi]
+                                    .upvalue_sync_map
+                                    .as_ref()
+                                    .and_then(|m| m.get(&local_idx))
+                                    .cloned();
+                                let cell = match existing {
+                                    Some(cell) => cell,
+                                    None => {
+                                        let cell =
+                                            std::rc::Rc::new(std::cell::Cell::new(initial));
+                                        let frame = &mut self.frames[fi];
+                                        frame
+                                            .upvalue_sync_map
+                                            .get_or_insert_with(|| {
+                                                Box::new(crate::util::FxHashMap::default())
+                                            })
+                                            .insert(local_idx, cell.clone());
+                                        if local_idx < 64 {
+                                            frame.upvalue_sync_bitset |= 1u64 << local_idx;
+                                            self.cached_upvalue_sync_bitset |= 1u64 << local_idx;
+                                        }
+                                        self.cached_has_upvalue_sync = true;
+                                        cell
+                                    }
+                                };
+                                let mut entry =
+                                    crate::object::object::ArgumentEntry::new(atom, initial);
+                                entry.cell = Some(cell);
+                                entries.push(entry);
+                            } else {
+                                args_obj.set(atom, val);
                             }
-                            if arg_count > 0 {
-                                args_obj
-                                    .ensure_elements()
-                                    .resize(arg_count, JSValue::undefined());
-                                for (i, val) in saved_args.iter().enumerate() {
-                                    args_obj.set_indexed(i, *val);
-                                }
-                            }
-                        } else {
-                            if arg_count > 0 {
-                                args_obj
-                                    .ensure_elements()
-                                    .resize(arg_count, JSValue::undefined());
-                                for (i, val) in saved_args.iter().enumerate() {
-                                    args_obj.set_indexed(i, *val);
-                                }
-                            }
+                        }
+                        args_obj.set_argument_entries(entries);
+                        {
+                            let extra = args_obj.ensure_extra();
+                            extra.mapped_args_frame_index = fi;
+                            extra.mapped_args_param_count = declared_param_count as u32;
                         }
                         let callee_atom = ctx.common_atoms.callee;
                         if let Some(ptr) = func_ptr {
@@ -11072,11 +11073,21 @@ impl VM {
             }
         }
 
-        let mut sequence = if js_obj.has_property_order() {
-            js_obj.property_order_keys()
-        } else {
-            Vec::new()
-        };
+        let mut sequence: Vec<crate::runtime::atom::Atom> = Vec::new();
+        if let Some(entries) = js_obj.argument_entries() {
+            for entry in entries {
+                if entry.present {
+                    sequence.push(entry.atom);
+                }
+            }
+        }
+        if js_obj.has_property_order() {
+            for atom in js_obj.property_order_keys() {
+                if !sequence.contains(&atom) {
+                    sequence.push(atom);
+                }
+            }
+        }
         js_obj.for_each_property(|atom, _, _| {
             if !sequence.contains(&atom) {
                 sequence.push(atom);
@@ -11918,6 +11929,34 @@ impl VM {
         if obj_val.is_object_like() {
             let ptr = obj_val.get_ptr();
             let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
+            if js_obj.is_mapped_arguments() {
+                if let Some(entry) = js_obj.argument_entry(atom) {
+                    if entry.is_accessor() {
+                        let getter = entry.accessor.get;
+                        if let Some(getter) = getter {
+                            if getter.is_function() {
+                                match self
+                                    .call_function_with_this(ctx, getter, this_val, &[])
+                                {
+                                    Ok(v) => {
+                                        self.set_reg(dst, v);
+                                        return Some(v);
+                                    }
+                                    Err(_) => {
+                                        self.rethrow_last_caught(ctx);
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                        self.set_reg(dst, JSValue::undefined());
+                        return Some(JSValue::undefined());
+                    }
+                    let v = entry.current_value();
+                    self.set_reg(dst, v);
+                    return Some(v);
+                }
+            }
             if js_obj.is_dense_array() {
                 if let Some(index) = ctx.atom_table().get_array_index(atom) {
                     let array = unsafe {
@@ -12832,6 +12871,57 @@ impl VM {
         if obj_val.is_object_like() {
             let ptr = obj_val.get_ptr();
             let js_obj = unsafe { JSValue::object_from_ptr_mut(ptr) };
+            if js_obj.is_mapped_arguments() {
+                let entry_state = js_obj.argument_entry(atom).map(|entry| {
+                    (
+                        entry.is_accessor(),
+                        entry.accessor.set,
+                        entry.writable(),
+                    )
+                });
+                if let Some((is_accessor, set, writable)) = entry_state {
+                    if is_accessor {
+                        if let Some(setter_fn) = set {
+                            if self
+                                .call_function_with_this(ctx, setter_fn, obj_val, &[value])
+                                .is_err()
+                            {
+                                let caught = self.last_caught_exception.take();
+                                let host = ctx.pending_exception.take();
+                                let exc =
+                                    caught.or(host).or_else(|| self.pending_throw.take());
+                                if let Some(exc) = exc {
+                                    self.pending_throw = Some(exc);
+                                }
+                            }
+                        } else if self.frames[self.frame_index].is_strict_frame {
+                            let msg = format!(
+                                "Cannot set property '{}' which has only a getter",
+                                ctx.get_atom_str(atom)
+                            );
+                            self.set_pending_type_error(ctx, &msg);
+                        }
+                        return true;
+                    }
+                    if !writable {
+                        if self.frames[self.frame_index].is_strict_frame {
+                            let msg = format!(
+                                "Cannot assign to read only property '{}'",
+                                ctx.get_atom_str(atom)
+                            );
+                            self.set_pending_type_error(ctx, &msg);
+                        }
+                        return false;
+                    }
+                    if let Some(entry) = js_obj.argument_entry_mut(atom) {
+                        match &entry.cell {
+                            Some(cell) => cell.set(value),
+                            None => entry.value = value,
+                        }
+                    }
+                    return true;
+                }
+            }
             let ic_table_ptr = self.cached_ic_table_ptr;
 
             // For shapeless objects with no properties yet, treat as root shape for IC
@@ -14275,6 +14365,7 @@ mod tests {
             ic_table: crate::compiler::InlineCacheTable::new(),
             shared_ic_table_ptr: std::ptr::null_mut(),
             uses_arguments: false,
+            has_simple_parameters: false,
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             nested_bytecodes: Vec::new(),

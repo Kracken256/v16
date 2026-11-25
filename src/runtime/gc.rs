@@ -570,6 +570,26 @@ impl GcHeap {
             obj.for_each_array_element(|value| {
                 self.mark_value(value);
             });
+            if let Some(entries) = obj.argument_entries() {
+                for entry in entries {
+                    if !entry.present {
+                        continue;
+                    }
+                    if let Some(cell) = entry.cell.as_ref() {
+                        self.mark_value(&cell.get());
+                    } else {
+                        self.mark_value(&entry.value);
+                    }
+                    if entry.is_accessor() {
+                        if let Some(getter) = entry.accessor.get {
+                            self.mark_value(&getter);
+                        }
+                        if let Some(setter) = entry.accessor.set {
+                            self.mark_value(&setter);
+                        }
+                    }
+                }
+            }
             if let Some(proto_ptr) = obj.prototype {
                 self.mark(proto_ptr as usize);
             }

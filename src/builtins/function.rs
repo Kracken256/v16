@@ -679,46 +679,21 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let len = lv.get_int() as usize;
 
             if arr_obj.is_mapped_arguments() {
-                let fi = arr_obj.mapped_args_frame_index();
-                let param_count = arr_obj.mapped_args_param_count() as usize;
-                let vm_ptr = ctx.get_register_vm_ptr();
-                if let Some(ptr) = vm_ptr {
-                    let vm = unsafe { &*(ptr as *const crate::runtime::vm::VM) };
-                    if fi < vm.frames.len() {
-                        let frame = &vm.frames[fi];
-                        let base = frame.registers_base;
-                        let target = if len <= 16 {
-                            &mut call_args_buf[..len]
-                        } else {
-                            call_args_vec.resize(len, JSValue::undefined());
-                            &mut call_args_vec[..len]
-                        };
-                        let saved = &frame.saved_args;
-                        for i in 0..len {
-                            target[i] = if i < param_count {
-                                let reg_idx = base + 1 + i;
-                                if reg_idx < vm.registers.len() {
-                                    vm.registers[reg_idx]
-                                } else {
-                                    JSValue::undefined()
-                                }
-                            } else if i < saved.len() {
-                                saved[i]
-                            } else {
-                                arr_obj.get_indexed(i).unwrap_or(JSValue::undefined())
-                            };
-                        }
-                        call_args = if len <= 16 {
-                            &call_args_buf[..len]
-                        } else {
-                            &call_args_vec[..len]
-                        };
-                    } else {
-                        call_args = &[];
-                    }
+                let target = if len <= 16 {
+                    &mut call_args_buf[..len]
                 } else {
-                    call_args = &[];
+                    call_args_vec.resize(len, JSValue::undefined());
+                    &mut call_args_vec[..len]
+                };
+                for i in 0..len {
+                    let atom = ctx.int_atom_mut(i);
+                    target[i] = arr_obj.get(atom).unwrap_or(JSValue::undefined());
                 }
+                call_args = if len <= 16 {
+                    &call_args_buf[..len]
+                } else {
+                    &call_args_vec[..len]
+                };
             } else if len <= 16 {
                 if arr_obj.is_array() {
                     let ptr = arr_obj as *const _ as usize;

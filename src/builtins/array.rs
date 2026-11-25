@@ -43,18 +43,9 @@ fn require_object_coercible(ctx: &mut JSContext, val: &JSValue) -> bool {
 #[inline(always)]
 pub fn array_get(obj: &JSObject, index: usize, ctx: &mut JSContext) -> Option<crate::value::JSValue> {
     if obj.is_mapped_arguments() {
-        let frame_index = obj.mapped_args_frame_index();
-        let param_count = obj.mapped_args_param_count() as usize;
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let vm = unsafe { &*(vm_ptr as *const crate::runtime::vm::VM) };
-            if frame_index < vm.frames.len() {
-                let frame = &vm.frames[frame_index];
-                if index < param_count {
-                    let register_index = frame.registers_base + 1 + param_count + index;
-                    if register_index < vm.registers.len() {
-                        return Some(vm.registers[register_index]);
-                    }
-                }
+        if let Some(entry) = obj.argument_entry_at(index) {
+            if !entry.is_accessor() {
+                return Some(entry.current_value());
             }
         }
     }

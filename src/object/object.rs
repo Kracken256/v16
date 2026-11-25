@@ -187,6 +187,188 @@ pub struct AccessorEntry {
     pub configurable: bool,
 }
 
+pub struct ArgumentEntry {
+    pub atom: Atom,
+    pub cell: Option<std::rc::Rc<std::cell::Cell<JSValue>>>,
+    pub value: JSValue,
+    pub attrs: u8,
+    pub present: bool,
+    pub accessor: AccessorEntry,
+}
+
+impl ArgumentEntry {
+    pub fn new(atom: Atom, value: JSValue) -> Self {
+        Self {
+            atom,
+            cell: None,
+            value,
+            attrs: ATTR_DEFAULT,
+            present: true,
+            accessor: AccessorEntry {
+                get: None,
+                set: None,
+                enumerable: true,
+                configurable: true,
+            },
+        }
+    }
+
+    #[inline]
+    pub fn is_accessor(&self) -> bool {
+        self.attrs & ATTR_ACCESSOR != 0
+    }
+
+    #[inline]
+    pub fn current_value(&self) -> JSValue {
+        match &self.cell {
+            Some(cell) => cell.get(),
+            None => self.value,
+        }
+    }
+
+    #[inline]
+    pub fn writable(&self) -> bool {
+        self.attrs & ATTR_WRITABLE != 0
+    }
+
+    #[inline]
+    pub fn enumerable(&self) -> bool {
+        self.attrs & ATTR_ENUMERABLE != 0
+    }
+
+    #[inline]
+    pub fn configurable(&self) -> bool {
+        self.attrs & ATTR_CONFIGURABLE != 0
+    }
+
+    pub fn set_attrs_from_bools(&mut self, writable: bool, enumerable: bool, configurable: bool) {
+        let mut attrs = 0u8;
+        if writable {
+            attrs |= ATTR_WRITABLE;
+        }
+        if enumerable {
+            attrs |= ATTR_ENUMERABLE;
+        }
+        if configurable {
+            attrs |= ATTR_CONFIGURABLE;
+        }
+        self.attrs = (self.attrs & ATTR_ACCESSOR) | attrs;
+        if self.attrs & ATTR_ACCESSOR != 0 {
+            self.accessor.enumerable = enumerable;
+            self.accessor.configurable = configurable;
+        }
+    }
+}
+
+struct ArgumentEntryState {
+    is_accessor: bool,
+    value: JSValue,
+    get: Option<JSValue>,
+    set: Option<JSValue>,
+    writable: bool,
+    enumerable: bool,
+    configurable: bool,
+}
+
+impl ArgumentEntryState {
+    fn apply_define(
+        current: &ArgumentEntryState,
+        desc: &PropertyDescriptor,
+        effective_value: Option<JSValue>,
+        has_writable: bool,
+        has_enumerable: bool,
+        has_configurable: bool,
+    ) -> Option<ArgumentEntryState> {
+        let mut next = ArgumentEntryState {
+            is_accessor: current.is_accessor,
+            value: current.value,
+            get: current.get,
+            set: current.set,
+            writable: current.writable,
+            enumerable: current.enumerable,
+            configurable: current.configurable,
+        };
+        let desc_is_accessor = desc.is_accessor();
+        if !current.configurable {
+            if has_configurable && desc.configurable {
+                return None;
+            }
+            if has_enumerable && desc.enumerable != current.enumerable {
+                return None;
+            }
+            if desc_is_accessor != current.is_accessor {
+                return None;
+            }
+            if current.is_accessor {
+                if let Some(get) = desc.get {
+                    if get.raw_bits() != current.get.unwrap_or_else(JSValue::undefined).raw_bits()
+                    {
+                        return None;
+                    }
+                }
+                if let Some(set) = desc.set {
+                    if set.raw_bits() != current.set.unwrap_or_else(JSValue::undefined).raw_bits()
+                    {
+                        return None;
+                    }
+                }
+                return Some(next);
+            }
+            if has_writable && desc.writable && !current.writable {
+                return None;
+            }
+            if let Some(value) = effective_value {
+                if !current.writable && value.raw_bits() != current.value.raw_bits() {
+                    return None;
+                }
+                if current.writable {
+                    next.value = value;
+                }
+            }
+            if has_writable && !desc.writable && current.writable {
+                next.writable = false;
+            }
+            return Some(next);
+        }
+        if desc_is_accessor {
+            if !current.is_accessor {
+                next.is_accessor = true;
+                next.writable = false;
+                next.value = JSValue::undefined();
+                next.get = desc.get;
+                next.set = desc.set;
+            } else {
+                if let Some(get) = desc.get {
+                    next.get = Some(get);
+                }
+                if let Some(set) = desc.set {
+                    next.set = Some(set);
+                }
+            }
+        } else if current.is_accessor {
+            next.is_accessor = false;
+            next.get = None;
+            next.set = None;
+            next.value = effective_value.unwrap_or_else(JSValue::undefined);
+            next.writable = has_writable && desc.writable;
+        } else {
+            if let Some(value) = effective_value {
+                next.value = value;
+            }
+            if has_writable {
+                next.writable = desc.writable;
+            }
+        }
+        if has_enumerable {
+            next.enumerable = desc.enumerable;
+        }
+        if has_configurable {
+            next.configurable = desc.configurable;
+        }
+        Some(next)
+    }
+}
+
 #[derive(Clone)]
 pub struct PropSlot {
     pub value: JSValue,
@@ -489,6 +671,7 @@ pub struct ObjectExtra {
 
     pub mapped_args_frame_index: usize,
     pub mapped_args_param_count: u32,
+    pub argument_entries: Option<Box<Vec<ArgumentEntry>>>,
 }
 
 pub struct JSObject {
@@ -544,6 +727,7 @@ impl JSObject {
                 async_state: None,
                 mapped_args_frame_index: 0,
                 mapped_args_param_count: 0,
+                argument_entries: None,
             })
         })
     }
@@ -723,6 +907,108 @@ impl JSObject {
 
     pub fn mapped_args_param_count(&self) -> u32 {
         self.extra.as_ref().map_or(0, |e| e.mapped_args_param_count)
+    }
+
+    #[inline]
+    pub fn argument_entries(&self) -> Option<&[ArgumentEntry]> {
+        if self.obj_type != ObjectType::MappedArguments {
+            return None;
+        }
+        self.extra
+            .as_ref()
+            .and_then(|e| e.argument_entries.as_deref())
+            .map(|entries| entries.as_slice())
+    }
+
+    pub fn set_argument_entries(&mut self, entries: Vec<ArgumentEntry>) {
+        if entries.is_empty() {
+            return;
+        }
+        self.ensure_extra().argument_entries = Some(Box::new(entries));
+    }
+
+    #[inline]
+    pub fn argument_entry_at(&self, index: usize) -> Option<&ArgumentEntry> {
+        self.argument_entries()
+            .and_then(|entries| entries.get(index))
+            .filter(|entry| entry.present)
+    }
+
+    #[inline]
+    pub fn argument_entry(&self, atom: crate::runtime::atom::Atom) -> Option<&ArgumentEntry> {
+        self.argument_entries().and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry.present && entry.atom == atom)
+        })
+    }
+
+    #[inline]
+    pub fn argument_entry_mut(
+        &mut self,
+        atom: crate::runtime::atom::Atom,
+    ) -> Option<&mut ArgumentEntry> {
+        if self.obj_type != ObjectType::MappedArguments {
+            return None;
+        }
+        self.extra
+            .as_mut()
+            .and_then(|e| e.argument_entries.as_mut())
+            .and_then(|entries| {
+                entries
+                    .iter_mut()
+                    .find(|entry| entry.present && entry.atom == atom)
+            })
+    }
+
+    #[inline]
+    pub fn argument_entry_index(&self, atom: crate::runtime::atom::Atom) -> Option<usize> {
+        self.argument_entries()?
+            .iter()
+            .position(|entry| entry.atom == atom)
+    }
+
+    #[inline]
+    pub fn argument_entry_value(entry: &ArgumentEntry) -> JSValue {
+        match &entry.cell {
+            Some(cell) => cell.get(),
+            None => entry.value,
+        }
+    }
+
+    #[inline]
+    pub fn argument_data_value(&self, atom: crate::runtime::atom::Atom) -> Option<JSValue> {
+        let entry = self.argument_entry(atom)?;
+        if entry.attrs & ATTR_ACCESSOR != 0 {
+            return None;
+        }
+        Some(Self::argument_entry_value(entry))
+    }
+
+    pub fn set_argument_entry_value(
+        &mut self,
+        atom: crate::runtime::atom::Atom,
+        value: JSValue,
+    ) -> bool {
+        let Some(entry) = self.argument_entry_mut(atom) else {
+            return false;
+        };
+        if entry.attrs & ATTR_ACCESSOR != 0 {
+            return false;
+        }
+        match &entry.cell {
+            Some(cell) => cell.set(value),
+            None => entry.value = value,
+        }
+        true
+    }
+
+    pub fn take_argument_cell(
+        &mut self,
+        atom: crate::runtime::atom::Atom,
+    ) -> Option<std::rc::Rc<std::cell::Cell<JSValue>>> {
+        let entry = self.argument_entry_mut(atom)?;
+        entry.cell.take()
     }
 
     pub fn is_generator(&self) -> bool {
@@ -1226,6 +1512,11 @@ impl JSObject {
 
     #[inline(always)]
     pub fn get_own_accessor_value(&self, prop: Atom) -> Option<JSValue> {
+        if let Some(entry) = self.argument_entry(prop) {
+            if entry.is_accessor() {
+                return Some(entry.accessor.get.unwrap_or_else(JSValue::undefined));
+            }
+        }
         if let Some(ref extra) = self.extra {
             if let Some(ref accs) = extra.accessors {
                 if let Some(entry) = accs.get(&prop) {
@@ -1237,6 +1528,11 @@ impl JSObject {
     }
 
     pub fn get_own_accessor_entry(&self, prop: Atom) -> Option<&AccessorEntry> {
+        if let Some(entry) = self.argument_entry(prop) {
+            if entry.is_accessor() {
+                return Some(&entry.accessor);
+            }
+        }
         self.extra.as_ref()?.accessors.as_ref()?.get(&prop)
     }
 
@@ -1362,6 +1658,12 @@ impl JSObject {
 
     #[inline(always)]
     pub fn get(&self, prop: Atom) -> Option<JSValue> {
+        if let Some(entry) = self.argument_entry(prop) {
+            if entry.is_accessor() {
+                return Some(entry.accessor.get.unwrap_or_else(JSValue::undefined));
+            }
+            return Some(Self::argument_entry_value(entry));
+        }
         if let Some(offset) = self.find_offset(prop) {
             if offset < self.props.len() {
                 return Some(self.props[offset].value);
@@ -1404,6 +1706,16 @@ impl JSObject {
 
     #[inline(always)]
     pub fn set(&mut self, prop: Atom, value: JSValue) {
+        if let Some(entry) = self.argument_entry_mut(prop) {
+            if entry.is_accessor() || !entry.writable() {
+                return;
+            }
+            match &entry.cell {
+                Some(cell) => cell.set(value),
+                None => entry.value = value,
+            }
+            return;
+        }
         if let Some(offset) = self.find_offset(prop) {
             if offset < self.props.len() {
                 if self.props[offset].attrs & ATTR_WRITABLE == 0 {
@@ -1526,6 +1838,16 @@ impl JSObject {
 
     #[inline(always)]
     pub fn set_cached(&mut self, prop: Atom, value: JSValue, cache: &mut ShapeCache) {
+        if let Some(entry) = self.argument_entry_mut(prop) {
+            if entry.is_accessor() || !entry.writable() {
+                return;
+            }
+            match &entry.cell {
+                Some(cell) => cell.set(value),
+                None => entry.value = value,
+            }
+            return;
+        }
         if let Some(offset) = self.shape_offset(prop) {
             let off = offset as usize;
             if off < self.props.len() && self.props[off].attrs != ATTR_DELETED {
@@ -1753,6 +2075,12 @@ impl JSObject {
     }
 
     pub fn get_own(&self, prop: Atom) -> Option<JSValue> {
+        if let Some(entry) = self.argument_entry(prop) {
+            if entry.is_accessor() {
+                return entry.accessor.get;
+            }
+            return Some(Self::argument_entry_value(entry));
+        }
         if let Some(offset) = self.find_offset(prop) {
             if offset < self.props.len() {
                 return Some(self.props[offset].value);
@@ -1864,6 +2192,26 @@ impl JSObject {
     }
 
     pub fn get_own_descriptor(&self, prop: Atom) -> Option<PropertyDescriptor> {
+        if let Some(entry) = self.argument_entry(prop) {
+            if entry.is_accessor() {
+                return Some(PropertyDescriptor {
+                    value: None,
+                    writable: false,
+                    enumerable: entry.accessor.enumerable,
+                    configurable: entry.accessor.configurable,
+                    get: entry.accessor.get,
+                    set: entry.accessor.set,
+                });
+            }
+            return Some(PropertyDescriptor {
+                value: Some(Self::argument_entry_value(entry)),
+                writable: entry.writable(),
+                enumerable: entry.enumerable(),
+                configurable: entry.configurable(),
+                get: None,
+                set: None,
+            });
+        }
         if let Some(offset) = self.find_offset(prop) {
             if offset < self.props.len() {
                 let a = self.props[offset].attrs;
@@ -1933,6 +2281,15 @@ impl JSObject {
         has_enumerable: bool,
         has_configurable: bool,
     ) -> bool {
+        if let Some(index) = self.argument_entry_index(prop) {
+            return self.define_argument_entry(
+                index,
+                desc,
+                has_writable,
+                has_enumerable,
+                has_configurable,
+            );
+        }
         if let Some(existing) = self.get_own_descriptor(prop) {
             if !existing.configurable {
                 if has_configurable && desc.configurable {
@@ -2115,7 +2472,115 @@ impl JSObject {
         true
     }
 
+    fn define_argument_entry(
+        &mut self,
+        index: usize,
+        desc: PropertyDescriptor,
+        has_writable: bool,
+        has_enumerable: bool,
+        has_configurable: bool,
+    ) -> bool {
+        let entries = match self
+            .extra
+            .as_mut()
+            .and_then(|e| e.argument_entries.as_mut())
+        {
+            Some(entries) => entries,
+            None => return false,
+        };
+        let entry = &mut entries[index];
+        let was_mapped = entry.cell.is_some();
+        let current = if entry.present {
+            ArgumentEntryState {
+                is_accessor: entry.is_accessor(),
+                value: entry.current_value(),
+                get: entry.accessor.get,
+                set: entry.accessor.set,
+                writable: entry.writable(),
+                enumerable: entry.enumerable(),
+                configurable: entry.configurable(),
+            }
+        } else {
+            ArgumentEntryState {
+                is_accessor: false,
+                value: JSValue::undefined(),
+                get: None,
+                set: None,
+                writable: false,
+                enumerable: false,
+                configurable: false,
+            }
+        };
+        let mut effective_value = desc.value;
+        if was_mapped
+            && !desc.is_accessor()
+            && effective_value.is_none()
+            && has_writable
+            && !desc.writable
+        {
+            effective_value = Some(current.value);
+        }
+        let next = match ArgumentEntryState::apply_define(
+            &current,
+            &desc,
+            effective_value,
+            has_writable,
+            has_enumerable,
+            has_configurable,
+        ) {
+            Some(next) => next,
+            None => return false,
+        };
+        if was_mapped {
+            if desc.is_accessor() {
+                entry.cell = None;
+            } else {
+                if let Some(value) = effective_value {
+                    if let Some(cell) = entry.cell.as_ref() {
+                        cell.set(value);
+                    }
+                }
+                if has_writable && !desc.writable {
+                    entry.cell = None;
+                }
+            }
+        }
+        entry.present = true;
+        entry.value = next.value;
+        entry.attrs = (if next.is_accessor {
+            ATTR_ACCESSOR
+        } else {
+            0
+        }) | (if !next.is_accessor && next.writable {
+            ATTR_WRITABLE
+        } else {
+            0
+        }) | (if next.enumerable {
+            ATTR_ENUMERABLE
+        } else {
+            0
+        }) | (if next.configurable {
+            ATTR_CONFIGURABLE
+        } else {
+            0
+        });
+        entry.accessor.get = next.get;
+        entry.accessor.set = next.set;
+        entry.accessor.enumerable = next.enumerable;
+        entry.accessor.configurable = next.configurable;
+        true
+    }
+
     pub fn delete(&mut self, prop: Atom) -> bool {
+        if let Some(entry) = self.argument_entry_mut(prop) {
+            if !entry.configurable() {
+                return false;
+            }
+            entry.present = false;
+            entry.cell = None;
+            entry.value = JSValue::undefined();
+            return true;
+        }
         if let Some(offset) = self.find_offset(prop) {
             if offset < self.props.len() {
                 if self.props[offset].attrs & ATTR_CONFIGURABLE == 0 {
@@ -2210,6 +2675,9 @@ impl JSObject {
     }
 
     pub fn has_property(&self, prop: Atom) -> bool {
+        if self.argument_entry(prop).is_some() {
+            return true;
+        }
         if self.find_offset(prop).is_some() {
             return true;
         }
@@ -2246,6 +2714,9 @@ impl JSObject {
     }
 
     pub fn has_own(&self, prop: Atom) -> bool {
+        if self.argument_entry(prop).is_some() {
+            return true;
+        }
         if self.find_offset(prop).is_some() {
             return true;
         }
@@ -2257,6 +2728,13 @@ impl JSObject {
 
     pub fn keys(&self) -> Vec<Atom> {
         let mut result = Vec::new();
+        if let Some(entries) = self.argument_entries() {
+            for entry in entries {
+                if entry.present {
+                    result.push(entry.atom);
+                }
+            }
+        }
         let mut seen: std::collections::HashSet<Atom> = std::collections::HashSet::new();
         for slot in &self.props {
             if slot.attrs == ATTR_DELETED {
@@ -2340,6 +2818,13 @@ impl JSObject {
 
     pub fn enumerable_keys(&self) -> Vec<Atom> {
         let mut result = Vec::new();
+        if let Some(entries) = self.argument_entries() {
+            for entry in entries {
+                if entry.present && entry.attrs & ATTR_ENUMERABLE != 0 {
+                    result.push(entry.atom);
+                }
+            }
+        }
         let mut seen: std::collections::HashSet<Atom> = std::collections::HashSet::new();
         for slot in &self.props {
             if slot.attrs == ATTR_DELETED {
@@ -2424,6 +2909,12 @@ impl JSObject {
 
     #[inline]
     pub fn get_indexed(&self, index: usize) -> Option<JSValue> {
+        if let Some(entry) = self.argument_entry_at(index) {
+            if entry.is_accessor() {
+                return None;
+            }
+            return Some(Self::argument_entry_value(entry));
+        }
         self.extra
             .as_ref()
             .and_then(|e| e.array_elements.as_ref())
@@ -2458,6 +2949,14 @@ impl JSObject {
 
     #[inline]
     pub fn set_indexed(&mut self, index: usize, value: JSValue) {
+        if let Some(entry) = self.argument_entry_at(index) {
+            if entry.is_accessor() || !entry.writable() {
+                return;
+            }
+            let atom = entry.atom;
+            let _ = self.set_argument_entry_value(atom, value);
+            return;
+        }
         let elements = self.ensure_elements();
         if index < elements.len() {
             elements[index] = value;
@@ -2469,6 +2968,13 @@ impl JSObject {
 
     #[inline]
     pub fn maybe_set_indexed(&mut self, index: usize, value: JSValue) -> bool {
+        if let Some(entry) = self.argument_entry_at(index) {
+            if entry.is_accessor() || !entry.writable() {
+                return false;
+            }
+            let atom = entry.atom;
+            return self.set_argument_entry_value(atom, value);
+        }
         if let Some(extra) = &mut self.extra {
             if let Some(elements) = &mut extra.array_elements {
                 if index < elements.len() {

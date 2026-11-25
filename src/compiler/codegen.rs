@@ -856,6 +856,7 @@ impl CodeGenerator {
         self.emit_u16(bytecode.param_count);
         self.emit_u8(if bytecode.uses_arguments { 1 } else { 0 });
         self.emit_u8(if bytecode.is_strict { 1 } else { 0 });
+        self.emit_u8(if bytecode.has_simple_parameters { 1 } else { 0 });
         self.emit_u8(function_kind);
         let locals_bytes = (bytecode.locals_count as u16).to_le_bytes();
         self.code.extend_from_slice(&locals_bytes);
@@ -2632,6 +2633,7 @@ impl CodeGenerator {
             shared_const_ptr: std::ptr::null(),
             shared_const_len: 0,
             uses_arguments: self.function_uses_arguments,
+            has_simple_parameters: is_simple_params,
             is_strict: self.is_strict,
             var_name_to_slot,
             nested_bytecodes: Vec::new(),
