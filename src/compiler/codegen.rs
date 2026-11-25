@@ -1747,6 +1747,21 @@ impl CodeGenerator {
             self.next_register = param_slot_start;
         }
 
+        if !is_simple_params {
+            let mut has_arguments_param = false;
+            for param in params {
+                let mut names = std::collections::HashSet::new();
+                Self::collect_parameter_bindings(param, &mut names);
+                if names.contains("arguments") {
+                    has_arguments_param = true;
+                    break;
+                }
+            }
+            let mark = if !self.is_arrow || has_arguments_param { 2 } else { 1 };
+            self.emit(Opcode::ParamInitMark);
+            self.emit_u8(mark);
+        }
+
         let mut fixed_param_count = 0u16;
         let mut before_default = true;
         let mut needs_tdz = false;
@@ -1894,6 +1909,11 @@ impl CodeGenerator {
                 }
                 Parameter::RestElement(_) => break,
             }
+        }
+
+        if !is_simple_params {
+            self.emit(Opcode::ParamInitMark);
+            self.emit_u8(0);
         }
 
         let mut locals: std::collections::HashSet<String> =

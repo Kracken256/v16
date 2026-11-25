@@ -186,6 +186,7 @@ pub enum Opcode {
     StrictEqJumpIf = 171,
     StrictNeqJumpIfNot = 172,
     StrictNeqJumpIf = 173,
+    ParamInitMark = 225,
 }
 
 impl Opcode {
@@ -363,6 +364,7 @@ impl Opcode {
             171 => Some(Opcode::StrictEqJumpIf),
             172 => Some(Opcode::StrictNeqJumpIfNot),
             173 => Some(Opcode::StrictNeqJumpIf),
+            225 => Some(Opcode::ParamInitMark),
             _ => None,
         }
     }
@@ -375,6 +377,7 @@ impl Opcode {
     pub fn instruction_size(op: Opcode) -> usize {
         match op {
             Opcode::Nop | Opcode::End | Opcode::Catch | Opcode::Finally | Opcode::EndFinally => 1,
+            Opcode::ParamInitMark => 2,
             Opcode::ResetPerIterVar => 3,
             Opcode::Return => 3,
             Opcode::LoadTrue
@@ -713,6 +716,10 @@ impl Bytecode {
                 | Opcode::Catch
                 | Opcode::Finally
                 | Opcode::EndFinally => {}
+                Opcode::ParamInitMark => {
+                    let a = read_u8(1);
+                    write!(operands, " {}", a).unwrap();
+                }
                 Opcode::ResetPerIterVar => {
                     let a = read_u16(1);
                     write!(operands, " r{}", a).unwrap();

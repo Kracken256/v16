@@ -47,6 +47,8 @@ pub struct CallFrame {
     pub eval_bindings: Option<Box<std::collections::HashMap<u32, JSValue>>>,
     pub cached_arguments: Option<usize>,
     pub with_env: Option<JSValue>,
+    pub in_parameter_initializer: bool,
+    pub param_env_has_arguments: bool,
 }
 
 impl CallFrame {
@@ -79,6 +81,8 @@ impl CallFrame {
             eval_bindings: None,
             cached_arguments: None,
             with_env: None,
+            in_parameter_initializer: false,
+            param_env_has_arguments: false,
         }
     }
 }
@@ -2736,24 +2740,12 @@ impl VM {
     pub fn direct_eval(&mut self, ctx: &mut JSContext, source: &str) -> Result<JSValue, String> {
         let is_strict_caller = self.frames[self.frame_index].is_strict_frame;
 
-        let trimmed = source.trim();
-        if trimmed.starts_with("var ")
-            || trimmed.starts_with("let ")
-            || trimmed.starts_with("const ")
-        {
-            let decl_kw = if trimmed.starts_with("var ") {
-                "var "
-            } else if trimmed.starts_with("let ") {
-                "let "
-            } else {
-                "const "
-            };
-            let after_kw = &trimmed[decl_kw.len()..].trim_start();
-            let var_name = after_kw
-                .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                .next()
-                .unwrap_or("");
-            if var_name == "arguments" {
+        if !is_strict_caller {
+            let frame = &self.frames[self.frame_index];
+            if frame.in_parameter_initializer
+                && frame.param_env_has_arguments
+                && crate::compiler::eval_source_declares_var(source, "arguments")
+            {
                 let mut err = crate::object::object::JSObject::new();
                 err.set(
                     ctx.intern("name"),
@@ -2761,22 +2753,17 @@ impl VM {
                 );
                 err.set(
                     ctx.intern("message"),
-                    JSValue::new_string(ctx.intern("arguments not allowed in direct eval")),
+                    JSValue::new_string(ctx.intern(
+                        "Identifier 'arguments' has already been declared",
+                    )),
                 );
                 if let Some(proto) = ctx.get_syntax_error_prototype() {
                     err.prototype = Some(proto);
                 }
                 let ptr = Box::into_raw(Box::new(err)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
-                let exc = JSValue::new_object(ptr);
-                match self.dispatch_throw_value(ctx, exc) {
-                    ThrowDispatch::Caught => return Ok(JSValue::undefined()),
-                    ThrowDispatch::Uncaught(e) => return Err(e),
-                    ThrowDispatch::AsyncComplete(o) => match o {
-                        ExecutionOutcome::Complete(v) => return Ok(v),
-                        _ => return Err("async eval error".to_string()),
-                    },
-                }
+                ctx.pending_exception = Some(JSValue::new_object(ptr));
+                return Ok(JSValue::undefined());
             }
         }
 
@@ -3086,6 +3073,12 @@ impl VM {
 
             match op {
                 Opcode::Nop => {}
+                Opcode::ParamInitMark => {
+                    let mark = self.read_u8();
+                    let frame = &mut self.frames[self.frame_index];
+                    frame.in_parameter_initializer = mark != 0;
+                    frame.param_env_has_arguments = mark == 2;
+                }
                 Opcode::End => {
                     if self.frame_index == 0 {
                         return Ok(ExecutionOutcome::Complete(self.get_reg(0)));

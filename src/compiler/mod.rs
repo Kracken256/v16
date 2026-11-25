@@ -28,6 +28,215 @@ pub fn eval_code_via_ast(ctx: &mut JSContext, source: &str) -> Result<JSValue, S
     eval_code_via_ast_with_opt_level(ctx, source, ctx.get_compiler_opt_level())
 }
 
+fn program_has_use_strict_directive(program: &ast::Program) -> bool {
+    for stmt in &program.body {
+        match stmt {
+            ast::ASTNode::ExpressionStatement(es) => {
+                if let ast::Expression::Literal(ast::Literal::String(s, has_escape, _)) =
+                    &es.expression
+                {
+                    if !has_escape && s == "use strict" {
+                        return true;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn collect_var_declared_names(stmt: &ast::ASTNode, out: &mut Vec<String>) {
+    match stmt {
+        ast::ASTNode::VariableDeclaration(decl) => {
+            if decl.kind == ast::VariableKind::Var {
+                for d in &decl.declarations {
+                    collect_binding_pattern_names(&d.id, out);
+                }
+            }
+        }
+        ast::ASTNode::FunctionDeclaration(func) => out.push(func.name.clone()),
+        ast::ASTNode::BlockStatement(block) => {
+            for stmt in &block.body {
+                collect_var_declared_names(stmt, out);
+            }
+        }
+        ast::ASTNode::IfStatement(if_stmt) => {
+            collect_var_declared_names(&if_stmt.consequent, out);
+            if let Some(alternate) = &if_stmt.alternate {
+                collect_var_declared_names(alternate, out);
+            }
+        }
+        ast::ASTNode::ForStatement(for_stmt) => {
+            if let Some(ast::ForInit::VariableDeclaration(decl)) = &for_stmt.init {
+                if decl.kind == ast::VariableKind::Var {
+                    for d in &decl.declarations {
+                        collect_binding_pattern_names(&d.id, out);
+                    }
+                }
+            }
+            collect_var_declared_names(&for_stmt.body, out);
+        }
+        ast::ASTNode::ForInStatement(for_stmt) => {
+            if let ast::ForInOfLeft::VariableDeclaration(decl) = &for_stmt.left {
+                if decl.kind == ast::VariableKind::Var {
+                    for d in &decl.declarations {
+                        collect_binding_pattern_names(&d.id, out);
+                    }
+                }
+            }
+            collect_var_declared_names(&for_stmt.body, out);
+        }
+        ast::ASTNode::ForOfStatement(for_stmt) => {
+            if let ast::ForInOfLeft::VariableDeclaration(decl) = &for_stmt.left {
+                if decl.kind == ast::VariableKind::Var {
+                    for d in &decl.declarations {
+                        collect_binding_pattern_names(&d.id, out);
+                    }
+                }
+            }
+            collect_var_declared_names(&for_stmt.body, out);
+        }
+        ast::ASTNode::WhileStatement(while_stmt) => {
+            collect_var_declared_names(&while_stmt.body, out);
+        }
+        ast::ASTNode::DoWhileStatement(do_stmt) => {
+            collect_var_declared_names(&do_stmt.body, out);
+        }
+        ast::ASTNode::SwitchStatement(switch_stmt) => {
+            for case in &switch_stmt.cases {
+                for stmt in &case.consequent {
+                    collect_var_declared_names(stmt, out);
+                }
+            }
+        }
+        ast::ASTNode::TryStatement(try_stmt) => {
+            for stmt in &try_stmt.block.body {
+                collect_var_declared_names(stmt, out);
+            }
+            if let Some(handler) = &try_stmt.handler {
+                for stmt in &handler.body.body {
+                    collect_var_declared_names(stmt, out);
+                }
+            }
+            if let Some(finalizer) = &try_stmt.finalizer {
+                for stmt in &finalizer.body {
+                    collect_var_declared_names(stmt, out);
+                }
+            }
+        }
+        ast::ASTNode::WithStatement(with_stmt) => {
+            collect_var_declared_names(&with_stmt.body, out);
+        }
+        ast::ASTNode::LabelledStatement(labelled) => {
+            collect_var_declared_names(&labelled.body, out);
+        }
+        ast::ASTNode::ExportNamedDeclaration(export) => {
+            if let Some(ast::ExportDeclaration::Variable(decl)) = &export.declaration {
+                if decl.kind == ast::VariableKind::Var {
+                    for d in &decl.declarations {
+                        collect_binding_pattern_names(&d.id, out);
+                    }
+                }
+            } else if let Some(ast::ExportDeclaration::Function(func)) = &export.declaration {
+                out.push(func.name.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_binding_pattern_names(pattern: &ast::BindingPattern, out: &mut Vec<String>) {
+    match pattern {
+        ast::BindingPattern::Identifier(name) => out.push(name.clone()),
+        ast::BindingPattern::ArrayPattern(array) => {
+            for element in &array.elements {
+                if let Some(element) = element {
+                    match element {
+                        ast::PatternElement::Pattern(target) => {
+                            collect_assignment_target_names(target, out)
+                        }
+                        ast::PatternElement::RestElement(rest) => {
+                            collect_assignment_target_names(&rest.argument, out)
+                        }
+                        ast::PatternElement::AssignmentPattern(assignment) => {
+                            collect_assignment_target_names(&assignment.left, out)
+                        }
+                    }
+                }
+            }
+        }
+        ast::BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                match property {
+                    ast::ObjectPatternProperty::Property { value, .. } => {
+                        collect_assignment_target_names(value, out)
+                    }
+                    ast::ObjectPatternProperty::RestElement(rest) => {
+                        collect_assignment_target_names(&rest.argument, out)
+                    }
+                }
+            }
+        }
+        ast::BindingPattern::AssignmentPattern(assignment) => {
+            collect_assignment_target_names(&assignment.left, out)
+        }
+    }
+}
+
+fn collect_assignment_target_names(target: &ast::AssignmentTarget, out: &mut Vec<String>) {
+    match target {
+        ast::AssignmentTarget::Identifier(name) => out.push(name.clone()),
+        ast::AssignmentTarget::ArrayPattern(array) => {
+            for element in &array.elements {
+                if let Some(element) = element {
+                    match element {
+                        ast::PatternElement::Pattern(target) => {
+                            collect_assignment_target_names(target, out)
+                        }
+                        ast::PatternElement::RestElement(rest) => {
+                            collect_assignment_target_names(&rest.argument, out)
+                        }
+                        ast::PatternElement::AssignmentPattern(assignment) => {
+                            collect_assignment_target_names(&assignment.left, out)
+                        }
+                    }
+                }
+            }
+        }
+        ast::AssignmentTarget::ObjectPattern(object) => {
+            for property in &object.properties {
+                match property {
+                    ast::ObjectPatternProperty::Property { value, .. } => {
+                        collect_assignment_target_names(value, out)
+                    }
+                    ast::ObjectPatternProperty::RestElement(rest) => {
+                        collect_assignment_target_names(&rest.argument, out)
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn eval_source_declares_var(source: &str, name: &str) -> bool {
+    let mut parser = parser::Parser::new(source);
+    let Ok(program) = parser.parse() else {
+        return false;
+    };
+    if program_has_use_strict_directive(&program) {
+        return false;
+    }
+    let mut names = Vec::new();
+    for stmt in &program.body {
+        collect_var_declared_names(stmt, &mut names);
+    }
+    names.iter().any(|declared| declared == name)
+}
+
 pub fn compile_script_to_bytecode_with_opt_level(
     ctx: &mut JSContext,
     source: &str,
