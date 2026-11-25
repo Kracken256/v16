@@ -954,7 +954,7 @@ fn reflect_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn reflect_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if args.len() < 3 || !args[0].is_object_like() {
+    if args.len() < 2 || !args[0].is_object_like() {
         let mut err = JSObject::new();
         err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
         err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("Reflect.set requires an object")));
@@ -966,7 +966,11 @@ fn reflect_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let target = args[0];
     let key_val = &args[1];
-    let value = args[2].clone();
+    let value = if args.len() >= 3 {
+        args[2].clone()
+    } else {
+        JSValue::undefined()
+    };
     let key = if key_val.is_string() {
         key_val.get_atom()
     } else if key_val.is_symbol() {
@@ -1053,7 +1057,11 @@ fn reflect_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::bool(false);
     }
 
-    receiver.as_object_mut().set(key, value);
+    let receiver_obj = receiver.as_object_mut();
+    if !receiver_obj.extensible() && receiver_obj.get_own_descriptor(key).is_none() {
+        return JSValue::bool(false);
+    }
+    receiver_obj.set(key, value);
     JSValue::bool(true)
 }
 
