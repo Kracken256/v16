@@ -11961,8 +11961,46 @@ impl VM {
         if value.is_string() || value.is_symbol() || value.is_int() || value.is_float() {
             return value;
         }
+        if value.is_object() || value.is_function() {
+            let prim = self.ordinary_to_primitive(&value, "string", ctx);
+            if self.pending_throw.is_some() || ctx.pending_exception.is_some() {
+                return JSValue::undefined();
+            }
+            if prim.is_symbol() {
+                return prim;
+            }
+            let s = VM::js_to_string(&prim, ctx);
+            if s.is_string() {
+                return s;
+            }
+            let text = crate::builtins::global::to_property_key_string(ctx, &s);
+            return JSValue::new_string(ctx.intern(&text));
+        }
         let s = crate::builtins::global::to_property_key_string(ctx, &value);
         JSValue::new_string(ctx.intern(&s))
+    }
+
+    fn canonical_property_key_value(
+        &mut self,
+        ctx: &mut JSContext,
+        value: JSValue,
+    ) -> Option<JSValue> {
+        let key = self.to_property_key_value(ctx, value);
+        if self.pending_throw.is_some() || ctx.pending_exception.is_some() {
+            return None;
+        }
+        if key.is_string() || key.is_symbol() {
+            Some(key)
+        } else if key.is_int() {
+            let atom = self.int_atom(key.get_int() as usize, ctx);
+            Some(JSValue::new_string(atom))
+        } else if key.is_float() {
+            let s = VM::js_to_string(&key, ctx);
+            Some(JSValue::new_string(s.get_atom()))
+        } else {
+            let s = VM::js_to_string(&key, ctx);
+            Some(JSValue::new_string(s.get_atom()))
+        }
     }
 
     fn set_named_prop_fast(
@@ -12660,7 +12698,18 @@ impl VM {
             if self.pending_throw.is_some() {
                 return JSValue::undefined();
             }
-            has_tp = tp_val.map_or(false, |v| v.is_function());
+            has_tp = match tp_val {
+                Some(t) if t.is_function() => true,
+                Some(t) if t.is_undefined() || t.is_null() => false,
+                Some(_) => {
+                    self.set_pending_type_error(
+                        ctx,
+                        "Symbol.toPrimitive is not a function",
+                    );
+                    return JSValue::undefined();
+                }
+                None => false,
+            };
         }
         if !has_tp {
             if let Some(prim) = obj.get(ctx.common_atoms.__value__) {
