@@ -2255,6 +2255,10 @@ impl Parser {
                         arguments: args,
                         optional: true,
                     });
+                } else if self.at_template_start() {
+                    return Err(self.error(
+                        "Optional chain cannot be followed by a template literal",
+                    ));
                 } else {
                     let name = self.cur_value().to_string();
                     self.advance();
@@ -2281,6 +2285,14 @@ impl Parser {
                     arguments: args,
                 });
             } else if self.at_template_start() {
+                if matches!(
+                    expr,
+                    Expression::OptionalMemberExpression(_) | Expression::OptionalCallExpression(_)
+                ) {
+                    return Err(self.error(
+                        "Optional chain cannot be followed by a template literal",
+                    ));
+                }
                 let quasi = match self.parse_template_literal()? {
                     Expression::TemplateLiteral(template) => template,
                     _ => return Err(self.error("Expected template literal")),
