@@ -202,6 +202,37 @@ pub fn validate_program(
     allow_super_property: bool,
     allow_super_call: bool,
 ) -> Result<(), String> {
+    validate_program_with_source_type(
+        program,
+        is_strict,
+        allow_super_property,
+        allow_super_call,
+        program.source_type == SourceType::Module,
+    )
+}
+
+pub fn validate_program_with_source_type(
+    program: &Program,
+    is_strict: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    is_module: bool,
+) -> Result<(), String> {
+    if !is_module {
+        for stmt in &program.body {
+            if matches!(
+                stmt,
+                ASTNode::ImportDeclaration(_)
+                    | ASTNode::ExportNamedDeclaration(_)
+                    | ASTNode::ExportDefaultDeclaration(_)
+                    | ASTNode::ExportAllDeclaration(_)
+            ) {
+                return Err(
+                    "SyntaxError: 'import' and 'export' may only appear in a module".to_string(),
+                );
+            }
+        }
+    }
     let strict = is_strict || program.source_type == SourceType::Module;
     let ctx = Ctx {
         strict,
@@ -801,7 +832,8 @@ fn validate_for_in_of(
 }
 
 fn validate_function_declaration(fd: &FunctionDeclaration, ctx: Ctx) -> Result<(), String> {
-    check_binding_identifier(&fd.name, ctx)?;
+    let name_ctx = ctx.with_strict(has_use_strict_directive(&fd.body.body));
+    check_binding_identifier(&fd.name, name_ctx)?;
     validate_function_body(&fd.params, &fd.body, fd.is_async, fd.generator, ctx, false)
 }
 
@@ -900,7 +932,29 @@ fn validate_function_body_with_super(
     for p in params {
         validate_parameter(p, ctx)?;
     }
+    check_parameters_against_body_lexical(params, &body.body)?;
     validate_body(&body.body, ctx)
+}
+
+fn check_parameters_against_body_lexical(
+    params: &[Parameter],
+    body: &[ASTNode],
+) -> Result<(), String> {
+    let mut param_names = Vec::new();
+    collect_parameter_names(params, &mut param_names);
+    if param_names.is_empty() {
+        return Ok(());
+    }
+    let mut lexical: Vec<(String, bool)> = Vec::new();
+    for stmt in body {
+        collect_lexical_names(stmt, true, &mut lexical);
+    }
+    for (name, _) in &param_names {
+        if lexical.iter().any(|(n, _)| n == name) {
+            return Err(redeclaration_error(name));
+        }
+    }
+    Ok(())
 }
 
 fn validate_parameter(p: &Parameter, ctx: Ctx) -> Result<(), String> {
@@ -921,11 +975,6 @@ fn validate_parameter_default(expr: &Expression, ctx: Ctx) -> Result<(), String>
     if contains_super_call(expr) {
         return Err(
             "SyntaxError: 'super' call is not allowed in formal parameter defaults".to_string(),
-        );
-    }
-    if contains_super_property(expr) {
-        return Err(
-            "SyntaxError: 'super' property is not allowed in formal parameter defaults".to_string(),
         );
     }
     if ctx.in_generator && contains_yield(expr) {
@@ -1334,6 +1383,14 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                         .to_string(),
                 );
             }
+            if u.op == UnaryOp::Delete && ctx.strict {
+                if let Expression::Identifier(_) = *u.argument {
+                    return Err(
+                        "SyntaxError: delete of an unqualified identifier in strict mode"
+                            .to_string(),
+                    );
+                }
+            }
             validate_expression(&u.argument, ctx)
         }
         Expression::UpdateExpression(u) => {
@@ -1502,6 +1559,9 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             for p in &arrow.params {
                 validate_parameter(p, inner)?;
             }
+            if let ArrowBody::Block(b) = &arrow.body {
+                check_parameters_against_body_lexical(&arrow.params, &b.body)?;
+            }
             match &arrow.body {
                 ArrowBody::Expression(e) => validate_expression(e, inner),
                 ArrowBody::Block(b) => validate_body(&b.body, inner),
@@ -1669,7 +1729,6 @@ fn validate_assignment_target(t: &AssignmentTarget, ctx: Ctx) -> Result<(), Stri
 enum Scan {
     Arguments,
     SuperCall,
-    Super,
     Yield,
     Await,
 }
@@ -1680,10 +1739,6 @@ fn contains_arguments(expr: &Expression) -> bool {
 
 fn contains_super_call(expr: &Expression) -> bool {
     expr_contains(expr, Scan::SuperCall)
-}
-
-fn contains_super_property(expr: &Expression) -> bool {
-    expr_contains(expr, Scan::Super)
 }
 
 fn contains_yield(expr: &Expression) -> bool {
@@ -1710,7 +1765,6 @@ fn parameter_contains(param: &Parameter, mode: Scan) -> bool {
 fn expr_contains(expr: &Expression, mode: Scan) -> bool {
     match expr {
         Expression::Identifier(id) => mode == Scan::Arguments && id.name == "arguments",
-        Expression::Super => mode == Scan::Super,
         Expression::FunctionExpression(_) => false,
         Expression::ClassExpression(c) => {
             c.super_class.as_ref().is_some_and(|s| expr_contains(s, mode))
