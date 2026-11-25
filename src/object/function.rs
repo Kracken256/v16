@@ -57,6 +57,11 @@ pub struct JSFunction {
     pub line_number_table: Option<std::sync::Arc<LineNumberTable>>,
     pub source_text: Option<String>,
     pub with_env: Option<JSValue>,
+    pub arrow_this: JSValue,
+    pub arrow_super: JSValue,
+    pub arrow_new_target: JSValue,
+    pub home_object: JSValue,
+    pub arrow_super_base: JSValue,
 }
 
 impl JSFunction {
@@ -78,6 +83,11 @@ impl JSFunction {
             line_number_table: None,
             source_text: None,
             with_env: None,
+            arrow_this: JSValue::undefined(),
+            arrow_super: JSValue::undefined(),
+            arrow_new_target: JSValue::undefined(),
+            home_object: JSValue::undefined(),
+            arrow_super_base: JSValue::undefined(),
         }
     }
 

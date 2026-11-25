@@ -6758,7 +6758,15 @@ impl CodeGenerator {
                 }
             }
             Expression::MemberExpression(member) => {
-                let obj = self.gen_expression(&member.object, ctx)?;
+                let is_super = matches!(&*member.object, Expression::Super);
+                let obj = if is_super {
+                    let base = self.alloc_register();
+                    self.emit(Opcode::GetSuperBase);
+                    self.emit_u16(base);
+                    base
+                } else {
+                    self.gen_expression(&member.object, ctx)?
+                };
                 let op = match update.op {
                     UpdateOp::Increment => Opcode::IncLocal,
                     UpdateOp::Decrement => Opcode::DecLocal,
@@ -6767,6 +6775,50 @@ impl CodeGenerator {
                 match &member.property {
                     MemberProperty::Identifier(name) => {
                         let atom = ctx.intern(name);
+                        if is_super {
+                            let key = self.alloc_register();
+                            let key_idx = self.add_constant(JSValue::new_string(atom));
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key);
+                            self.emit_u32(key_idx);
+                            let tmp = self.alloc_register();
+                            self.emit(Opcode::GetSuperProp);
+                            self.emit_u16(tmp);
+                            self.emit_u16(obj);
+                            self.emit_u16(0);
+                            self.emit_u16(key);
+                            if update.prefix {
+                                self.emit(op);
+                                self.emit_u16(tmp);
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(tmp);
+                                self.free_register(key);
+                                self.free_register(obj);
+                                Ok(tmp)
+                            } else {
+                                let old_val = self.alloc_register();
+                                self.emit(Opcode::Move);
+                                self.emit_u16(old_val);
+                                self.emit_u16(tmp);
+                                self.emit(Opcode::Pos);
+                                self.emit_u16(old_val);
+                                self.emit_u16(old_val);
+                                self.emit(op);
+                                self.emit_u16(tmp);
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(tmp);
+                                self.free_register(key);
+                                self.free_register(obj);
+                                self.free_register(tmp);
+                                Ok(old_val)
+                            }
+                        } else {
                         let tmp = self.alloc_register();
                         self.emit(Opcode::GetNamedProp);
                         self.emit_u16(tmp);
@@ -6800,10 +6852,48 @@ impl CodeGenerator {
                             self.free_register(tmp);
                             Ok(old_val)
                         }
+                        }
                     }
                     MemberProperty::Computed(expr) => {
                         let key = self.gen_expression(expr, ctx)?;
-
+                        if is_super {
+                            self.emit(Opcode::GetSuperBase);
+                            self.emit_u16(obj);
+                            let tmp = self.alloc_register();
+                            self.emit(Opcode::GetSuperProp);
+                            self.emit_u16(tmp);
+                            self.emit_u16(obj);
+                            self.emit_u16(0);
+                            self.emit_u16(key);
+                            if update.prefix {
+                                self.emit(op);
+                                self.emit_u16(tmp);
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(tmp);
+                                self.free_register(obj);
+                                self.free_register(key);
+                                Ok(tmp)
+                            } else {
+                                let old_val = self.alloc_register();
+                                self.emit(Opcode::Move);
+                                self.emit_u16(old_val);
+                                self.emit_u16(tmp);
+                                self.emit(op);
+                                self.emit_u16(tmp);
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(tmp);
+                                self.free_register(obj);
+                                self.free_register(key);
+                                self.free_register(tmp);
+                                Ok(old_val)
+                            }
+                        } else {
                         let tmp = self.alloc_register();
                         self.emit(Opcode::GetField);
                         self.emit_u16(tmp);
@@ -6835,6 +6925,7 @@ impl CodeGenerator {
                             self.free_register(key);
                             self.free_register(tmp);
                             Ok(old_val)
+                        }
                         }
                     }
                     MemberProperty::PrivateIdentifier(_) => {
@@ -7332,11 +7423,57 @@ impl CodeGenerator {
                 ) {
                     return self.gen_logical_member_assignment(member, assign, ctx);
                 }
-                let obj = self.gen_expression(&member.object, ctx)?;
+                let is_super = matches!(&*member.object, Expression::Super);
+                let obj = if is_super {
+                    let base = self.alloc_register();
+                    self.emit(Opcode::GetSuperBase);
+                    self.emit_u16(base);
+                    base
+                } else {
+                    self.gen_expression(&member.object, ctx)?
+                };
                 match &member.property {
                     MemberProperty::Identifier(name) => {
                         let atom = ctx.intern(name);
-                        if let Some(opcode) = is_compound {
+                        if is_super {
+                            let key = self.alloc_register();
+                            let key_idx = self.add_constant(JSValue::new_string(atom));
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key);
+                            self.emit_u32(key_idx);
+                            if let Some(opcode) = is_compound {
+                                let tmp = self.alloc_register();
+                                self.emit(Opcode::GetSuperProp);
+                                self.emit_u16(tmp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                let val = self.gen_expression(&assign.right, ctx)?;
+                                self.emit(opcode);
+                                self.emit_u16(tmp);
+                                self.emit_u16(tmp);
+                                self.emit_u16(val);
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(tmp);
+                                self.free_register(val);
+                                self.free_register(key);
+                                self.free_register(obj);
+                                Ok(tmp)
+                            } else {
+                                let val = self.gen_expression(&assign.right, ctx)?;
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(val);
+                                self.free_register(key);
+                                self.free_register(obj);
+                                Ok(val)
+                            }
+                        } else if let Some(opcode) = is_compound {
                             self.emit(Opcode::CheckObjectCoercible);
                             self.emit_u16(obj);
                             let tmp = self.alloc_register();
@@ -7368,7 +7505,42 @@ impl CodeGenerator {
                     }
                     MemberProperty::Computed(expr) => {
                         let key = self.gen_expression(expr, ctx)?;
-                        if let Some(opcode) = is_compound {
+                        if is_super {
+                            self.emit(Opcode::GetSuperBase);
+                            self.emit_u16(obj);
+                            if let Some(opcode) = is_compound {
+                                let tmp = self.alloc_register();
+                                self.emit(Opcode::GetSuperProp);
+                                self.emit_u16(tmp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                let val = self.gen_expression(&assign.right, ctx)?;
+                                self.emit(opcode);
+                                self.emit_u16(tmp);
+                                self.emit_u16(tmp);
+                                self.emit_u16(val);
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(tmp);
+                                self.free_register(val);
+                                self.free_register(key);
+                                self.free_register(obj);
+                                Ok(tmp)
+                            } else {
+                                let val = self.gen_expression(&assign.right, ctx)?;
+                                self.emit(Opcode::SetSuperProp);
+                                self.emit_u16(obj);
+                                self.emit_u16(0);
+                                self.emit_u16(key);
+                                self.emit_u16(val);
+                                self.free_register(key);
+                                self.free_register(obj);
+                                Ok(val)
+                            }
+                        } else if let Some(opcode) = is_compound {
                             self.emit(Opcode::CheckObjectCoercible);
                             self.emit_u16(obj);
                             self.emit(Opcode::ToPropertyKey);
@@ -8304,35 +8476,52 @@ impl CodeGenerator {
         member: &MemberExpression,
         ctx: &mut JSContext,
     ) -> Result<u16, String> {
-        let obj = self.gen_expression(&member.object, ctx)?;
-
-        if matches!(&*member.object, Expression::Super) && !self.in_static_method {
-            let proto_key = self.alloc_register();
-            let proto_key_idx = self.add_constant(JSValue::new_string(ctx.common_atoms.prototype));
-            self.emit(Opcode::LoadConst);
-            self.emit_u16(proto_key);
-            self.emit_u32(proto_key_idx);
-            self.emit(Opcode::GetProp);
-            self.emit_u16(obj);
-            self.emit_u16(obj);
-            self.emit_u16(proto_key);
-            self.free_register(proto_key);
-        }
+        let is_super = matches!(&*member.object, Expression::Super);
+        let obj = if is_super {
+            let base = self.alloc_register();
+            self.emit(Opcode::GetSuperBase);
+            self.emit_u16(base);
+            base
+        } else {
+            self.gen_expression(&member.object, ctx)?
+        };
         let dst = self.alloc_register();
         match &member.property {
             MemberProperty::Identifier(name) => {
                 let atom = ctx.intern(name);
-                self.emit(Opcode::GetNamedProp);
-                self.emit_u16(dst);
-                self.emit_u16(obj);
-                self.emit_u32(atom.0);
+                if is_super {
+                    let key = self.alloc_register();
+                    let key_idx = self.add_constant(JSValue::new_string(atom));
+                    self.emit(Opcode::LoadConst);
+                    self.emit_u16(key);
+                    self.emit_u32(key_idx);
+                    self.emit(Opcode::GetSuperProp);
+                    self.emit_u16(dst);
+                    self.emit_u16(obj);
+                    self.emit_u16(0);
+                    self.emit_u16(key);
+                    self.free_register(key);
+                } else {
+                    self.emit(Opcode::GetNamedProp);
+                    self.emit_u16(dst);
+                    self.emit_u16(obj);
+                    self.emit_u32(atom.0);
+                }
             }
             MemberProperty::Computed(expr) => {
                 let key = self.gen_expression(expr, ctx)?;
-                self.emit(Opcode::GetField);
-                self.emit_u16(dst);
-                self.emit_u16(obj);
-                self.emit_u16(key);
+                if is_super {
+                    self.emit(Opcode::GetSuperProp);
+                    self.emit_u16(dst);
+                    self.emit_u16(obj);
+                    self.emit_u16(0);
+                    self.emit_u16(key);
+                } else {
+                    self.emit(Opcode::GetField);
+                    self.emit_u16(dst);
+                    self.emit_u16(obj);
+                    self.emit_u16(key);
+                }
             }
             MemberProperty::PrivateIdentifier(name) => {
                 let key_idx = self.intern_and_add_const(ctx, name);
@@ -8371,6 +8560,10 @@ impl CodeGenerator {
                     .any(|arg| matches!(arg, Argument::Spread(_)))
                 {
                     if let MemberProperty::Identifier(name) = &member.property {
+                        if matches!(&*member.object, Expression::Super) {
+                            // super method calls need the prototype base and the
+                            // current this, handled by the general path below.
+                        } else {
                         let is_namespace = if let Expression::Identifier(ident) = &*member.object {
                             matches!(
                                 ident.name.as_str(),
@@ -8424,6 +8617,7 @@ impl CodeGenerator {
                                 self.free_register(r);
                             }
                             return Ok(dst);
+                        }
                         }
                     }
                 }
@@ -8511,16 +8705,40 @@ impl CodeGenerator {
 
         let (func, obj, namespace_obj_reg) = match &*call.callee {
             Expression::MemberExpression(member) => {
-                let obj_reg = self.gen_expression(&member.object, ctx)?;
+                let is_super = matches!(&*member.object, Expression::Super);
+                let obj_reg = if is_super {
+                    let base = self.alloc_register();
+                    self.emit(Opcode::GetSuperBase);
+                    self.emit_u16(base);
+                    base
+                } else {
+                    self.gen_expression(&member.object, ctx)?
+                };
                 let func_reg = match &member.property {
                     MemberProperty::Identifier(name) => {
                         let atom = ctx.intern(name);
-                        let f = self.alloc_register();
-                        self.emit(Opcode::GetNamedProp);
-                        self.emit_u16(f);
-                        self.emit_u16(obj_reg);
-                        self.emit_u32(atom.0);
-                        f
+                        if is_super {
+                            let key = self.alloc_register();
+                            let key_idx = self.add_constant(JSValue::new_string(atom));
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key);
+                            self.emit_u32(key_idx);
+                            let f = self.alloc_register();
+                            self.emit(Opcode::GetSuperProp);
+                            self.emit_u16(f);
+                            self.emit_u16(obj_reg);
+                            self.emit_u16(0);
+                            self.emit_u16(key);
+                            self.free_register(key);
+                            f
+                        } else {
+                            let f = self.alloc_register();
+                            self.emit(Opcode::GetNamedProp);
+                            self.emit_u16(f);
+                            self.emit_u16(obj_reg);
+                            self.emit_u32(atom.0);
+                            f
+                        }
                     }
                     MemberProperty::PrivateIdentifier(name) => {
                         let key_idx = self.intern_and_add_const(ctx, name);
@@ -8539,10 +8757,18 @@ impl CodeGenerator {
                     MemberProperty::Computed(expr) => {
                         let key = self.gen_expression(expr, ctx)?;
                         let f = self.alloc_register();
-                        self.emit(Opcode::GetField);
-                        self.emit_u16(f);
-                        self.emit_u16(obj_reg);
-                        self.emit_u16(key);
+                        if is_super {
+                            self.emit(Opcode::GetSuperProp);
+                            self.emit_u16(f);
+                            self.emit_u16(obj_reg);
+                            self.emit_u16(0);
+                            self.emit_u16(key);
+                        } else {
+                            self.emit(Opcode::GetField);
+                            self.emit_u16(f);
+                            self.emit_u16(obj_reg);
+                            self.emit_u16(key);
+                        }
                         self.free_register(key);
                         f
                     }
@@ -8551,7 +8777,10 @@ impl CodeGenerator {
                 if matches!(ident.name.as_str(),
                     "Math" | "JSON" | "Reflect" | "console"
                 ));
-                if is_ns {
+                if is_super {
+                    self.free_register(obj_reg);
+                    (func_reg, Some(0), None)
+                } else if is_ns {
                     (func_reg, None, Some(obj_reg))
                 } else {
                     (func_reg, Some(obj_reg), None)
@@ -8580,10 +8809,7 @@ impl CodeGenerator {
                     }
                     Argument::Spread(expr) => {
                         let val = self.gen_expression(expr, ctx)?;
-                        self.emit(Opcode::ArrayExtend);
-                        self.emit_u16(arr_reg);
-                        self.emit_u16(val);
-                        self.free_register(val);
+                        self.emit_spread_into_array(arr_reg, val, ctx)?;
                     }
                 }
             }
@@ -8698,6 +8924,47 @@ impl CodeGenerator {
         Ok(dst)
     }
 
+    fn emit_spread_into_array(
+        &mut self,
+        arr_reg: u16,
+        src: u16,
+        _ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        let iter_reg = self.alloc_register();
+        self.emit(Opcode::GetIterator);
+        self.emit_u16(iter_reg);
+        self.emit_u16(src);
+        self.free_register(src);
+
+        let loop_start = self.code.len();
+
+        let val_reg = self.alloc_register();
+        let done_reg = self.alloc_register();
+        self.emit(Opcode::IteratorNext);
+        self.emit_u16(val_reg);
+        self.emit_u16(done_reg);
+        self.emit_u16(iter_reg);
+
+        self.emit(Opcode::JumpIf);
+        self.emit_u16(done_reg);
+        let exit_patch = self.code.len();
+        self.emit_i32(0);
+        self.free_register(done_reg);
+
+        self.emit(Opcode::ArrayPush);
+        self.emit_u16(arr_reg);
+        self.emit_u16(val_reg);
+        self.free_register(val_reg);
+
+        self.emit_backward_jump(loop_start);
+
+        let end_pos = self.code.len();
+        self.patch_jump(exit_patch, end_pos);
+
+        self.free_register(iter_reg);
+        Ok(())
+    }
+
     fn gen_new_expression(
         &mut self,
         new: &NewExpression,
@@ -8725,10 +8992,7 @@ impl CodeGenerator {
                     }
                     Argument::Spread(expr) => {
                         let val = self.gen_expression(expr, ctx)?;
-                        self.emit(Opcode::ArrayExtend);
-                        self.emit_u16(arr_reg);
-                        self.emit_u16(val);
-                        self.free_register(val);
+                        self.emit_spread_into_array(arr_reg, val, ctx)?;
                     }
                 }
             }
@@ -8957,6 +9221,20 @@ impl CodeGenerator {
                     }
                     match key {
                         PropertyKey::Identifier(name)
+                        | PropertyKey::Literal(Literal::String(name, _, _))
+                            if name == "__proto__"
+                                && !*shorthand
+                                && !*method
+                                && !*getter
+                                && !*setter =>
+                        {
+                            let val = self.gen_expression(value, ctx)?;
+                            self.emit(Opcode::SetProto);
+                            self.emit_u16(dst);
+                            self.emit_u16(val);
+                            self.free_register(val);
+                        }
+                        PropertyKey::Identifier(name)
                         | PropertyKey::Literal(Literal::String(name, _, _)) => {
                             let val = self.gen_property_function_value(value, *method, ctx)?;
                             let atom = ctx.intern(name);
@@ -8964,6 +9242,11 @@ impl CodeGenerator {
                             self.emit_u16(dst);
                             self.emit_u16(val);
                             self.emit_u32(atom.0);
+                            if *method {
+                                self.emit(Opcode::SetHomeObject);
+                                self.emit_u16(val);
+                                self.emit_u16(dst);
+                            }
                             self.free_register(val);
                         }
                         _ => {
@@ -8992,6 +9275,11 @@ impl CodeGenerator {
                             self.emit_u16(dst);
                             self.emit_u16(key_reg);
                             self.emit_u16(val);
+                            if *method {
+                                self.emit(Opcode::SetHomeObject);
+                                self.emit_u16(val);
+                                self.emit_u16(dst);
+                            }
                             self.free_register(key_reg);
                             self.free_register(val);
                         }
@@ -9023,7 +9311,7 @@ impl CodeGenerator {
         let mut nested_codegen = self.nested_codegen();
         nested_codegen.is_arrow = is_arrow;
         let has_prototype = is_generator || (!is_arrow && !is_method && !is_async);
-        let function_kind = if has_prototype { 1 } else { 0 };
+        let function_kind = (if has_prototype { 1 } else { 0 }) | if is_arrow { 4 } else { 0 };
         let mut parent_vars: FxHashMap<String, ParentVar> = FxHashMap::default();
         for (scope_idx, scope) in self.scope_stack.iter().enumerate() {
             if self

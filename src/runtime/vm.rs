@@ -35,6 +35,7 @@ pub struct CallFrame {
     pub dst_reg: u16,
     pub arg_count: u16,
     pub super_ctor: JSValue,
+    pub super_base: JSValue,
     pub is_constructor: bool,
     pub is_async: bool,
     pub uses_arguments: bool,
@@ -71,6 +72,7 @@ impl CallFrame {
             dst_reg: 0,
             arg_count: 0,
             super_ctor: JSValue::undefined(),
+            super_base: JSValue::undefined(),
             is_constructor: false,
             is_async: false,
             uses_arguments: false,
@@ -1363,12 +1365,13 @@ impl VM {
                         return Ok(false);
                     }
                 }
-                let fn_this =
-                    if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null()) {
-                        ctx.global()
-                    } else {
-                        this_val
-                    };
+                let fn_this = if js_func.is_arrow() {
+                    js_func.arrow_this
+                } else if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null()) {
+                    ctx.global()
+                } else {
+                    this_val
+                };
                 self.push_frame_from_arg_regs_raw(
                     ctx,
                     rb.locals_count,
@@ -1388,10 +1391,33 @@ impl VM {
                     arg_regs,
                     uses_arguments,
                 );
+                if js_func.is_arrow() {
+                    self.frames[self.frame_index].super_ctor = js_func.arrow_super;
+                    self.frames[self.frame_index].super_base = js_func.arrow_super_base;
+                }
                 if is_call_new {
                     let super_key = ctx.common_atoms.__super__;
                     if let Some(super_val) = js_func.base.get(super_key) {
                         self.frames[self.frame_index].super_ctor = super_val;
+                    }
+                }
+                if !js_func.home_object.is_undefined() {
+                    if js_func.home_object.is_object_like() {
+                        let home = js_func.home_object.as_object();
+                        let base = home
+                            .prototype
+                            .map(|p| JSValue::new_object(p as usize))
+                            .unwrap_or(JSValue::undefined());
+                        self.frames[self.frame_index].super_base = base;
+                    }
+                } else {
+                    let sc = self.frames[self.frame_index].super_ctor;
+                    if sc.is_object_like() {
+                        let base = sc
+                            .as_object()
+                            .get(ctx.common_atoms.prototype)
+                            .unwrap_or(JSValue::undefined());
+                        self.frames[self.frame_index].super_base = base;
                     }
                 }
                 Ok(true)
@@ -7046,15 +7072,76 @@ impl VM {
                     let proto_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let proto_val = self.get_reg(proto_reg);
-                    if obj_val.is_object() && proto_val.is_object() {
+                    if obj_val.is_object() {
                         let obj_ref = obj_val.as_object_mut();
-                        obj_ref.prototype =
-                            Some(proto_val.get_ptr() as *mut crate::object::object::JSObject);
+                        if proto_val.is_object() {
+                            obj_ref.prototype =
+                                Some(proto_val.get_ptr() as *mut crate::object::object::JSObject);
+                        } else if proto_val.is_null() {
+                            obj_ref.prototype = None;
+                        }
                     }
                 }
                 Opcode::GetSuper => {
                     let dst = self.read_u16_pc();
                     self.set_reg(dst, self.frames[self.frame_index].super_ctor);
+                }
+                Opcode::GetSuperBase => {
+                    let dst = self.read_u16_pc();
+                    self.set_reg(dst, self.frames[self.frame_index].super_base);
+                }
+                Opcode::SetHomeObject => {
+                    let func_reg = self.read_u16_pc();
+                    let home_reg = self.read_u16_pc();
+                    let func_val = self.get_reg(func_reg);
+                    let home_val = self.get_reg(home_reg);
+                    if func_val.is_function() && home_val.is_object_like() {
+                        func_val.as_function_mut().home_object = home_val;
+                    }
+                }
+                Opcode::GetSuperProp => {
+                    let dst = self.read_u16_pc();
+                    let base_reg = self.read_u16_pc();
+                    let this_reg = self.read_u16_pc();
+                    let key_reg = self.read_u16_pc();
+                    let base = self.get_reg(base_reg);
+                    let this_val = self.get_reg(this_reg);
+                    let key_val = self.get_reg(key_reg);
+                    let atom = self.super_key_atom(ctx, key_val);
+                    if let Some(result) = self.get_named_prop_result_with_receiver(
+                        ctx,
+                        dst,
+                        base,
+                        atom,
+                        usize::MAX,
+                        Some(this_val),
+                    ) {
+                        self.set_reg(dst, result);
+                    } else if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+                Opcode::SetSuperProp => {
+                    let base_reg = self.read_u16_pc();
+                    let this_reg = self.read_u16_pc();
+                    let key_reg = self.read_u16_pc();
+                    let val_reg = self.read_u16_pc();
+                    let base = self.get_reg(base_reg);
+                    let receiver = self.get_reg(this_reg);
+                    let key_val = self.get_reg(key_reg);
+                    let value = self.get_reg(val_reg);
+                    self.set_super_prop(ctx, base, receiver, key_val, value);
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
                 }
 
                 Opcode::DefineAccessor | Opcode::DefineClassAccessor => {
@@ -7098,7 +7185,6 @@ impl VM {
                         };
                         if prop_key.is_string() {
                             let atom = prop_key.get_atom();
-                            let obj = obj_val.as_object_mut();
                             let getter = if getter_reg != u16::MAX {
                                 Some(self.get_reg(getter_reg))
                             } else {
@@ -7109,6 +7195,17 @@ impl VM {
                             } else {
                                 None
                             };
+                            if let Some(g) = getter {
+                                if g.is_function() {
+                                    g.as_function_mut().home_object = obj_val;
+                                }
+                            }
+                            if let Some(s) = setter {
+                                if s.is_function() {
+                                    s.as_function_mut().home_object = obj_val;
+                                }
+                            }
+                            let obj = obj_val.as_object_mut();
                             if class_accessor
                                 && obj_val.is_function()
                                 && atom == ctx.common_atoms.prototype
@@ -7259,6 +7356,9 @@ impl VM {
                             get: None,
                             set: None,
                         };
+                        if value.is_function() {
+                            value.as_function_mut().home_object = obj_val;
+                        }
                         js_obj.define_property(atom, desc);
                     }
                     self.set_reg(obj_reg, obj_val);
@@ -8266,6 +8366,13 @@ impl VM {
                     func.set_is_async(is_async);
                     func.set_uses_arguments(uses_arguments);
                     func.set_is_strict(is_strict);
+                    func.set_is_arrow(function_kind & 4 != 0);
+                    if function_kind & 4 != 0 {
+                        let parent = &self.frames[self.frame_index];
+                        func.arrow_this = parent.this_value;
+                        func.arrow_super = parent.super_ctor;
+                        func.arrow_super_base = parent.super_base;
+                    }
                     func.line_number_table = line_number_table_opt.clone();
                     func.bytecode = Some(Bytecode {
                         code: fb_code,
@@ -9887,6 +9994,19 @@ impl VM {
         atom: crate::runtime::atom::Atom,
         ic_pc: usize,
     ) -> Option<JSValue> {
+        self.get_named_prop_result_with_receiver(ctx, dst, obj_val, atom, ic_pc, None)
+    }
+
+    fn get_named_prop_result_with_receiver(
+        &mut self,
+        ctx: &mut JSContext,
+        dst: u16,
+        obj_val: JSValue,
+        atom: crate::runtime::atom::Atom,
+        ic_pc: usize,
+        receiver: Option<JSValue>,
+    ) -> Option<JSValue> {
+        let this_val = receiver.unwrap_or(obj_val);
         if obj_val.is_null_or_undefined() {
             self.set_pending_type_error(ctx, "Cannot read property of null or undefined");
             return None;
@@ -10092,7 +10212,7 @@ impl VM {
                     } else {
                         if let Some(getter) = js_obj.get_own_accessor_value(atom) {
                             if getter.is_function() {
-                                match self.call_function_with_this(ctx, getter, obj_val, &[]) {
+                                match self.call_function_with_this(ctx, getter, this_val, &[]) {
                                     Ok(ret) => {
                                         self.set_reg(dst, ret);
                                     }
@@ -10141,7 +10261,7 @@ impl VM {
                                             match self.call_function_with_this(
                                                 ctx,
                                                 getter,
-                                                obj_val,
+                                                this_val,
                                                 &[],
                                             ) {
                                                 Ok(ret) => {
@@ -10180,7 +10300,7 @@ impl VM {
                                             match self.call_function_with_this(
                                                 ctx,
                                                 getter,
-                                                obj_val,
+                                                this_val,
                                                 &[],
                                             ) {
                                                 Ok(ret) => {
@@ -10243,7 +10363,7 @@ impl VM {
                         found = true;
                     } else if let Some(getter) = js_obj.get_own_accessor_value(atom) {
                         value = if getter.is_function() {
-                            match self.call_function_with_this(ctx, getter, obj_val, &[]) {
+                            match self.call_function_with_this(ctx, getter, this_val, &[]) {
                                 Ok(ret) => ret,
                                 Err(_) => {
                                     self.rethrow_last_caught(ctx);
@@ -10276,7 +10396,7 @@ impl VM {
                                         match self.call_function_with_this(
                                             ctx,
                                             getter,
-                                            obj_val,
+                                            this_val,
                                             &[],
                                         ) {
                                             Ok(ret) => ret,
@@ -10310,7 +10430,7 @@ impl VM {
                                 found = true;
                             } else if let Some(getter) = fn_proto.get_own_accessor_value(atom) {
                                 value = if getter.is_function() {
-                                    match self.call_function_with_this(ctx, getter, obj_val, &[]) {
+                                    match self.call_function_with_this(ctx, getter, this_val, &[]) {
                                         Ok(ret) => ret,
                                         Err(_) => {
                                             self.rethrow_last_caught(ctx);
@@ -10700,6 +10820,148 @@ impl VM {
             current = proto.prototype;
         }
         false
+    }
+
+    #[inline(always)]
+    fn super_key_atom(
+        &mut self,
+        ctx: &mut JSContext,
+        key_val: JSValue,
+    ) -> crate::runtime::atom::Atom {
+        if key_val.is_string() {
+            key_val.get_atom()
+        } else if key_val.is_symbol() {
+            crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id())
+        } else if key_val.is_int() {
+            let idx = key_val.get_int();
+            if idx >= 0 {
+                self.int_atom(idx as usize, ctx)
+            } else {
+                let s = VM::js_to_string(&key_val, ctx);
+                s.get_atom()
+            }
+        } else if key_val.is_float() {
+            let s = VM::js_to_string(&key_val, ctx);
+            s.get_atom()
+        } else {
+            let key = self.to_property_key_value(ctx, key_val);
+            key.get_atom()
+        }
+    }
+
+    #[inline(always)]
+    fn set_super_prop(
+        &mut self,
+        ctx: &mut JSContext,
+        base: JSValue,
+        receiver: JSValue,
+        key_val: JSValue,
+        value: JSValue,
+    ) -> bool {
+        if base.is_null_or_undefined() {
+            self.set_pending_type_error(ctx, "Cannot set property of null or undefined");
+            return false;
+        }
+        let atom = self.super_key_atom(ctx, key_val);
+        let mut found: Option<(bool, Option<JSValue>, bool)> = None;
+        if base.is_object_like() {
+            let mut current = base;
+            let mut depth = 0u32;
+            while current.is_object_like() {
+                let obj = current.as_object();
+                if let Some(entry) = obj.get_own_accessor_entry(atom) {
+                    found = Some((true, entry.set, false));
+                    break;
+                }
+                if let Some(offset) = obj.find_offset(atom) {
+                    let writable = obj.is_prop_writable_at(Some(offset));
+                    found = Some((false, None, writable));
+                    break;
+                }
+                match obj.prototype {
+                    Some(p) if !p.is_null() => {
+                        current = JSValue::new_object(p as usize);
+                    }
+                    _ => break,
+                }
+                depth += 1;
+                if depth > 1000 {
+                    break;
+                }
+            }
+        }
+        match found {
+            Some((true, setter, _)) => {
+                if let Some(setter_fn) = setter {
+                    if setter_fn.is_function()
+                        && self
+                            .call_function_with_this(ctx, setter_fn, receiver, &[value])
+                            .is_err()
+                    {
+                        let caught = self.last_caught_exception.take();
+                        let host = ctx.pending_exception.take();
+                        let exc = caught.or(host).or_else(|| self.pending_throw.take());
+                        if let Some(exc) = exc {
+                            self.pending_throw = Some(exc);
+                        }
+                    }
+                    return true;
+                }
+                if self.frames[self.frame_index].is_strict_frame {
+                    self.set_pending_type_error(
+                        ctx,
+                        "Cannot set property which has only a getter",
+                    );
+                }
+                false
+            }
+            Some((false, _, writable)) => {
+                if !writable {
+                    if self.frames[self.frame_index].is_strict_frame {
+                        let msg = format!(
+                            "Cannot assign to read only property '{}'",
+                            ctx.get_atom_str(atom)
+                        );
+                        self.set_pending_type_error(ctx, &msg);
+                    }
+                    return false;
+                }
+                if !receiver.is_object_like() {
+                    return false;
+                }
+                let recv_obj = receiver.as_object();
+                if recv_obj.get_own_accessor_entry(atom).is_some() {
+                    if self.frames[self.frame_index].is_strict_frame {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot set property which has only a getter",
+                        );
+                    }
+                    return false;
+                }
+                if let Some(offset) = recv_obj.find_offset(atom) {
+                    if !recv_obj.is_prop_writable_at(Some(offset)) {
+                        if self.frames[self.frame_index].is_strict_frame {
+                            let msg = format!(
+                                "Cannot assign to read only property '{}'",
+                                ctx.get_atom_str(atom)
+                            );
+                            self.set_pending_type_error(ctx, &msg);
+                        }
+                        return false;
+                    }
+                }
+                self.set_named_prop(ctx, receiver, value, atom, usize::MAX);
+                true
+            }
+            None => {
+                if !receiver.is_object_like() {
+                    return false;
+                }
+                self.set_named_prop(ctx, receiver, value, atom, usize::MAX);
+                true
+            }
+        }
     }
 
     #[inline(always)]

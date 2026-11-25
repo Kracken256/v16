@@ -187,6 +187,10 @@ pub enum Opcode {
     StrictNeqJumpIfNot = 172,
     StrictNeqJumpIf = 173,
     ParamInitMark = 225,
+    GetSuperBase = 226,
+    SetHomeObject = 227,
+    GetSuperProp = 228,
+    SetSuperProp = 229,
 }
 
 impl Opcode {
@@ -365,6 +369,10 @@ impl Opcode {
             172 => Some(Opcode::StrictNeqJumpIfNot),
             173 => Some(Opcode::StrictNeqJumpIf),
             225 => Some(Opcode::ParamInitMark),
+            226 => Some(Opcode::GetSuperBase),
+            227 => Some(Opcode::SetHomeObject),
+            228 => Some(Opcode::GetSuperProp),
+            229 => Some(Opcode::SetSuperProp),
             _ => None,
         }
     }
@@ -391,12 +399,16 @@ impl Opcode {
             | Opcode::Throw
             | Opcode::GatherRest
             | Opcode::GetSuper
+            | Opcode::GetSuperBase
             | Opcode::Yield
             | Opcode::NewObject
             | Opcode::GetArguments
             | Opcode::GetCurrentFunction
             | Opcode::CheckObjectCoercible => 3,
             Opcode::Neg | Opcode::BitNot | Opcode::Not | Opcode::TypeOf | Opcode::Move => 5,
+            Opcode::SetHomeObject => 5,
+            Opcode::GetSuperProp => 9,
+            Opcode::SetSuperProp => 9,
             Opcode::Add
             | Opcode::AddNum
             | Opcode::SubNum
@@ -756,6 +768,7 @@ impl Bytecode {
                 | Opcode::Throw
                 | Opcode::GatherRest
                 | Opcode::GetSuper
+                | Opcode::GetSuperBase
                 | Opcode::Yield
                 | Opcode::NewObject
                 | Opcode::GetArguments
@@ -873,6 +886,25 @@ impl Bytecode {
                     let dst = read_u16(1);
                     let src = read_u16(3);
                     write!(operands, " r{}, r{}", dst, src).unwrap();
+                }
+                Opcode::SetHomeObject => {
+                    let func = read_u16(1);
+                    let home = read_u16(3);
+                    write!(operands, " r{}, r{}", func, home).unwrap();
+                }
+                Opcode::GetSuperProp => {
+                    let dst = read_u16(1);
+                    let base = read_u16(3);
+                    let this = read_u16(5);
+                    let key = read_u16(7);
+                    write!(operands, " r{}, r{}, r{}, r{}", dst, base, this, key).unwrap();
+                }
+                Opcode::SetSuperProp => {
+                    let base = read_u16(1);
+                    let this = read_u16(3);
+                    let key = read_u16(5);
+                    let value = read_u16(7);
+                    write!(operands, " r{}, r{}, r{}, r{}", base, this, key, value).unwrap();
                 }
                 Opcode::GetLocal | Opcode::GetGlobal => {
                     let dst = read_u16(1);
