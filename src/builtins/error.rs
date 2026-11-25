@@ -119,6 +119,7 @@ pub fn init_error(ctx: &mut JSContext) {
     init_range_error(ctx);
     init_uri_error(ctx);
     init_eval_error(ctx);
+    init_suppressed_error(ctx);
 
     let global = ctx.global();
     if global.is_object() {
@@ -126,7 +127,7 @@ pub fn init_error(ctx: &mut JSContext) {
         if let Some(error_ctor) = error_ctor_val {
             if error_ctor.is_function() {
                 let error_ctor_ptr = error_ctor.get_ptr() as *mut crate::object::object::JSObject;
-                for name in ["TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError"] {
+                for name in ["TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "SuppressedError"] {
                     let atom = ctx.intern(name);
                     if let Some(ctor_val) = global.as_object().get(atom) {
                         if ctor_val.is_function() {
@@ -693,6 +694,90 @@ pub fn eval_error_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     build_error(ctx, "EvalError", args, proto)
 }
 
+fn init_suppressed_error(ctx: &mut JSContext) {
+    let atom = ctx.intern("SuppressedError");
+    let mut ctor = crate::object::function::JSFunction::new_builtin(atom, 3);
+    ctor.set_builtin_marker(ctx, "suppressed_error_constructor");
+    if let Some(func_proto) = ctx.get_function_prototype() {
+        ctor.base.prototype = Some(func_proto);
+    }
+    let ptr = Box::into_raw(Box::new(ctor)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track_function(ptr);
+    let value = JSValue::new_function(ptr);
+
+    let global = ctx.global();
+    if global.is_object() {
+        let global_obj = global.as_object_mut();
+        crate::builtins::global::set_non_enumerable(global_obj, atom, value);
+    }
+
+    let mut proto = JSObject::new();
+    set_own_ne(
+        &mut proto,
+        ctx.intern("name"),
+        JSValue::new_string(ctx.intern("SuppressedError")),
+    );
+    set_own_ne(
+        &mut proto,
+        ctx.intern("message"),
+        JSValue::new_string(ctx.intern("")),
+    );
+    if let Some(error_proto_ptr) = ctx.get_error_prototype() {
+        proto.prototype = Some(error_proto_ptr);
+    }
+    set_own_ne(&mut proto, ctx.intern("constructor"), value);
+
+    let proto_ptr = Box::into_raw(Box::new(proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
+    ctx.set_suppressed_error_prototype(proto_ptr);
+    let proto_value = JSValue::new_object(proto_ptr);
+    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
+}
+
+pub fn create_suppressed_error(
+    ctx: &mut JSContext,
+    error: JSValue,
+    suppressed: JSValue,
+) -> JSValue {
+    let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
+    set_own_ne(&mut err, ctx.intern("error"), error);
+    set_own_ne(&mut err, ctx.intern("suppressed"), suppressed);
+    if let Some(proto) = ctx.get_suppressed_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
+pub fn suppressed_error_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
+    if let Some(proto) = ctx.get_suppressed_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    if let Some(msg) = args.get(2) {
+        if !msg.is_undefined() {
+            let s = match js_to_string_value(ctx, msg) {
+                Ok(s) => s,
+                Err(()) => return JSValue::undefined(),
+            };
+            set_own_ne(
+                &mut err,
+                ctx.intern("message"),
+                JSValue::new_string(ctx.intern(&s)),
+            );
+        }
+    }
+    let error = args.first().cloned().unwrap_or_else(JSValue::undefined);
+    let suppressed = args.get(1).cloned().unwrap_or_else(JSValue::undefined);
+    set_own_ne(&mut err, ctx.intern("error"), error);
+    set_own_ne(&mut err, ctx.intern("suppressed"), suppressed);
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
 fn error_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
         let mut err =
@@ -813,6 +898,10 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "eval_error_constructor",
         HostFunction::ctor("EvalError", 1, eval_error_constructor),
+    );
+    ctx.register_builtin(
+        "suppressed_error_constructor",
+        HostFunction::ctor("SuppressedError", 3, suppressed_error_constructor),
     );
     ctx.register_builtin(
         "error_toString",
