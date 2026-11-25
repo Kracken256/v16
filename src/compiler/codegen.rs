@@ -4852,7 +4852,11 @@ impl CodeGenerator {
                             self.emit_u16(0);
                         }
                     }
-                    _ => self.gen_binding_pattern(param, 0, VariableKind::Let, ctx)?,
+                    _ => {
+                        self.pre_scan_binding(param, VariableKind::Let);
+                        self.emit_tdz_for_binding(param)?;
+                        self.gen_binding_pattern(param, 0, VariableKind::Let, ctx)?;
+                    }
                 }
             }
             self.pre_scan_let_const(&handler.body.body)?;
