@@ -1814,6 +1814,12 @@ impl VM {
             if caller.frame_index == 0 {
                 let global = ctx.global();
                 if global.is_object() {
+                    let exists = global
+                        .as_object()
+                        .has_own(crate::runtime::atom::Atom(name_atom));
+                    if !exists && self.frames[self.frame_index].is_strict_frame {
+                        return CallerVarSet::NotFound;
+                    }
                     global.as_object_mut().set_cached(
                         crate::runtime::atom::Atom(name_atom),
                         value,
@@ -7562,52 +7568,86 @@ impl VM {
                     }
 
                     if self.caller_vm.is_some() {
-                        let caller_var_set = self.set_var_in_caller_vm(ctx, atom.0, val);
-                        if matches!(caller_var_set, CallerVarSet::Immutable) {
-                            if is_strict {
-                                self.set_pending_type_error(
-                                    ctx,
-                                    "Assignment to constant variable.",
-                                );
-                                if let Some(exc) = self.pending_throw.take() {
-                                    match self.dispatch_throw_value(ctx, exc) {
-                                        ThrowDispatch::Caught => continue,
-                                        ThrowDispatch::Uncaught(e) => return Err(e),
-                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                    }
-                                }
-                            }
-                        } else if matches!(caller_var_set, CallerVarSet::NotFound) {
-                            if is_strict {
-                                let name_str = ctx.get_atom_str(atom).to_string();
-                                let err_msg = format!("{} is not defined", name_str);
-                                let mut err = crate::object::object::JSObject::new();
-                                err.set(
-                                    ctx.intern("name"),
-                                    JSValue::new_string(ctx.intern("ReferenceError")),
-                                );
-                                err.set(
-                                    ctx.intern("message"),
-                                    JSValue::new_string(ctx.intern(&err_msg)),
-                                );
-                                if let Some(proto) = ctx.get_reference_error_prototype() {
-                                    err.prototype = Some(proto);
-                                }
-                                let ptr = Box::into_raw(Box::new(err)) as usize;
-                                ctx.runtime_mut().gc_heap_mut().track(ptr);
-                                self.pending_throw = Some(JSValue::new_object(ptr));
-                                if let Some(exc) = self.pending_throw.take() {
-                                    match self.dispatch_throw_value(ctx, exc) {
-                                        ThrowDispatch::Caught => continue,
-                                        ThrowDispatch::Uncaught(e) => return Err(e),
-                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                    }
-                                }
-                            }
+                        let caller_has_binding = self.get_var_in_caller_vm(atom.0).is_some();
+                        let mut global_has_binding = false;
+                        if !caller_has_binding {
                             let global = ctx.global();
                             if global.is_object() {
+                                global_has_binding = global.as_object().has_property(atom);
+                            }
+                        }
+                        if caller_has_binding {
+                            let caller_var_set = self.set_var_in_caller_vm(ctx, atom.0, val);
+                            if matches!(caller_var_set, CallerVarSet::Immutable) {
+                                if is_strict {
+                                    self.set_pending_type_error(
+                                        ctx,
+                                        "Assignment to constant variable.",
+                                    );
+                                    if let Some(exc) = self.pending_throw.take() {
+                                        match self.dispatch_throw_value(ctx, exc) {
+                                            ThrowDispatch::Caught => continue,
+                                            ThrowDispatch::Uncaught(e) => return Err(e),
+                                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                        }
+                                    }
+                                }
+                            }
+                        } else if global_has_binding || !is_strict {
+                            let global = ctx.global();
+                            if global.is_object() {
+                                let mut failure = false;
+                                if is_strict {
+                                    if let Some(desc) = global.as_object().get_own_descriptor(atom)
+                                    {
+                                        if !desc.writable
+                                            && desc.get.is_none()
+                                            && desc.set.is_none()
+                                        {
+                                            failure = true;
+                                        }
+                                    }
+                                }
+                                if failure {
+                                    self.set_pending_type_error(
+                                        ctx,
+                                        "Cannot assign to read only property",
+                                    );
+                                    if let Some(exc) = self.pending_throw.take() {
+                                        match self.dispatch_throw_value(ctx, exc) {
+                                            ThrowDispatch::Caught => continue,
+                                            ThrowDispatch::Uncaught(e) => return Err(e),
+                                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                        }
+                                    }
+                                }
                                 let global_obj = global.as_object_mut();
                                 global_obj.set_cached(atom, val, ctx.shape_cache_mut());
+                            }
+                        } else {
+                            let name_str = ctx.get_atom_str(atom).to_string();
+                            let err_msg = format!("{} is not defined", name_str);
+                            let mut err = crate::object::object::JSObject::new();
+                            err.set(
+                                ctx.intern("name"),
+                                JSValue::new_string(ctx.intern("ReferenceError")),
+                            );
+                            err.set(
+                                ctx.intern("message"),
+                                JSValue::new_string(ctx.intern(&err_msg)),
+                            );
+                            if let Some(proto) = ctx.get_reference_error_prototype() {
+                                err.prototype = Some(proto);
+                            }
+                            let ptr = Box::into_raw(Box::new(err)) as usize;
+                            ctx.runtime_mut().gc_heap_mut().track(ptr);
+                            self.pending_throw = Some(JSValue::new_object(ptr));
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
                             }
                         }
                     } else {
