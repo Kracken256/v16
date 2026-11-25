@@ -2431,6 +2431,21 @@ impl Parser {
         Ok(args)
     }
 
+    fn parse_import_call_arguments(&mut self) -> Result<Vec<Argument>, String> {
+        let mut arguments = Vec::new();
+        arguments.push(Argument::Expression(self.parse_assignment_expression()?));
+        if self.at_punct(",") {
+            self.advance();
+            if !self.at_punct(")") {
+                arguments.push(Argument::Expression(self.parse_assignment_expression()?));
+                if self.at_punct(",") {
+                    self.advance();
+                }
+            }
+        }
+        Ok(arguments)
+    }
+
     fn parse_primary(&mut self) -> Result<Expression, String> {
         if self.at_punct("(") {
             self.advance();
@@ -2495,18 +2510,7 @@ impl Parser {
             if self.peek_at("(") {
                 self.advance();
                 self.expect("(")?;
-                let mut arguments = Vec::new();
-                arguments.push(Argument::Expression(self.parse_assignment_expression()?));
-                // Optional second argument (import attributes) and trailing comma.
-                if self.at_punct(",") {
-                    self.advance();
-                    if !self.at_punct(")") {
-                        arguments.push(Argument::Expression(self.parse_assignment_expression()?));
-                        if self.at_punct(",") {
-                            self.advance();
-                        }
-                    }
-                }
+                let arguments = self.with_allow_in(Self::parse_import_call_arguments)?;
                 self.expect(")")?;
 
                 return Ok(Expression::CallExpression(CallExpression {
