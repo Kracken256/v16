@@ -3124,7 +3124,8 @@ impl CodeGenerator {
                 self.gen_variable_declaration(decl, ctx)?;
             }
             ASTNode::FunctionDeclaration(func) => {
-                let block_scoped = self.is_strict && self.depth > 0;
+                let block_scoped =
+                    self.depth > 0 && (self.is_strict || func.generator || func.is_async);
                 let slot = if block_scoped {
                     match self.scope_stack.last().and_then(|scope| scope.get(&func.name)) {
                         Some(entry) => entry.slot,
@@ -10866,7 +10867,7 @@ impl CodeGenerator {
         self.emit_u16(class_slot);
         self.emit_u16(inner_slot);
         self.free_register(inner_slot);
-        if self.is_global_scope() && !self.is_eval {
+        if self.is_global_scope() && !self.is_eval && self.depth == 0 {
             let class_idx = self.add_constant(JSValue::new_string(class_name_atom));
             self.emit(Opcode::SetGlobal);
             self.emit_u32(class_idx);
