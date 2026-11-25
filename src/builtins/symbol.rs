@@ -767,6 +767,24 @@ pub fn get_symbol_iterator_atom(ctx: &mut JSContext) -> Atom {
     crate::runtime::atom::Atom(0x40000000 | sym.get_symbol_id())
 }
 
+pub fn get_symbol_dispose(ctx: &mut JSContext) -> JSValue {
+    get_or_create_well_known_symbol(ctx, SYMBOL_DISPOSE_DESC)
+}
+
+pub fn get_symbol_dispose_atom(ctx: &mut JSContext) -> Atom {
+    let sym = get_or_create_well_known_symbol(ctx, SYMBOL_DISPOSE_DESC);
+    crate::runtime::atom::Atom(0x40000000 | sym.get_symbol_id())
+}
+
+pub fn get_symbol_async_dispose(ctx: &mut JSContext) -> JSValue {
+    get_or_create_well_known_symbol(ctx, SYMBOL_ASYNC_DISPOSE_DESC)
+}
+
+pub fn get_symbol_async_dispose_atom(ctx: &mut JSContext) -> Atom {
+    let sym = get_or_create_well_known_symbol(ctx, SYMBOL_ASYNC_DISPOSE_DESC);
+    crate::runtime::atom::Atom(0x40000000 | sym.get_symbol_id())
+}
+
 pub fn get_symbol_split(ctx: &mut JSContext) -> JSValue {
     get_or_create_well_known_symbol(ctx, SYMBOL_SPLIT_DESC)
 }
