@@ -2458,11 +2458,32 @@ impl VM {
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
 
+    fn throw_return_completion_error(
+        &mut self,
+        ctx: &mut JSContext,
+        msg: &str,
+        is_reference_error: bool,
+    ) -> Result<Option<ExecutionOutcome>, String> {
+        if is_reference_error {
+            self.set_pending_reference_error(ctx, msg);
+        } else {
+            self.set_pending_type_error(ctx, msg);
+        }
+        let Some(exc) = self.pending_throw.take() else {
+            return Ok(None);
+        };
+        match self.dispatch_throw_value(ctx, exc) {
+            ThrowDispatch::Caught => Ok(None),
+            ThrowDispatch::Uncaught(e) => Err(e),
+            ThrowDispatch::AsyncComplete(o) => Ok(Some(o)),
+        }
+    }
+
     fn execute_return_completion(
         &mut self,
         ctx: &mut JSContext,
         mut value: JSValue,
-    ) -> Option<ExecutionOutcome> {
+    ) -> Result<Option<ExecutionOutcome>, String> {
         if self
             .pending_finally_rethrow
             .map_or(false, |(frame, _)| frame == self.frame_index)
@@ -2491,14 +2512,47 @@ impl VM {
                 self.pending_finally_depth = self.same_frame_handler_count();
                 self.pc = fp;
                 self.refresh_cache();
-                return None;
+                return Ok(None);
+            }
+        }
+        if self.frames[self.frame_index].is_constructor {
+            let (this_value, this_initialized, derived) = {
+                let frame = &self.frames[self.frame_index];
+                let (this_value, this_initialized) = match &frame.this_cell {
+                    Some(cell) => cell.get(),
+                    None => (frame.this_value, frame.this_initialized),
+                };
+                (this_value, this_initialized, frame.super_ctor.is_function())
+            };
+            if derived {
+                if !value.is_object_like() {
+                    if value.is_undefined() {
+                        if this_initialized {
+                            value = this_value;
+                        } else {
+                            return self.throw_return_completion_error(
+                                ctx,
+                                "this is not initialized",
+                                true,
+                            );
+                        }
+                    } else {
+                        return self.throw_return_completion_error(
+                            ctx,
+                            "Derived constructors may only return object or undefined",
+                            false,
+                        );
+                    }
+                }
+            } else if !value.is_object_like() {
+                value = this_value;
             }
         }
         if self.frame_index == 0 {
             if self.frames[0].is_async {
                 value = ctx.call_builtin("promise_resolve", &[value]);
             }
-            return Some(ExecutionOutcome::Complete(value));
+            return Ok(Some(ExecutionOutcome::Complete(value)));
         }
         let is_async = self.frames[self.frame_index].is_async;
         self.cleanup_handlers_for_frame();
@@ -2506,7 +2560,7 @@ impl VM {
             value = ctx.call_builtin("promise_resolve", &[value]);
         }
         self.pop_frame(value);
-        None
+        Ok(None)
     }
 
     fn execute_jump_completion(&mut self, target: usize, target_depth: usize) {
@@ -3888,28 +3942,13 @@ impl VM {
                     {
                         let frame = &self.frames[self.frame_index];
                         if frame.is_constructor
-                            && frame.super_ctor.is_function()
-                            && !frame.this_initialized
+                            && !frame.super_ctor.is_function()
                             && !ret.is_object()
                         {
-                            self.set_pending_reference_error(
-                                ctx,
-                                "this is not initialized",
-                            );
-                            if let Some(exc) = self.pending_throw.take() {
-                                match self.dispatch_throw_value(ctx, exc) {
-                                    ThrowDispatch::Caught => continue,
-                                    ThrowDispatch::Uncaught(e) => return Err(e),
-                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                }
-                            }
-                            continue;
+                            ret = frame.this_value;
                         }
                     }
                     let frame = &self.frames[self.frame_index];
-                    if frame.is_constructor && !ret.is_object() {
-                        ret = frame.this_value;
-                    }
 
                     if frame.is_constructor {
                         if let Some(fptr) = frame.function_ptr {
@@ -3937,8 +3976,10 @@ impl VM {
                         }
                     }
 
-                    if let Some(outcome) = self.execute_return_completion(ctx, ret) {
-                        return Ok(outcome);
+                    match self.execute_return_completion(ctx, ret) {
+                        Ok(Some(outcome)) => return Ok(outcome),
+                        Ok(None) => {}
+                        Err(e) => return Err(e),
                     }
                     continue;
                 }
@@ -5090,8 +5131,10 @@ impl VM {
                         .map_or(false, |(frame, _)| frame == self.frame_index)
                     {
                         let (_, value) = self.pending_finally_return.take().unwrap();
-                        if let Some(outcome) = self.execute_return_completion(ctx, value) {
-                            return Ok(outcome);
+                        match self.execute_return_completion(ctx, value) {
+                            Ok(Some(outcome)) => return Ok(outcome),
+                            Ok(None) => {}
+                            Err(e) => return Err(e),
                         }
                         continue;
                     }
