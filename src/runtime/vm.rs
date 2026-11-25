@@ -322,6 +322,7 @@ pub struct VM {
     pending_finally_rethrow: Option<(usize, JSValue)>,
     pending_finally_return: Option<(usize, JSValue)>,
     pending_finally_jump: Option<(usize, usize, usize)>,
+    pending_finally_depth: usize,
 
     ctx_ptr: *mut crate::runtime::JSContext,
 
@@ -391,6 +392,7 @@ impl VM {
             pending_finally_rethrow: None,
             pending_finally_return: None,
             pending_finally_jump: None,
+            pending_finally_depth: 0,
             ctx_ptr: std::ptr::null_mut(),
             allocation_count: 0,
             caller_vm: None,
@@ -433,6 +435,40 @@ impl VM {
             .map_or(false, |h| h.frame_index == fi)
         {
             self.exception_handlers.pop();
+        }
+    }
+
+    fn same_frame_handler_count(&self) -> usize {
+        self.exception_handlers
+            .iter()
+            .filter(|h| h.frame_index == self.frame_index)
+            .count()
+    }
+
+    fn clear_pending_finally_if_escaped(
+        &mut self,
+        handler_frame: usize,
+        same_frame_after: usize,
+    ) {
+        let owned = self
+            .pending_finally_rethrow
+            .map_or(false, |(frame, _)| frame == self.frame_index)
+            || self
+                .pending_finally_return
+                .map_or(false, |(frame, _)| frame == self.frame_index)
+            || self
+                .pending_finally_jump
+                .map_or(false, |(frame, _, _)| frame == self.frame_index);
+        if !owned {
+            return;
+        }
+        let escaped = if handler_frame == self.frame_index {
+            same_frame_after < self.pending_finally_depth
+        } else {
+            true
+        };
+        if escaped {
+            self.clear_pending_finally_for_frame(self.frame_index);
         }
     }
 
@@ -1855,6 +1891,7 @@ impl VM {
             self.exception_handlers.pop();
             if let Some(fp) = handler.finally_pc {
                 self.pending_finally_return = Some((self.frame_index, value));
+                self.pending_finally_depth = self.same_frame_handler_count();
                 self.pc = fp;
                 self.refresh_cache();
                 return None;
@@ -1906,6 +1943,7 @@ impl VM {
             let handler = self.exception_handlers.pop().unwrap();
             if let Some(fp) = handler.finally_pc {
                 self.pending_finally_jump = Some((self.frame_index, target, target_depth));
+                self.pending_finally_depth = self.same_frame_handler_count();
                 self.pc = fp;
                 self.refresh_cache();
                 return;
@@ -1929,18 +1967,6 @@ impl VM {
         {
             ctx.pending_exception = None;
         }
-        if self
-            .pending_finally_return
-            .map_or(false, |(frame, _)| frame == self.frame_index)
-        {
-            self.pending_finally_return = None;
-        }
-        if self
-            .pending_finally_jump
-            .map_or(false, |(frame, _, _)| frame == self.frame_index)
-        {
-            self.pending_finally_jump = None;
-        }
         let find_async_frame = |frames: &[CallFrame], frame_index: usize| {
             for i in (0..=frame_index).rev() {
                 if frames[i].is_async {
@@ -1952,6 +1978,13 @@ impl VM {
 
         if let Some(handler) = self.exception_handlers.last().cloned() {
             self.exception_handlers.pop();
+            let handled_frame = handler.frame_index;
+            let same_frame_after = self
+                .exception_handlers
+                .iter()
+                .filter(|h| h.frame_index == self.frame_index)
+                .count();
+            self.clear_pending_finally_if_escaped(handled_frame, same_frame_after);
 
             if self.frame_index != handler.frame_index {
                 if let Some(async_idx) = find_async_frame(&self.frames, self.frame_index) {
@@ -1996,6 +2029,7 @@ impl VM {
             self.set_reg(0, value);
             ThrowDispatch::Caught
         } else {
+            self.clear_pending_finally_for_frame(self.frame_index);
             if let Some(async_idx) = find_async_frame(&self.frames, self.frame_index) {
                 let rejected = ctx.call_builtin("promise_reject", &[value]);
                 if async_idx == 0 {
@@ -3018,6 +3052,7 @@ impl VM {
             match finally_pc {
                 Some(fp) => {
                     self.pending_finally_return = Some((self.frame_index, value));
+                    self.pending_finally_depth = self.same_frame_handler_count();
                     start_pc = fp;
                 }
                 None => {
@@ -4332,6 +4367,13 @@ impl VM {
 
                     if let Some(handler) = self.exception_handlers.last().cloned() {
                         self.exception_handlers.pop();
+                        let handled_frame = handler.frame_index;
+                        let same_frame_after = self
+                            .exception_handlers
+                            .iter()
+                            .filter(|h| h.frame_index == self.frame_index)
+                            .count();
+                        self.clear_pending_finally_if_escaped(handled_frame, same_frame_after);
 
                         if self.frame_index != handler.frame_index {
                             if let Some(async_idx) =
@@ -4382,6 +4424,7 @@ impl VM {
                         self.refresh_cache();
                         self.set_reg(0, value);
                     } else {
+                        self.clear_pending_finally_for_frame(self.frame_index);
                         if let Some(async_idx) = find_async_frame(&self.frames, self.frame_index) {
                             let rejected = ctx.call_builtin("promise_reject", &[value]);
                             if async_idx == 0 {
@@ -4425,6 +4468,7 @@ impl VM {
                     // AFTER the finally body executes
                     if let Some(exc) = self.finally_rethrow.take() {
                         self.pending_finally_rethrow = Some((self.frame_index, exc));
+                        self.pending_finally_depth = self.same_frame_handler_count();
                     }
                 }
 
