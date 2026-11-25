@@ -386,8 +386,19 @@ pub fn init_array(ctx: &mut JSContext) {
     set_ne(&mut proto_obj, ctx.common_atoms.constructor, array_value);
 
     let sym_iter_atom = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
-    let array_iter_fn = create_builtin_function(ctx, "array_symbol_iterator");
+    let array_iter_fn = create_builtin_function(ctx, "array_values");
+    set_ne(&mut proto_obj, ctx.intern("values"), array_iter_fn);
     set_ne(&mut proto_obj, sym_iter_atom, array_iter_fn);
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("keys"),
+        create_builtin_function(ctx, "array_keys"),
+    );
+    set_ne(
+        &mut proto_obj,
+        ctx.intern("entries"),
+        create_builtin_function(ctx, "array_entries"),
+    );
     ctx.set_array_iterator_fn(array_iter_fn.get_ptr());
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
@@ -415,6 +426,11 @@ pub fn init_array(ctx: &mut JSContext) {
     let mut iter_proto = JSObject::new();
     let next_builtin = create_builtin_function(ctx, "array_iterator_next");
     set_ne(&mut iter_proto, ctx.intern("next"), next_builtin);
+    set_ne(
+        &mut iter_proto,
+        sym_iter_atom,
+        create_builtin_function(ctx, "array_iterator_self"),
+    );
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         iter_proto.prototype = Some(obj_proto_ptr);
     }
@@ -423,23 +439,56 @@ pub fn init_array(ctx: &mut JSContext) {
     ctx.set_array_iterator_prototype(iter_proto_ptr);
 }
 
-fn array_symbol_iterator(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let base = args.first().copied().unwrap_or(JSValue::undefined());
-    if !require_object_coercible(ctx, &base) {
-        return JSValue::undefined();
-    }
-    let this = to_object_or_return_undefined(base, ctx);
+fn create_array_iterator(ctx: &mut JSContext, this_val: JSValue, kind: i64) -> JSValue {
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
+    let kind_atom = ctx.common_atoms.__iter_kind__;
     let mut iter_obj = JSObject::new();
-    iter_obj.set(arr_atom, this);
+    iter_obj.set(arr_atom, this_val);
     iter_obj.set(idx_atom, JSValue::new_int(0));
+    iter_obj.set(kind_atom, JSValue::new_int(kind));
     if let Some(proto) = ctx.get_array_iterator_prototype() {
         iter_obj.prototype = Some(proto as *mut JSObject);
     }
     let ptr = Box::into_raw(Box::new(iter_obj)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
+}
+
+pub fn create_iterator_entry(ctx: &mut JSContext, key: JSValue, value: JSValue) -> JSValue {
+    create_array_obj(ctx, &[key, value])
+}
+
+fn array_iterator_self(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let _ = ctx;
+    args.first().copied().unwrap_or(JSValue::undefined())
+}
+
+fn array_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let base = args.first().copied().unwrap_or(JSValue::undefined());
+    if !require_object_coercible(ctx, &base) {
+        return JSValue::undefined();
+    }
+    let this = to_object_or_return_undefined(base, ctx);
+    create_array_iterator(ctx, this, 0)
+}
+
+fn array_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let base = args.first().copied().unwrap_or(JSValue::undefined());
+    if !require_object_coercible(ctx, &base) {
+        return JSValue::undefined();
+    }
+    let this = to_object_or_return_undefined(base, ctx);
+    create_array_iterator(ctx, this, 1)
+}
+
+fn array_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let base = args.first().copied().unwrap_or(JSValue::undefined());
+    if !require_object_coercible(ctx, &base) {
+        return JSValue::undefined();
+    }
+    let this = to_object_or_return_undefined(base, ctx);
+    create_array_iterator(ctx, this, 2)
 }
 
 fn array_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -465,15 +514,24 @@ fn array_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Iterator [[IteratedObject]] is not an object");
         return JSValue::undefined();
     }
+    let kind = obj
+        .get(ctx.common_atoms.__iter_kind__)
+        .map(|v| if v.is_int() { v.get_int() } else { 0 })
+        .unwrap_or(0);
     let arr_obj = arr_val.as_object();
     let len = arr_obj.get(ctx.common_atoms.length).map(|v| js_to_length(&v) as usize).unwrap_or(0);
     if iter_idx < len {
         let value = super::array::array_get(arr_obj, iter_idx, ctx).unwrap_or(JSValue::undefined());
         obj_mut.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
+        let result_value = match kind {
+            1 => JSValue::new_int(iter_idx as i64),
+            2 => create_iterator_entry(ctx, JSValue::new_int(iter_idx as i64), value),
+            _ => value,
+        };
         let mut result = JSObject::new();
         let done_atom = ctx.intern("done");
         let value_atom = ctx.intern("value");
-        result.set(value_atom, value);
+        result.set(value_atom, result_value);
         result.set(done_atom, JSValue::bool(false));
         let ptr = Box::into_raw(Box::new(result)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(ptr);
@@ -607,9 +665,15 @@ pub fn register_builtins(ctx: &mut JSContext) {
         "array_toSpliced",
         HostFunction::method("toSpliced", 3, array_to_spliced),
     );
+    ctx.register_builtin("array_values", HostFunction::method("values", 0, array_values));
+    ctx.register_builtin("array_keys", HostFunction::method("keys", 0, array_keys));
     ctx.register_builtin(
-        "array_symbol_iterator",
-        HostFunction::method("[Symbol.iterator]", 0, array_symbol_iterator),
+        "array_entries",
+        HostFunction::method("entries", 0, array_entries),
+    );
+    ctx.register_builtin(
+        "array_iterator_self",
+        HostFunction::method("[Symbol.iterator]", 0, array_iterator_self),
     );
     ctx.register_builtin(
         "array_constructor",
