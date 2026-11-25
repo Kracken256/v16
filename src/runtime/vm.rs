@@ -3747,41 +3747,18 @@ impl VM {
                     let a = self.get_reg(a_reg);
                     let b_reg = self.read_u16_pc();
                     let b = self.get_reg(b_reg);
-                    let result = if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        if b_int < 0 {
-                            self.set_pending_type_error(
-                                ctx,
-                                "BigInt exponent must be non-negative",
-                            );
-                            JSValue::undefined()
-                        } else {
-                            Self::create_bigint(a_int.pow(b_int as u32))
-                        }
-                    } else {
-                        let bv = a.to_number();
-                        let ev = b.to_number();
-                        let r = if ev == 2.0 {
-                            bv * bv
-                        } else if ev == 0.5 {
-                            bv.sqrt()
-                        } else if ev >= 2.0 && ev <= 8.0 && ev == ev.floor() {
-                            let mut r = bv;
-                            let mut n = ev as i32 - 1;
-                            while n > 0 {
-                                r *= bv;
-                                n -= 1;
+                    let result = match self.pow_op(&a, &b, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
                             }
-                            r
-                        } else if ev == -1.0 {
-                            1.0 / bv
-                        } else if ev == 1.0 {
-                            bv
-                        } else {
-                            bv.powf(ev)
-                        };
-                        JSValue::new_float(r)
+                            continue;
+                        }
                     };
                     self.set_reg(dst, result);
                 }
@@ -11907,6 +11884,62 @@ impl VM {
             }
         }
         Self::js_to_string(v, ctx)
+    }
+
+    fn set_pending_range_error(&mut self, ctx: &mut JSContext, msg: &str) {
+        use crate::object::object::JSObject;
+        let mut err = JSObject::new();
+        err.set(ctx.intern("name"), JSValue::new_string(ctx.intern("RangeError")));
+        err.set(ctx.intern("message"), JSValue::new_string(ctx.intern(msg)));
+        if let Some(proto) = ctx.get_range_error_prototype() {
+            err.prototype = Some(proto);
+        }
+        let ptr = Box::into_raw(Box::new(err)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        self.pending_throw = Some(JSValue::new_object(ptr));
+    }
+
+    fn pow_op(&mut self, a: &JSValue, b: &JSValue, ctx: &mut JSContext) -> Option<JSValue> {
+        let a = self.to_numeric(a, ctx)?;
+        let b = self.to_numeric(b, ctx)?;
+        if a.is_bigint() != b.is_bigint() {
+            self.set_pending_type_error(ctx, "Cannot mix BigInt and other types");
+            return None;
+        }
+        if a.is_bigint() {
+            let ai = Self::get_bigint_int(&a).unwrap_or(0);
+            let bi = Self::get_bigint_int(&b).unwrap_or(0);
+            if bi < 0 {
+                self.set_pending_range_error(ctx, "BigInt exponent must be non-negative");
+                return None;
+            }
+            return Some(Self::create_bigint(ai.pow(bi as u32)));
+        }
+        let bv = Self::js_to_number(&a, ctx);
+        let ev = Self::js_to_number(&b, ctx);
+        if ev.is_infinite() && bv.abs() == 1.0 {
+            return Some(JSValue::new_float(f64::NAN));
+        }
+        let r = if ev == 2.0 {
+            bv * bv
+        } else if ev == 0.5 {
+            bv.sqrt()
+        } else if ev >= 2.0 && ev <= 8.0 && ev == ev.floor() {
+            let mut r = bv;
+            let mut n = ev as i32 - 1;
+            while n > 0 {
+                r *= bv;
+                n -= 1;
+            }
+            r
+        } else if ev == -1.0 {
+            1.0 / bv
+        } else if ev == 1.0 {
+            bv
+        } else {
+            bv.powf(ev)
+        };
+        Some(JSValue::new_float(r))
     }
 
     fn to_numeric(&mut self, v: &JSValue, ctx: &mut JSContext) -> Option<JSValue> {
