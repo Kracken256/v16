@@ -329,6 +329,21 @@ fn eval_bytecode_with_caller(
     result
 }
 
+pub fn eval_code_as_eval(
+    ctx: &mut JSContext,
+    source: &str,
+) -> Result<JSValue, String> {
+    let rb = compile_script_to_bytecode_with_opt_level(
+        ctx,
+        source,
+        ctx.get_compiler_opt_level(),
+        false,
+        true,
+    )?;
+    eval_bytecode_with_caller(ctx, &rb, None)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
     ctx: &mut JSContext,
     source: &str,

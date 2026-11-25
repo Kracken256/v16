@@ -860,7 +860,7 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    match crate::eval(ctx, &source) {
+    match crate::compiler::eval_code_as_eval(ctx, &source) {
         Ok(v) => v,
         Err(_e) => JSValue::undefined(),
     }

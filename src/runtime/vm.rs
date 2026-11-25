@@ -973,6 +973,16 @@ impl VM {
         None
     }
 
+    fn eval_variable_env_is_global(&self) -> bool {
+        match self.caller_vm {
+            None => true,
+            Some(ptr) => {
+                let caller = unsafe { &*(ptr as *const VM) };
+                caller.frame_index == 0 && caller.frames[0].function_ptr.is_none()
+            }
+        }
+    }
+
     fn raise_named_error(
         &mut self,
         ctx: &mut JSContext,
@@ -5489,7 +5499,7 @@ impl VM {
     }
 
     pub fn indirect_eval(&mut self, ctx: &mut JSContext, source: &str) -> Result<JSValue, String> {
-        match crate::eval(ctx, source) {
+        match crate::compiler::eval_code_as_eval(ctx, source) {
             Ok(v) => Ok(v),
             Err(e) => self.convert_eval_error_to_exc(ctx, e),
         }
@@ -8106,6 +8116,177 @@ impl VM {
                                     self.raise_named_error(ctx, "TypeError", &message)
                                 {
                                     return result;
+                                }
+                            }
+                        }
+                        9 => {
+                            let value = self.get_reg(src);
+                            if !self.eval_variable_env_is_global() {
+                                let caller_var_set =
+                                    self.set_var_in_caller_vm(ctx, atom.0, value);
+                                if matches!(caller_var_set, CallerVarSet::Immutable) {
+                                    if let Some(result) = self.raise_named_error(
+                                        ctx,
+                                        "TypeError",
+                                        "Assignment to constant variable.",
+                                    ) {
+                                        return result;
+                                    }
+                                    continue;
+                                }
+                            } else {
+                                let mut failure = false;
+                                {
+                                    let global = ctx.global();
+                                    if global.is_object() {
+                                        let global_obj = global.as_object_mut();
+                                        match global_obj.get_own_descriptor(atom) {
+                                            Some(desc) => {
+                                                if desc.get.is_none()
+                                                    && desc.set.is_none()
+                                                {
+                                                    let descriptor =
+                                                        crate::object::object::PropertyDescriptor {
+                                                            value: Some(value),
+                                                            writable: true,
+                                                            enumerable: true,
+                                                            configurable: desc.configurable,
+                                                            get: None,
+                                                            set: None,
+                                                        };
+                                                    if !global_obj
+                                                        .define_property(atom, descriptor)
+                                                    {
+                                                        failure = true;
+                                                    }
+                                                } else {
+                                                    failure = true;
+                                                }
+                                            }
+                                            None => {
+                                                let descriptor =
+                                                    crate::object::object::PropertyDescriptor {
+                                                        value: Some(value),
+                                                        writable: true,
+                                                        enumerable: true,
+                                                        configurable: true,
+                                                        get: None,
+                                                        set: None,
+                                                    };
+                                                if !global_obj.define_property(atom, descriptor) {
+                                                    failure = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if failure {
+                                    let name_str = ctx.get_atom_str(atom).to_string();
+                                    let message = format!(
+                                        "Cannot declare global function '{}'",
+                                        name_str
+                                    );
+                                    if let Some(result) =
+                                        self.raise_named_error(ctx, "TypeError", &message)
+                                    {
+                                        return result;
+                                    }
+                                }
+                            }
+                        }
+                        10 => {
+                            if !self.eval_variable_env_is_global() {
+                                self.init_var_in_caller_vm(
+                                    ctx,
+                                    atom.0,
+                                    JSValue::undefined(),
+                                );
+                            } else {
+                                let global = ctx.global();
+                                if global.is_object() {
+                                    let global_obj = global.as_object_mut();
+                                    if !global_obj.has_own(atom) {
+                                        let descriptor =
+                                            crate::object::object::PropertyDescriptor {
+                                                value: Some(JSValue::undefined()),
+                                                writable: true,
+                                                enumerable: true,
+                                                configurable: true,
+                                                get: None,
+                                                set: None,
+                                            };
+                                        global_obj.define_property(atom, descriptor);
+                                    }
+                                }
+                            }
+                        }
+                        11 => {
+                            if self.eval_variable_env_is_global()
+                                && ctx.global_lexical_kinds.contains_key(&atom.0)
+                            {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message = format!(
+                                    "Identifier '{}' has already been declared",
+                                    name_str
+                                );
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "SyntaxError", &message)
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        12 => {
+                            if self.eval_variable_env_is_global() {
+                                let mut definable = false;
+                                let global = ctx.global();
+                                if global.is_object() {
+                                    let global_obj = global.as_object();
+                                    match global_obj.get_own_descriptor(atom) {
+                                        None => definable = global_obj.extensible(),
+                                        Some(desc) => {
+                                            definable = desc.configurable
+                                                || (desc.get.is_none()
+                                                    && desc.set.is_none()
+                                                    && desc.writable
+                                                    && desc.enumerable);
+                                        }
+                                    }
+                                }
+                                if !definable {
+                                    let name_str = ctx.get_atom_str(atom).to_string();
+                                    let message = format!(
+                                        "Cannot declare global function '{}'",
+                                        name_str
+                                    );
+                                    if let Some(result) =
+                                        self.raise_named_error(ctx, "TypeError", &message)
+                                    {
+                                        return result;
+                                    }
+                                }
+                            }
+                        }
+                        13 => {
+                            if self.eval_variable_env_is_global() {
+                                let mut definable = false;
+                                let global = ctx.global();
+                                if global.is_object() {
+                                    let global_obj = global.as_object();
+                                    definable =
+                                        global_obj.has_own(atom) || global_obj.extensible();
+                                }
+                                if !definable {
+                                    let name_str = ctx.get_atom_str(atom).to_string();
+                                    let message = format!(
+                                        "Cannot declare global variable '{}'",
+                                        name_str
+                                    );
+                                    if let Some(result) =
+                                        self.raise_named_error(ctx, "TypeError", &message)
+                                    {
+                                        return result;
+                                    }
                                 }
                             }
                         }

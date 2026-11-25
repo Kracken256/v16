@@ -1185,9 +1185,15 @@ impl CodeGenerator {
     }
 
     fn is_global_lexical(&self, name: &str) -> bool {
-        self.is_global_scope()
-            && !self.is_eval
-            && self.global_lexical_names.contains(name)
+        if !self.is_global_scope() || self.is_eval || !self.global_lexical_names.contains(name) {
+            return false;
+        }
+        for (index, scope) in self.scope_stack.iter().enumerate().rev() {
+            if scope.contains_key(name) {
+                return index == 1;
+            }
+        }
+        false
     }
 
     fn is_global_binding(&self, name: &str) -> bool {
@@ -1209,17 +1215,13 @@ impl CodeGenerator {
         self.emit_u16(src);
     }
 
-    fn emit_global_declaration_instantiation(
-        &mut self,
+    fn collect_script_var_and_function_names(
         body: &[ASTNode],
-        ctx: &mut JSContext,
-    ) {
-        let lexical = Self::collect_global_lexical_declarations(body);
+    ) -> (Vec<String>, Vec<String>) {
         let mut var_names: Vec<String> = Vec::new();
         for stmt in body {
             Self::collect_hoisted_var_names(stmt, &mut var_names);
         }
-        var_names.dedup();
         let mut function_names: Vec<String> = Vec::new();
         for stmt in body {
             if let ASTNode::FunctionDeclaration(func) = stmt {
@@ -1228,6 +1230,16 @@ impl CodeGenerator {
                 }
             }
         }
+        (var_names, function_names)
+    }
+
+    fn emit_global_declaration_instantiation(
+        &mut self,
+        body: &[ASTNode],
+        ctx: &mut JSContext,
+    ) {
+        let lexical = Self::collect_global_lexical_declarations(body);
+        let (var_names, function_names) = Self::collect_script_var_and_function_names(body);
         let mut variable_names = var_names.clone();
         for name in &function_names {
             if !variable_names.contains(name) {
@@ -1250,6 +1262,37 @@ impl CodeGenerator {
         }
         for (name, immutable) in &lexical {
             self.emit_global_binding(if *immutable { 5 } else { 4 }, name, 0, ctx);
+        }
+    }
+
+    fn emit_eval_declaration_instantiation(
+        &mut self,
+        body: &[ASTNode],
+        ctx: &mut JSContext,
+    ) {
+        let (var_names, function_names) = Self::collect_script_var_and_function_names(body);
+        for name in &var_names {
+            self.emit_global_binding(11, name, 0, ctx);
+        }
+        for name in &function_names {
+            self.emit_global_binding(11, name, 0, ctx);
+        }
+        for name in &function_names {
+            self.emit_global_binding(12, name, 0, ctx);
+        }
+        for name in &var_names {
+            if !function_names.contains(name) {
+                self.emit_global_binding(13, name, 0, ctx);
+            }
+        }
+    }
+
+    fn emit_eval_var_instantiation(&mut self, body: &[ASTNode], ctx: &mut JSContext) {
+        let (var_names, function_names) = Self::collect_script_var_and_function_names(body);
+        for name in &var_names {
+            if !function_names.contains(name) {
+                self.emit_global_binding(10, name, 0, ctx);
+            }
         }
     }
 
@@ -2752,8 +2795,12 @@ impl CodeGenerator {
         self.push_scope();
         self.pre_scan_let_const(&body.body)?;
 
-        if self.is_global_scope() && !self.is_eval {
-            self.emit_global_declaration_instantiation(&body.body, ctx);
+        if self.is_global_scope() {
+            if !self.is_eval {
+                self.emit_global_declaration_instantiation(&body.body, ctx);
+            } else if !self.is_strict {
+                self.emit_eval_declaration_instantiation(&body.body, ctx);
+            }
         }
 
         if !self.is_arrow && !self.is_script_level && self.lookup_var("arguments").is_none() {
@@ -2829,11 +2876,7 @@ impl CodeGenerator {
 
                     if self.is_global_scope() && !(self.is_strict && self.is_eval) {
                         if self.is_eval {
-                            let atom = ctx.intern(&func.name);
-                            let idx = self.add_constant(JSValue::new_string(atom));
-                            self.emit(Opcode::SetGlobalVar);
-                            self.emit_u32(idx);
-                            self.emit_u16(slot);
+                            self.emit_global_binding(9, &func.name, slot, ctx);
                         } else {
                             self.emit_global_binding(7, &func.name, slot, ctx);
                         }
@@ -2842,24 +2885,17 @@ impl CodeGenerator {
             }
         }
 
-        if self.is_global_scope() && !self.is_eval {
-            let mut var_names: Vec<String> = Vec::new();
-            for stmt in &body.body {
-                Self::collect_hoisted_var_names(stmt, &mut var_names);
-            }
-            var_names.dedup();
-            let mut function_names: Vec<String> = Vec::new();
-            for stmt in &body.body {
-                if let ASTNode::FunctionDeclaration(func) = stmt {
-                    if !function_names.contains(&func.name) {
-                        function_names.push(func.name.clone());
+        if self.is_global_scope() {
+            if !self.is_eval {
+                let (var_names, function_names) =
+                    Self::collect_script_var_and_function_names(&body.body);
+                for name in &var_names {
+                    if !function_names.contains(name) {
+                        self.emit_global_binding(8, name, 0, ctx);
                     }
                 }
-            }
-            for name in &var_names {
-                if !function_names.contains(name) {
-                    self.emit_global_binding(8, name, 0, ctx);
-                }
+            } else if !self.is_strict {
+                self.emit_eval_var_instantiation(&body.body, ctx);
             }
         }
 
