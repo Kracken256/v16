@@ -5155,13 +5155,39 @@ impl VM {
                         let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
                         if js_obj.is_dense_array() {
                             let idx = key_val.get_int() as usize;
-                            let arr = unsafe {
-                                &*(ptr as *const crate::object::array_obj::JSArrayObject)
-                            };
-                            if idx < arr.elements.len() {
-                                arr.elements[idx]
+                            let index_atom = self.int_atom(idx, ctx);
+                            if let Some(entry) = js_obj.get_own_accessor_entry(index_atom) {
+                                if let Some(getter) = entry.get {
+                                    if getter.is_function() {
+                                        match self.call_function_with_this(ctx, getter, obj_val, &[]) {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                let exc = self
+                                                    .last_caught_exception
+                                                    .take()
+                                                    .unwrap_or(JSValue::undefined());
+                                                match self.dispatch_throw_value(ctx, exc) {
+                                                    ThrowDispatch::Caught => continue,
+                                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        JSValue::undefined()
+                                    }
+                                } else {
+                                    JSValue::undefined()
+                                }
                             } else {
-                                JSValue::undefined()
+                                let arr = unsafe {
+                                    &*(ptr as *const crate::object::array_obj::JSArrayObject)
+                                };
+                                if idx < arr.elements.len() {
+                                    arr.elements[idx]
+                                } else {
+                                    JSValue::undefined()
+                                }
                             }
                         } else if js_obj.is_mapped_arguments() {
                             let fi = js_obj.mapped_args_frame_index();

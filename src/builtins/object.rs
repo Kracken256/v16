@@ -1683,6 +1683,23 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
+    if obj_ref.is_array() {
+        if let Some(index) = _ctx.atom_table().get_array_index(prop_atom) {
+            let len_atom = _ctx.common_atoms.length;
+            let old_len = obj_ref
+                .get(len_atom)
+                .map(|v| if v.is_int() { v.get_int() as usize } else { 0 })
+                .unwrap_or(0);
+            if index >= old_len {
+                obj_ref.set_length_ic(
+                    len_atom,
+                    JSValue::new_int((index + 1) as i64),
+                    _ctx.shape_cache_mut(),
+                );
+            }
+        }
+    }
+
     let ok = obj_ref.define_property_ext(
         prop_atom,
         pd,
