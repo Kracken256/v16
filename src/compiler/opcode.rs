@@ -207,6 +207,7 @@ pub enum Opcode {
     ArrayPushAll = 243,
     LoadCaughtException = 244,
     SetFunctionName = 245,
+    ToNumeric = 246,
 }
 
 impl Opcode {
@@ -405,6 +406,7 @@ impl Opcode {
             243 => Some(Opcode::ArrayPushAll),
             244 => Some(Opcode::LoadCaughtException),
             245 => Some(Opcode::SetFunctionName),
+            246 => Some(Opcode::ToNumeric),
             _ => None,
         }
     }
@@ -568,6 +570,7 @@ impl Opcode {
             Opcode::ArrayPushAll => 5,
             Opcode::LoadCaughtException => 3,
             Opcode::SetFunctionName => 5,
+            Opcode::ToNumeric => 5,
             Opcode::NewGeneratorFunction => 1,
             Opcode::NewAsyncFunction => 1,
             Opcode::NewAsyncGeneratorFunction => 1,
@@ -1300,7 +1303,7 @@ impl Bytecode {
                     )
                     .unwrap();
                 }
-                Opcode::Pos => {
+                Opcode::Pos | Opcode::ToNumeric => {
                     let dst = read_u16(1);
                     let src = read_u16(3);
                     write!(operands, " r{}, r{}", dst, src).unwrap();
@@ -1430,7 +1433,7 @@ impl Bytecode {
 
         out.extend_from_slice(b"SAFC");
 
-        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&3u32.to_le_bytes());
 
         out.extend_from_slice(&self.locals_count.to_le_bytes());
 
@@ -1460,7 +1463,7 @@ impl Bytecode {
             return Err("Invalid .jsc: bad magic".to_string());
         }
         let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        if version != 2 {
+        if version != 3 {
             return Err(format!("Unsupported .jsc version: {}", version));
         }
         let mut offset = 8usize;

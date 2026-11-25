@@ -5018,6 +5018,31 @@ impl VM {
                     }
                 }
 
+                Opcode::ToNumeric => {
+                    let dst = self.read_u16_pc();
+                    let src = self.read_u16_pc();
+                    let val = self.get_reg(src);
+                    let val = match self.to_numeric(&val, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    };
+                    if val.is_int() || val.is_float() || val.is_bigint() {
+                        self.set_reg(dst, val);
+                    } else {
+                        let n = Self::js_to_number(&val, ctx);
+                        self.set_reg(dst, JSValue::new_float(n));
+                    }
+                }
+
                 Opcode::Lt => {
                     let dst = self.read_u16_pc();
                     let a_reg = self.read_u16_pc();
@@ -5629,33 +5654,42 @@ impl VM {
                     let val = self.get_reg(src);
                     self.set_reg(idx, val);
                 }
-                Opcode::IncLocal => {
+                Opcode::IncLocal | Opcode::DecLocal => {
                     let slot = self.read_u16_pc();
                     let val = self.get_reg(slot);
+                    let delta: i128 = if op == Opcode::IncLocal { 1 } else { -1 };
                     let result = if val.is_int() {
-                        JSValue::new_int(val.get_int() + 1)
+                        JSValue::new_int(val.get_int() + delta as i64)
                     } else if val.is_bigint() {
                         let big = Self::get_bigint_int(&val).unwrap_or(0);
-                        Self::create_bigint(big + 1)
+                        Self::create_bigint(big + delta)
                     } else if val.is_float() {
-                        JSValue::new_float(val.get_float() + 1.0)
+                        JSValue::new_float_raw(val.get_float() + delta as f64)
                     } else {
-                        JSValue::new_float(Self::js_to_number(&val, ctx) + 1.0)
-                    };
-                    self.set_reg(slot, result);
-                }
-                Opcode::DecLocal => {
-                    let slot = self.read_u16_pc();
-                    let val = self.get_reg(slot);
-                    let result = if val.is_int() {
-                        JSValue::new_int(val.get_int() - 1)
-                    } else if val.is_bigint() {
-                        let big = Self::get_bigint_int(&val).unwrap_or(0);
-                        Self::create_bigint(big - 1)
-                    } else if val.is_float() {
-                        JSValue::new_float(val.get_float() - 1.0)
-                    } else {
-                        JSValue::new_float(Self::js_to_number(&val, ctx) - 1.0)
+                        match self.to_numeric(&val, ctx) {
+                            Some(n) => {
+                                if n.is_bigint() {
+                                    let big = Self::get_bigint_int(&n).unwrap_or(0);
+                                    Self::create_bigint(big + delta)
+                                } else if n.is_int() {
+                                    JSValue::new_int(n.get_int() + delta as i64)
+                                } else {
+                                    JSValue::new_float_raw(
+                                        Self::js_to_number(&n, ctx) + delta as f64,
+                                    )
+                                }
+                            }
+                            None => {
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                                continue;
+                            }
+                        }
                     };
                     self.set_reg(slot, result);
                 }
@@ -6317,6 +6351,7 @@ impl VM {
                                 ThrowDispatch::AsyncComplete(o) => return Ok(o),
                             }
                         }
+                        self.set_reg(key_reg, key_val);
                     }
                     let result = if obj_val.is_object_like() && key_val.is_int() {
                         let ptr = obj_val.get_ptr();
@@ -6608,6 +6643,11 @@ impl VM {
                                 ThrowDispatch::Uncaught(e) => return Err(e),
                                 ThrowDispatch::AsyncComplete(o) => return Ok(o),
                             }
+                        }
+                    }
+                    if obj_val.is_object_like() && key_val.is_string() {
+                        if let Some(index) = ctx.atom_table().get_array_index(key_val.get_atom()) {
+                            key_val = JSValue::new_int(index as i64);
                         }
                     }
                     if obj_val.is_object_like() && key_val.is_int() {

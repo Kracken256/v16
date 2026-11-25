@@ -7351,7 +7351,7 @@ impl CodeGenerator {
                         self.emit(Opcode::Move);
                         self.emit_u16(old);
                         self.emit_u16(current);
-                        self.emit(Opcode::Pos);
+                        self.emit(Opcode::ToNumeric);
                         self.emit_u16(old);
                         self.emit_u16(old);
                         old
@@ -7417,7 +7417,7 @@ impl CodeGenerator {
                             self.emit(Opcode::Move);
                             self.emit_u16(old_val);
                             self.emit_u16(slot);
-                            self.emit(Opcode::Pos);
+                            self.emit(Opcode::ToNumeric);
                             self.emit_u16(old_val);
                             self.emit_u16(old_val);
                             self.emit(op);
@@ -7475,6 +7475,9 @@ impl CodeGenerator {
                         let const_idx = self.add_constant(JSValue::new_string(atom));
                         let r = self.alloc_register();
                         self.emit(Opcode::GetGlobal);
+                        self.emit_u16(r);
+                        self.emit_u32(const_idx);
+                        self.emit(Opcode::CheckRef);
                         self.emit_u16(r);
                         self.emit_u32(const_idx);
                         let op = match update.op {
@@ -7550,7 +7553,7 @@ impl CodeGenerator {
                                 self.emit(Opcode::Move);
                                 self.emit_u16(old_val);
                                 self.emit_u16(tmp);
-                                self.emit(Opcode::Pos);
+                                self.emit(Opcode::ToNumeric);
                                 self.emit_u16(old_val);
                                 self.emit_u16(old_val);
                                 self.emit(op);
@@ -7586,7 +7589,7 @@ impl CodeGenerator {
                             self.emit(Opcode::Move);
                             self.emit_u16(old_val);
                             self.emit_u16(tmp);
-                            self.emit(Opcode::Pos);
+                            self.emit(Opcode::ToNumeric);
                             self.emit_u16(old_val);
                             self.emit_u16(old_val);
                             self.emit(op);
@@ -7650,7 +7653,7 @@ impl CodeGenerator {
                         if update.prefix {
                             self.emit(op);
                             self.emit_u16(tmp);
-                            self.emit(Opcode::SetProp);
+                            self.emit(Opcode::SetField);
                             self.emit_u16(obj);
                             self.emit_u16(key);
                             self.emit_u16(tmp);
@@ -7870,7 +7873,7 @@ impl CodeGenerator {
             self.emit(Opcode::Move);
             self.emit_u16(old_val);
             self.emit_u16(current);
-            self.emit(Opcode::Pos);
+            self.emit(Opcode::ToNumeric);
             self.emit_u16(old_val);
             self.emit_u16(old_val);
             self.emit(op);
