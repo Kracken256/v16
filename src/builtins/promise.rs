@@ -920,28 +920,37 @@ fn resolve_promise_value(
     }
     if value.is_object() {
         let then_atom = ctx.intern("then");
-        let then_val = value.as_object().get(then_atom);
-        if let Some(then_fn) = then_val {
-            if then_fn.is_function() {
-                let (resolve_val, reject_val) = create_resolve_reject_fns(ctx, target);
-                match vm.call_function_with_this(
-                    ctx,
-                    then_fn,
-                    value,
-                    &[resolve_val, reject_val],
-                ) {
-                    Ok(_) => return,
-                    Err(_) => {
-                        let exc = vm
-                            .last_caught_exception
-                            .take()
-                            .unwrap_or_else(JSValue::undefined);
-                        let t = target.as_object_mut();
-                        if t.is_promise() && get_promise_state(ctx, t).is_pending() {
-                            reject_promise(ctx, t, exc);
-                        }
-                        return;
+        let then_val = match vm.get_prop_value(ctx, value, then_atom) {
+            Ok(v) => v,
+            Err(_) => {
+                let exc = vm
+                    .last_caught_exception
+                    .take()
+                    .or_else(|| ctx.pending_exception.take())
+                    .unwrap_or_else(JSValue::undefined);
+                let t = target.as_object_mut();
+                if t.is_promise() && get_promise_state(ctx, t).is_pending() {
+                    reject_promise(ctx, t, exc);
+                }
+                return;
+            }
+        };
+        if then_val.is_function() {
+            let then_fn = then_val;
+            let (resolve_val, reject_val) = create_resolve_reject_fns(ctx, target);
+            match vm.call_function_with_this(ctx, then_fn, value, &[resolve_val, reject_val]) {
+                Ok(_) => return,
+                Err(_) => {
+                    let exc = vm
+                        .last_caught_exception
+                        .take()
+                        .or_else(|| ctx.pending_exception.take())
+                        .unwrap_or_else(JSValue::undefined);
+                    let t = target.as_object_mut();
+                    if t.is_promise() && get_promise_state(ctx, t).is_pending() {
+                        reject_promise(ctx, t, exc);
                     }
+                    return;
                 }
             }
         }
