@@ -1454,6 +1454,65 @@ impl CodeGenerator {
                     result,
                 );
             }
+            ASTNode::TryStatement(stmt) => {
+                let mut try_locals = locals.clone();
+                for s in &stmt.block.body {
+                    Self::collect_inherited_upvalues_stmt(
+                        s,
+                        &mut try_locals,
+                        parent_vars,
+                        result,
+                    );
+                }
+                if let Some(handler) = &stmt.handler {
+                    let mut handler_locals = locals.clone();
+                    if let Some(param) = &handler.param {
+                        Self::collect_binding_pattern_bindings(param, &mut handler_locals);
+                    }
+                    for s in &handler.body.body {
+                        Self::collect_inherited_upvalues_stmt(
+                            s,
+                            &mut handler_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                }
+                if let Some(finalizer) = &stmt.finalizer {
+                    let mut finalizer_locals = locals.clone();
+                    for s in &finalizer.body {
+                        Self::collect_inherited_upvalues_stmt(
+                            s,
+                            &mut finalizer_locals,
+                            parent_vars,
+                            result,
+                        );
+                    }
+                }
+            }
+            ASTNode::WithStatement(stmt) => {
+                Self::collect_inherited_upvalues_expr(
+                    &stmt.object,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+                let mut with_locals = locals.clone();
+                Self::collect_inherited_upvalues_stmt(
+                    &stmt.body,
+                    &mut with_locals,
+                    parent_vars,
+                    result,
+                );
+            }
+            ASTNode::LabelledStatement(stmt) => {
+                Self::collect_inherited_upvalues_stmt(
+                    &stmt.body,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+            }
             _ => {}
         }
     }
@@ -2080,6 +2139,24 @@ impl CodeGenerator {
                     parent_vars,
                     result,
                 );
+            }
+            Expression::AwaitExpression(await_expr) => {
+                Self::collect_inherited_upvalues_expr(
+                    &await_expr.argument,
+                    locals,
+                    parent_vars,
+                    result,
+                );
+            }
+            Expression::YieldExpression(yield_expr) => {
+                if let Some(argument) = &yield_expr.argument {
+                    Self::collect_inherited_upvalues_expr(
+                        argument,
+                        locals,
+                        parent_vars,
+                        result,
+                    );
+                }
             }
             _ => {}
         }
