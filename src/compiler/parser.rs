@@ -725,7 +725,12 @@ impl Parser {
                 continue;
             }
 
-            let is_static = if self.at_keyword("static") {
+            let is_static = if self.at_keyword("static")
+                && !self.peek_at("(")
+                && !self.peek_at("=")
+                && !self.peek_at(";")
+                && !self.peek_at("}")
+            {
                 self.advance();
                 true
             } else {
