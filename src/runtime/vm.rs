@@ -212,6 +212,7 @@ pub fn start_async_call(
         pending_finally_rethrow: None,
         pending_finally_jump: None,
         pending_finally_depth: 0,
+        pending_close_state: None,
     });
     let holder_ptr = Box::into_raw(Box::new(holder)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(holder_ptr);
@@ -256,6 +257,7 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
     let pending_finally_rethrow = step_vm.pending_finally_rethrow;
     let pending_finally_jump = step_vm.pending_finally_jump;
     let pending_finally_depth = step_vm.pending_finally_depth;
+    let pending_close_state = step_vm.pending_close_state;
 
     let promise_atom = ctx.intern("__v16_promise__");
     let awaiting_atom = ctx.intern("__v16_awaiting__");
@@ -299,10 +301,13 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
             state.handlers = handlers;
             state.send_reg = Some(src);
             state.pending_throw = None;
+            state.resume_kind = 0;
+            state.resume_value = JSValue::undefined();
             state.pending_finally_return = pending_finally_return;
             state.pending_finally_rethrow = pending_finally_rethrow;
             state.pending_finally_jump = pending_finally_jump;
             state.pending_finally_depth = pending_finally_depth;
+            state.pending_close_state = pending_close_state;
             holder.set(awaiting_atom, p);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, false);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, true);
@@ -315,10 +320,13 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
             state.yield_is_result = is_result;
             state.pending_throw = None;
             state.pending_yield = true;
+            state.resume_kind = 0;
+            state.resume_value = JSValue::undefined();
             state.pending_finally_return = pending_finally_return;
             state.pending_finally_rethrow = pending_finally_rethrow;
             state.pending_finally_jump = pending_finally_jump;
             state.pending_finally_depth = pending_finally_depth;
+            state.pending_close_state = pending_close_state;
             holder.set(awaiting_atom, p);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, false);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, true);
@@ -784,6 +792,8 @@ pub struct VM {
 
     pub await_suspend: Option<(JSValue, u16)>,
 
+    pub pending_close_state: Option<u16>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -847,6 +857,7 @@ impl VM {
             eval_direct_active: false,
             async_step: false,
             await_suspend: None,
+            pending_close_state: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -3424,6 +3435,234 @@ impl VM {
         }
     }
 
+    fn complete_async_iterator_close_error(
+        &mut self,
+        ctx: &mut JSContext,
+        exc: JSValue,
+        throw_completion: bool,
+    ) -> Result<(bool, Option<ExecutionOutcome>), String> {
+        if throw_completion {
+            self.last_caught_exception = None;
+            ctx.pending_exception = None;
+            self.pending_throw = None;
+            return Ok((false, None));
+        }
+        if self
+            .pending_finally_return
+            .map_or(false, |(frame, _)| frame == self.frame_index)
+        {
+            self.pending_finally_return = None;
+        }
+        if self
+            .pending_finally_jump
+            .map_or(false, |(frame, _, _)| frame == self.frame_index)
+        {
+            self.pending_finally_jump = None;
+        }
+        match self.dispatch_throw_value(ctx, exc) {
+            ThrowDispatch::Caught => Ok((false, None)),
+            ThrowDispatch::Uncaught(e) => Err(e),
+            ThrowDispatch::AsyncComplete(o) => Ok((false, Some(o))),
+        }
+    }
+
+    fn async_iterator_close_finally(
+        &mut self,
+        ctx: &mut JSContext,
+        instr_pc: usize,
+        iter_reg: u16,
+        state_reg: u16,
+        await_reg: u16,
+        done_reg: u16,
+    ) -> Result<(bool, Option<ExecutionOutcome>), String> {
+        let throw_completion = self
+            .pending_finally_rethrow
+            .map_or(false, |(frame, _)| frame == self.frame_index);
+        let phase = self.get_reg(state_reg).get_int();
+        if phase == -1 {
+            self.pending_close_state = None;
+            self.set_reg(state_reg, JSValue::new_int(0));
+            let exc = self.get_reg(await_reg);
+            return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+        }
+        if phase == 1 || phase == 4 {
+            self.pending_close_state = None;
+            self.set_reg(state_reg, JSValue::new_int(0));
+            let awaited = self.get_reg(await_reg);
+            if !awaited.is_object_like() {
+                self.set_pending_type_error(ctx, "Iterator result is not an object");
+                let exc = self
+                    .take_pending_exception(ctx)
+                    .unwrap_or_else(JSValue::undefined);
+                return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+            }
+            return Ok((false, None));
+        }
+        if phase == 3 {
+            self.set_reg(state_reg, JSValue::new_int(4));
+            let mut wrapper = crate::object::object::JSObject::new();
+            wrapper.set(ctx.intern("value"), self.get_reg(await_reg));
+            wrapper.set(ctx.intern("done"), self.get_reg(done_reg));
+            if let Some(proto) = ctx.get_object_prototype() {
+                wrapper.prototype = Some(proto);
+            }
+            let ptr = Box::into_raw(Box::new(wrapper)) as usize;
+            ctx.runtime_mut().gc_heap_mut().track(ptr);
+            let promise = ctx.call_builtin("promise_resolve", &[JSValue::new_object(ptr)]);
+            self.set_reg(await_reg, JSValue::undefined());
+            self.await_suspend = Some((promise, await_reg));
+            self.pc = instr_pc;
+            self.pending_close_state = Some(state_reg);
+            return Ok((true, None));
+        }
+        let iter_val = self.get_reg(iter_reg);
+        let (target, async_from_sync) = if iter_val.is_object_like() {
+            match Self::iterator_record_parts(ctx, iter_val) {
+                Some((target, _, async_from_sync)) => (target, async_from_sync),
+                None => (iter_val, false),
+            }
+        } else {
+            (iter_val, false)
+        };
+        let return_atom = ctx.intern("return");
+        let ret_fn = match self.get_prop_value(ctx, target, return_atom) {
+            Ok(v) => v,
+            Err(_) => {
+                self.rethrow_last_caught(ctx);
+                let exc = self
+                    .take_pending_exception(ctx)
+                    .unwrap_or_else(JSValue::undefined);
+                return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+            }
+        };
+        if async_from_sync {
+            if ret_fn.is_undefined() || ret_fn.is_null() {
+                return self.suspend_async_close_with_result_object(
+                    ctx, instr_pc, state_reg, await_reg,
+                );
+            }
+            if !ret_fn.is_function() {
+                self.set_pending_type_error(ctx, "Iterator return is not a function");
+                let exc = self
+                    .take_pending_exception(ctx)
+                    .unwrap_or_else(JSValue::undefined);
+                return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+            }
+            let result = match self.call_function_with_this(ctx, ret_fn, target, &[]) {
+                Ok(v) => v,
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                    let exc = self
+                        .take_pending_exception(ctx)
+                        .unwrap_or_else(JSValue::undefined);
+                    return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+                }
+            };
+            if !result.is_object_like() {
+                self.set_pending_type_error(ctx, "Iterator result is not an object");
+                let exc = self
+                    .take_pending_exception(ctx)
+                    .unwrap_or_else(JSValue::undefined);
+                return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+            }
+            let done_atom = ctx.intern("done");
+            let done = match self.get_prop_value(ctx, result, done_atom) {
+                Ok(v) => v,
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                    let exc = self
+                        .take_pending_exception(ctx)
+                        .unwrap_or_else(JSValue::undefined);
+                    return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+                }
+            };
+            let value_atom = ctx.intern("value");
+            let value = match self.get_prop_value(ctx, result, value_atom) {
+                Ok(v) => v,
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                    let exc = self
+                        .take_pending_exception(ctx)
+                        .unwrap_or_else(JSValue::undefined);
+                    return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+                }
+            };
+            let promise = ctx.call_builtin("promise_resolve", &[value]);
+            self.adopt_pending_host_exception(ctx);
+            if self.pending_throw.is_some() {
+                let exc = self
+                    .take_pending_exception(ctx)
+                    .unwrap_or_else(JSValue::undefined);
+                return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+            }
+            self.set_reg(done_reg, done);
+            self.set_reg(state_reg, JSValue::new_int(3));
+            self.set_reg(await_reg, JSValue::undefined());
+            self.await_suspend = Some((promise, await_reg));
+            self.pc = instr_pc;
+            self.pending_close_state = Some(state_reg);
+            return Ok((true, None));
+        }
+        if ret_fn.is_undefined() || ret_fn.is_null() {
+            return Ok((false, None));
+        }
+        if !ret_fn.is_function() {
+            self.set_pending_type_error(ctx, "Iterator return is not a function");
+            let exc = self
+                .take_pending_exception(ctx)
+                .unwrap_or_else(JSValue::undefined);
+            return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+        }
+        let result = match self.call_function_with_this(ctx, ret_fn, target, &[]) {
+            Ok(v) => v,
+            Err(_) => {
+                self.rethrow_last_caught(ctx);
+                let exc = self
+                    .take_pending_exception(ctx)
+                    .unwrap_or_else(JSValue::undefined);
+                return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+            }
+        };
+        let promise = ctx.call_builtin("promise_resolve", &[result]);
+        self.adopt_pending_host_exception(ctx);
+        if self.pending_throw.is_some() {
+            let exc = self
+                .take_pending_exception(ctx)
+                .unwrap_or_else(JSValue::undefined);
+            return self.complete_async_iterator_close_error(ctx, exc, throw_completion);
+        }
+        self.set_reg(state_reg, JSValue::new_int(1));
+        self.set_reg(await_reg, JSValue::undefined());
+        self.await_suspend = Some((promise, await_reg));
+        self.pc = instr_pc;
+        self.pending_close_state = Some(state_reg);
+        Ok((true, None))
+    }
+
+    fn suspend_async_close_with_result_object(
+        &mut self,
+        ctx: &mut JSContext,
+        instr_pc: usize,
+        state_reg: u16,
+        await_reg: u16,
+    ) -> Result<(bool, Option<ExecutionOutcome>), String> {
+        self.set_reg(state_reg, JSValue::new_int(4));
+        let mut iter_result = crate::object::object::JSObject::new();
+        iter_result.set(ctx.intern("value"), JSValue::undefined());
+        iter_result.set(ctx.intern("done"), JSValue::bool(true));
+        if let Some(proto) = ctx.get_object_prototype() {
+            iter_result.prototype = Some(proto);
+        }
+        let ptr = Box::into_raw(Box::new(iter_result)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        let promise = ctx.call_builtin("promise_resolve", &[JSValue::new_object(ptr)]);
+        self.set_reg(await_reg, JSValue::undefined());
+        self.await_suspend = Some((promise, await_reg));
+        self.pc = instr_pc;
+        self.pending_close_state = Some(state_reg);
+        Ok((true, None))
+    }
+
     #[cold]
     fn set_pending_reference_error(&mut self, ctx: &mut JSContext, msg: &str) {
         use crate::object::object::JSObject;
@@ -4399,6 +4638,7 @@ impl VM {
                         pending_finally_rethrow: None,
                         pending_finally_jump: None,
                         pending_finally_depth: 0,
+                        pending_close_state: None,
                     });
                     gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                         queue: Vec::new(),
@@ -11472,6 +11712,31 @@ impl VM {
                         }
                     }
                 }
+                Opcode::AsyncIteratorCloseFinally => {
+                    let instr_pc = self.pc - 1;
+                    let iter_reg = self.read_u16_pc();
+                    let state_reg = self.read_u16_pc();
+                    let await_reg = self.read_u16_pc();
+                    let done_reg = self.read_u16_pc();
+                    match self.async_iterator_close_finally(
+                        ctx,
+                        instr_pc,
+                        iter_reg,
+                        state_reg,
+                        await_reg,
+                        done_reg,
+                    ) {
+                        Ok((true, _)) => return Ok(ExecutionOutcome::Yield(JSValue::undefined())),
+                        Ok((false, Some(outcome))) => return Ok(outcome),
+                        Ok((false, None)) => {}
+                        Err(e) => {
+                            if self.pending_throw.is_some() {
+                                continue;
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
                 Opcode::IteratorCloseFinally => {
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
@@ -11704,6 +11969,7 @@ impl VM {
         self.ctx_ptr = ctx;
         self.async_step = true;
         self.await_suspend = None;
+        self.pending_close_state = None;
         self.last_yield_src = None;
         self.last_yield_is_result = false;
         self.generator_resume_kind = 0;
@@ -11750,6 +12016,21 @@ impl VM {
         self.pending_finally_rethrow = state.pending_finally_rethrow;
         self.pending_finally_jump = state.pending_finally_jump;
         self.pending_finally_depth = state.pending_finally_depth;
+        self.pending_close_state = state.pending_close_state;
+        if let Some(state_reg) = self.pending_close_state {
+            if let Some(exc) = self.pending_throw.take() {
+                if let Some(reg) = state.send_reg {
+                    let idx = reg as usize;
+                    if idx < self.registers.len() {
+                        self.registers[idx] = exc;
+                    }
+                }
+                let idx = state_reg as usize;
+                if idx < self.registers.len() {
+                    self.registers[idx] = JSValue::new_int(-1);
+                }
+            }
+        }
 
         let saved_vm_ptr = ctx.get_register_vm_ptr();
         ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
@@ -11923,6 +12204,7 @@ impl VM {
                 pending_finally_rethrow: None,
                 pending_finally_jump: None,
                 pending_finally_depth: 0,
+                pending_close_state: None,
             });
             gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                 queue: Vec::new(),

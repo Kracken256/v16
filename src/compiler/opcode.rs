@@ -209,6 +209,7 @@ pub enum Opcode {
     SetFunctionName = 245,
     ToNumeric = 246,
     AsyncYieldStarStep = 247,
+    AsyncIteratorCloseFinally = 248,
 }
 
 impl Opcode {
@@ -409,6 +410,7 @@ impl Opcode {
             245 => Some(Opcode::SetFunctionName),
             246 => Some(Opcode::ToNumeric),
             247 => Some(Opcode::AsyncYieldStarStep),
+            248 => Some(Opcode::AsyncIteratorCloseFinally),
             _ => None,
         }
     }
@@ -581,6 +583,7 @@ impl Opcode {
             Opcode::IteratorNext => 7,
             Opcode::YieldStarStep => 9,
             Opcode::AsyncYieldStarStep => 13,
+            Opcode::AsyncIteratorCloseFinally => 9,
             Opcode::IteratorNextSend => 9,
             Opcode::IteratorClose => 3,
             Opcode::IteratorStep => 5,
@@ -1387,6 +1390,14 @@ impl Bytecode {
                         " r{}, r{}, r{}, r{}, r{}, r{}",
                         iter, value, done, returning, state, awaited
                     )
+                    .unwrap();
+                }
+                Opcode::AsyncIteratorCloseFinally => {
+                    let iter = read_u16(1);
+                    let state = read_u16(3);
+                    let awaited = read_u16(5);
+                    let done = read_u16(7);
+                    write!(operands, " r{}, r{}, r{}, r{}", iter, state, awaited, done)
                     .unwrap();
                 }
                 Opcode::IteratorNextSend => {

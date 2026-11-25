@@ -5265,6 +5265,21 @@ impl CodeGenerator {
         } else {
             None
         };
+        let close_state_reg = if stmt.is_await {
+            Some(self.alloc_register())
+        } else {
+            None
+        };
+        let close_await_reg = if stmt.is_await {
+            Some(self.alloc_register())
+        } else {
+            None
+        };
+        let close_done_reg = if stmt.is_await {
+            Some(self.alloc_register())
+        } else {
+            None
+        };
         if stmt.is_await {
             self.emit(Opcode::GetAsyncIterator);
         } else {
@@ -5275,6 +5290,11 @@ impl CodeGenerator {
         self.free_register(iterable_reg);
 
         if let Some(state_reg) = await_state_reg {
+            self.emit(Opcode::LoadInt8);
+            self.emit_u16(state_reg);
+            self.emit_u8(0);
+        }
+        if let Some(state_reg) = close_state_reg {
             self.emit(Opcode::LoadInt8);
             self.emit_u16(state_reg);
             self.emit_u8(0);
@@ -5302,7 +5322,7 @@ impl CodeGenerator {
         self.emit_i32(0);
         self.free_register(done_reg);
 
-        let close_iterators = !stmt.is_await;
+        let close_iterators = true;
         let outer_depth = self.handler_depth;
         let mut close_region: Option<(usize, usize)> = None;
         if close_iterators {
@@ -5368,8 +5388,16 @@ impl CodeGenerator {
             self.code[catch_pc_pos..catch_pc_pos + 4].copy_from_slice(&close_bytes);
             self.code[finally_pc_pos..finally_pc_pos + 4].copy_from_slice(&close_bytes);
             self.emit(Opcode::Finally);
-            self.emit(Opcode::IteratorCloseFinally);
-            self.emit_u16(iter_reg);
+            if stmt.is_await {
+                self.emit(Opcode::AsyncIteratorCloseFinally);
+                self.emit_u16(iter_reg);
+                self.emit_u16(close_state_reg.unwrap());
+                self.emit_u16(close_await_reg.unwrap());
+                self.emit_u16(close_done_reg.unwrap());
+            } else {
+                self.emit(Opcode::IteratorCloseFinally);
+                self.emit_u16(iter_reg);
+            }
             self.emit(Opcode::EndFinally);
         }
 
@@ -5387,6 +5415,15 @@ impl CodeGenerator {
         self.free_register(iter_reg);
         if let Some(state_reg) = await_state_reg {
             self.free_register(state_reg);
+        }
+        if let Some(state_reg) = close_state_reg {
+            self.free_register(state_reg);
+        }
+        if let Some(reg) = close_await_reg {
+            self.free_register(reg);
+        }
+        if let Some(reg) = close_done_reg {
+            self.free_register(reg);
         }
 
         if needs_block_scope {

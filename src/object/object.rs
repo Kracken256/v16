@@ -60,6 +60,8 @@ pub struct AsyncState {
     pub pending_finally_jump: Option<(usize, usize, usize)>,
 
     pub pending_finally_depth: usize,
+
+    pub pending_close_state: Option<u16>,
 }
 
 pub struct AsyncGeneratorRequest {
