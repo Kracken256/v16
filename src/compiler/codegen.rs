@@ -229,6 +229,9 @@ pub struct CodeGenerator {
     is_script_level: bool,
     scope_is_global: Vec<bool>,
     function_uses_arguments: bool,
+    arguments_slot: Option<u16>,
+    needs_parent_arguments: bool,
+    simple_params: bool,
     current_function_name: Option<String>,
     tiny_inline_functions: FxHashMap<String, FunctionDeclaration>,
     p2_fold_profile: P2FoldProfile,
@@ -301,6 +304,9 @@ impl CodeGenerator {
             is_script_level: true,
             scope_is_global: vec![false],
             function_uses_arguments: false,
+            arguments_slot: None,
+            needs_parent_arguments: false,
+            simple_params: true,
             current_function_name: None,
             tiny_inline_functions: FxHashMap::default(),
             p2_fold_profile: settings.p2_fold_profile,
@@ -1167,6 +1173,9 @@ impl CodeGenerator {
             // it as an upvalue — closures after the scope should not see it.
             if parent_var.closed {
                 return None;
+            }
+            if name == "arguments" && self.is_arrow {
+                self.needs_parent_arguments = true;
             }
             if let Some(&upvalue_slot) = self.upvalue_slots.get(name) {
                 return Some(VarLocation::Upvalue(upvalue_slot));
@@ -2190,6 +2199,9 @@ impl CodeGenerator {
             self.is_script_level = false;
         }
         self.function_uses_arguments = false;
+        self.arguments_slot = None;
+        self.needs_parent_arguments = false;
+        self.simple_params = is_simple_params;
         self.current_function_name = function_name.map(|s| s.to_string());
 
         let this_slot = self.alloc_register();
@@ -10544,6 +10556,43 @@ impl CodeGenerator {
         let function_kind = (if has_prototype { 1 } else { 0 })
             | if is_arrow { 4 } else { 0 }
             | if is_method { 32 } else { 0 };
+        let mut tentative_arguments: Option<(u16, bool)> = None;
+        if is_arrow {
+            if self.is_arrow {
+                if self.lookup_var("arguments").is_none()
+                    && !self.upvalue_slots.contains_key("arguments")
+                {
+                    if let Some(parent_var) = self.parent_vars.get("arguments").copied() {
+                        if !parent_var.closed {
+                            let upvalue_slot = self.upvalues.len() as u16;
+                            self.reserved_slots.insert(upvalue_slot);
+                            let atom = ctx.atom_table_mut().intern("arguments");
+                            let local_idx = if parent_var.is_inherited {
+                                u16::MAX
+                            } else {
+                                parent_var.local_idx
+                            };
+                            self.upvalues.push((atom.0, local_idx));
+                            self.upvalue_slots
+                                .insert("arguments".to_string(), upvalue_slot);
+                            tentative_arguments = Some((upvalue_slot, true));
+                        }
+                    }
+                }
+            } else if !self.is_script_level
+                && self.lookup_var("arguments").is_none()
+                && !(self.is_strict && !self.simple_params)
+            {
+                if let Some(slot) = self.arguments_slot {
+                    tentative_arguments = Some((slot, false));
+                } else {
+                    let slot = self.alloc_register();
+                    self.reserved_slots.insert(slot);
+                    self.arguments_slot = Some(slot);
+                    tentative_arguments = Some((slot, true));
+                }
+            }
+        }
         let mut parent_vars: FxHashMap<String, ParentVar> = FxHashMap::default();
         for (scope_idx, scope) in self.scope_stack.iter().enumerate() {
             if self
@@ -10589,6 +10638,23 @@ impl CodeGenerator {
                 );
             }
         }
+        if !self.is_arrow {
+            if let Some((slot, _)) = tentative_arguments {
+                if !parent_vars.contains_key("arguments") {
+                    parent_vars.insert(
+                        "arguments".to_string(),
+                        ParentVar {
+                            local_idx: slot,
+                            kind: VariableKind::Var,
+                            initialized: true,
+                            is_inherited: false,
+                            closed: false,
+                            is_function_name: false,
+                        },
+                    );
+                }
+            }
+        }
         // Include variables from closed scopes (popped from scope_stack but
         // still in parent_vars with the closed flag). These are out-of-scope
         // let/const variables that closures should NOT access.
@@ -10610,6 +10676,31 @@ impl CodeGenerator {
                 is_named_expression,
             )
             .map_err(|e| format!("nested function compile error: {}", e))?;
+
+        if is_arrow {
+            if nested_codegen.needs_parent_arguments {
+                self.needs_parent_arguments = true;
+                if !self.is_arrow {
+                    if let Some((slot, _)) = tentative_arguments {
+                        self.function_uses_arguments = true;
+                        self.emit(Opcode::GetArguments);
+                        self.emit_u16(slot);
+                    }
+                }
+            } else if let Some((slot, is_new)) = tentative_arguments {
+                if is_new {
+                    if self.is_arrow {
+                        self.upvalue_slots.remove("arguments");
+                        self.upvalues.pop();
+                        self.reserved_slots.remove(&slot);
+                    } else {
+                        self.reserved_slots.remove(&slot);
+                        self.free_register(slot);
+                        self.arguments_slot = None;
+                    }
+                }
+            }
+        }
 
         let func_name_atom = name.map(|n| ctx.atom_table_mut().intern(n).0).unwrap_or(0);
         let dst = if let Some(name) = name {
