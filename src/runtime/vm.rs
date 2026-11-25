@@ -66,7 +66,7 @@ pub struct CallFrame {
 
     pub has_upvalues: bool,
 
-    pub var_name_map: *const Vec<(u32, u16)>,
+    pub var_name_map: *const Vec<(u32, u16, u8)>,
     pub eval_bindings: Option<Box<std::collections::HashMap<u32, JSValue>>>,
     pub cached_arguments: Option<usize>,
     pub with_env: Option<JSValue>,
@@ -147,6 +147,14 @@ enum ThrowDispatch {
     Uncaught(String),
 
     AsyncComplete(ExecutionOutcome),
+}
+
+enum CallerVarSet {
+    Stored,
+
+    Immutable,
+
+    NotFound,
 }
 
 pub fn start_async_call(
@@ -1166,7 +1174,7 @@ impl VM {
             let frame = &self.frames[fi];
             if !frame.var_name_map.is_null() {
                 let map = unsafe { &*frame.var_name_map };
-                for &(an, slot) in map.iter().rev() {
+                for &(an, slot, _) in map.iter().rev() {
                     if an == name_atom {
                         return Some((fi, slot));
                     }
@@ -1189,7 +1197,7 @@ impl VM {
                 }
                 if !frame.var_name_map.is_null() {
                     let map = unsafe { &*frame.var_name_map };
-                    for &(an, slot) in map.iter().rev() {
+                    for &(an, slot, _) in map.iter().rev() {
                         if an == name_atom {
                             let base = frame.registers_base;
                             let val = caller.registers[base + slot as usize];
@@ -1247,7 +1255,7 @@ impl VM {
                 }
                 if !frame.var_name_map.is_null() {
                     let map = unsafe { &*frame.var_name_map };
-                    for &(an, slot) in map.iter() {
+                    for &(an, slot, _) in map.iter() {
                         if an == name_atom {
                             let base = frame.registers_base;
                             let value = vm.registers[base + slot as usize];
@@ -1267,7 +1275,7 @@ impl VM {
         ctx: &mut JSContext,
         name_atom: u32,
         value: JSValue,
-    ) -> bool {
+    ) -> CallerVarSet {
         if let Some(ptr) = self.caller_vm {
             let caller = unsafe { &mut *(ptr as *mut VM) };
             for fi in (0..=caller.frame_index).rev() {
@@ -1292,12 +1300,15 @@ impl VM {
                             );
                         }
                     }
-                    return true;
+                    return CallerVarSet::Stored;
                 }
                 if !caller.frames[fi].var_name_map.is_null() {
                     let map = unsafe { &*caller.frames[fi].var_name_map };
-                    for &(an, slot) in map.iter().rev() {
+                    for &(an, slot, tag) in map.iter().rev() {
                         if an == name_atom {
+                            if tag == 1 {
+                                return CallerVarSet::Immutable;
+                            }
                             let base = caller.frames[fi].registers_base;
                             if fi == caller.frame_index {
                                 caller.registers[base + slot as usize] = value;
@@ -1320,7 +1331,7 @@ impl VM {
                                     );
                                 }
                             }
-                            return true;
+                            return CallerVarSet::Stored;
                         }
                     }
                 }
@@ -1349,11 +1360,11 @@ impl VM {
                             );
                         }
                     }
-                    return true;
+                    return CallerVarSet::Stored;
                 }
             }
         }
-        false
+        CallerVarSet::NotFound
     }
 
     pub fn init_var_in_caller_vm(
@@ -1372,7 +1383,7 @@ impl VM {
                 }
                 if !caller.frames[fi].var_name_map.is_null() {
                     let map = unsafe { &*caller.frames[fi].var_name_map };
-                    if map.iter().any(|&(an, _)| an == name_atom) {
+                    if map.iter().any(|&(an, _, tag)| an == name_atom && tag == 0) {
                         return true;
                     }
                 }
@@ -1412,7 +1423,7 @@ impl VM {
         for fi in (0..=self.frame_index).rev() {
             if !self.frames[fi].var_name_map.is_null() {
                 let map = unsafe { &*self.frames[fi].var_name_map };
-                for &(an, slot) in map.iter().rev() {
+                for &(an, slot, _) in map.iter().rev() {
                     if an == atom.0 {
                         let base = self.frames[fi].registers_base;
                         if fi == self.frame_index {
@@ -3740,7 +3751,7 @@ impl VM {
             }
             if !frame.var_name_map.is_null() {
                 let map = unsafe { &*frame.var_name_map };
-                for &(name_atom, _) in map.iter() {
+                for &(name_atom, _, _) in map.iter() {
                     let name = ctx
                         .get_atom_str(crate::runtime::atom::Atom(name_atom))
                         .to_string();
@@ -5676,14 +5687,6 @@ impl VM {
                                                 }
                                             }
                                         }
-                                    } else if let Some(func_ptr) =
-                                        self.frames[self.frame_index].function_ptr
-                                    {
-                                        let func_val = JSValue::new_function(func_ptr);
-                                        let js_func = func_val.as_function();
-                                        if js_func.name == atom {
-                                            result = JSValue::new_function(func_ptr);
-                                        }
                                     }
                                 }
                             }
@@ -5704,7 +5707,22 @@ impl VM {
                     let is_strict = self.frames[self.frame_index].is_strict_frame;
 
                     if self.caller_vm.is_some() {
-                        if !self.set_var_in_caller_vm(ctx, atom.0, val) {
+                        let caller_var_set = self.set_var_in_caller_vm(ctx, atom.0, val);
+                        if matches!(caller_var_set, CallerVarSet::Immutable) {
+                            if is_strict {
+                                self.set_pending_type_error(
+                                    ctx,
+                                    "Assignment to constant variable.",
+                                );
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                            }
+                        } else if matches!(caller_var_set, CallerVarSet::NotFound) {
                             if is_strict {
                                 let name_str = ctx.get_atom_str(atom).to_string();
                                 let err_msg = format!("{} is not defined", name_str);
@@ -5749,7 +5767,7 @@ impl VM {
 
                                 if !found && !self.frames[0].var_name_map.is_null() {
                                     let vnm = unsafe { &*self.frames[0].var_name_map };
-                                    found = vnm.iter().any(|&(an, _)| an == atom.0);
+                                    found = vnm.iter().any(|&(an, _, _)| an == atom.0);
                                 }
                             } else if self.eval_binding_frames > 0 {
                                 for fi in (0..=self.frame_index).rev() {
@@ -5761,7 +5779,7 @@ impl VM {
                                     }
                                     if !self.frames[fi].var_name_map.is_null() {
                                         let vnm = unsafe { &*self.frames[fi].var_name_map };
-                                        if vnm.iter().any(|&(an, _)| an == atom.0) {
+                                        if vnm.iter().any(|&(an, _, _)| an == atom.0) {
                                             found = true;
                                             break;
                                         }
@@ -5849,7 +5867,22 @@ impl VM {
                     let atom = name.get_atom();
                     let is_strict = self.frames[self.frame_index].is_strict_frame;
                     if self.caller_vm.is_some() {
-                        if !self.set_var_in_caller_vm(ctx, atom.0, val) {
+                        let caller_var_set = self.set_var_in_caller_vm(ctx, atom.0, val);
+                        if matches!(caller_var_set, CallerVarSet::Immutable) {
+                            if is_strict {
+                                self.set_pending_type_error(
+                                    ctx,
+                                    "Assignment to constant variable.",
+                                );
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                            }
+                        } else if matches!(caller_var_set, CallerVarSet::NotFound) {
                             if is_strict {
                                 let name_str = ctx.get_atom_str(atom).to_string();
                                 let err_msg = format!("{} is not defined", name_str);
@@ -5897,7 +5930,7 @@ impl VM {
                                 }
                                 if !found && !self.frames[0].var_name_map.is_null() {
                                     let vnm = unsafe { &*self.frames[0].var_name_map };
-                                    found = vnm.iter().any(|&(an, _)| an == atom.0);
+                                    found = vnm.iter().any(|&(an, _, _)| an == atom.0);
                                 }
                             } else if self.eval_binding_frames > 0 {
                                 for fi in (0..=self.frame_index).rev() {
@@ -5909,7 +5942,7 @@ impl VM {
                                     }
                                     if !self.frames[fi].var_name_map.is_null() {
                                         let vnm = unsafe { &*self.frames[fi].var_name_map };
-                                        if vnm.iter().any(|&(an, _)| an == atom.0) {
+                                        if vnm.iter().any(|&(an, _, _)| an == atom.0) {
                                             found = true;
                                             break;
                                         }
@@ -9926,7 +9959,8 @@ impl VM {
                             for _ in 0..var_count {
                                 let atom_id = self.read_u32();
                                 let slot = self.read_u16_pc();
-                                v.push((atom_id, slot));
+                                let tag = self.read_u8();
+                                v.push((atom_id, slot, tag));
                             }
                             v
                         });

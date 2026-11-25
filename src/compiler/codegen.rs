@@ -68,6 +68,7 @@ struct ParentVar {
     initialized: bool,
     is_inherited: bool,
     closed: bool,
+    is_function_name: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +207,7 @@ pub(crate) struct VarEntry {
     pub(crate) slot: u16,
     pub(crate) kind: VariableKind,
     pub(crate) initialized: bool,
+    pub(crate) is_function_name: bool,
 }
 
 pub struct CodeGenerator {
@@ -248,7 +250,7 @@ pub struct CodeGenerator {
     pending_field_init_range: Option<(usize, usize)>,
     field_init_name: Option<String>,
     pending_labels: Vec<String>,
-    all_var_names: Vec<(String, u16)>,
+    all_var_names: Vec<(String, u16, u8)>,
     with_scopes: Vec<WithScope>,
     function_id: u32,
 }
@@ -808,6 +810,15 @@ impl CodeGenerator {
             .map_or(false, |parent| parent.kind == VariableKind::Const)
     }
 
+    fn binding_is_function_name(&self, name: &str) -> bool {
+        if let Some(entry) = self.lookup_var(name) {
+            return entry.is_function_name;
+        }
+        self.parent_vars
+            .get(name)
+            .map_or(false, |parent| parent.is_function_name)
+    }
+
     fn binding_needs_tdz_check(&self, name: &str) -> bool {
         if let Some(entry) = self.lookup_var(name) {
             return entry.kind != VariableKind::Var && !entry.initialized;
@@ -886,9 +897,10 @@ impl CodeGenerator {
         }
         self.emit_u32(func_name_atom);
         self.emit_u32(bytecode.var_name_to_slot.len() as u32);
-        for &(atom_id, slot) in bytecode.var_name_to_slot.iter() {
+        for &(atom_id, slot, tag) in bytecode.var_name_to_slot.iter() {
             self.emit_u32(atom_id);
             self.emit_u16(slot);
+            self.emit_u8(tag);
         }
         self.emit_u16(dst);
     }
@@ -951,7 +963,9 @@ impl CodeGenerator {
     fn declare_var(&mut self, name: &str, kind: VariableKind) -> u16 {
         if kind == VariableKind::Var {
             if let Some(entry) = self.scope_stack[0].get(name) {
-                return entry.slot;
+                if !entry.is_function_name {
+                    return entry.slot;
+                }
             }
         }
         let slot = self.alloc_register();
@@ -959,9 +973,10 @@ impl CodeGenerator {
             slot,
             kind,
             initialized: kind == VariableKind::Var,
+            is_function_name: false,
         };
         self.reserved_slots.insert(slot);
-        self.all_var_names.push((name.to_string(), slot));
+        self.all_var_names.push((name.to_string(), slot, 0));
         if kind != VariableKind::Var {
             let depth = self.depth as usize;
             for scope in self.with_scopes.iter_mut().rev() {
@@ -987,11 +1002,26 @@ impl CodeGenerator {
                             initialized: false,
                             is_inherited: false,
                             closed: false,
+                            is_function_name: false,
                         },
                     );
                 }
             }
         }
+        slot
+    }
+
+    fn declare_function_name(&mut self, name: &str) -> u16 {
+        let slot = self.alloc_register();
+        let entry = VarEntry {
+            slot,
+            kind: VariableKind::Var,
+            initialized: true,
+            is_function_name: true,
+        };
+        self.reserved_slots.insert(slot);
+        self.all_var_names.push((name.to_string(), slot, 1));
+        self.scope_stack[0].insert(name.to_string(), entry);
         slot
     }
 
@@ -2093,6 +2123,7 @@ impl CodeGenerator {
             return_last_expr,
             false,
             false,
+            false,
         )
     }
 
@@ -2107,6 +2138,7 @@ impl CodeGenerator {
         return_last_expr: bool,
         is_generator: bool,
         is_async: bool,
+        is_named_expression: bool,
     ) -> Result<(Bytecode, Vec<(u32, u16)>), String> {
         self.in_async_generator = is_generator && is_async;
         let has_use_strict = Self::has_use_strict_directive(body);
@@ -2172,6 +2204,14 @@ impl CodeGenerator {
         let param_slot_start = value_reg_count + 1;
         if self.next_register < param_slot_start {
             self.next_register = param_slot_start;
+        }
+
+        if is_named_expression {
+            if let Some(name) = function_name {
+                let slot = self.declare_function_name(name);
+                self.emit(Opcode::GetCurrentFunction);
+                self.emit_u16(slot);
+            }
         }
 
         if !is_simple_params {
@@ -2383,7 +2423,10 @@ impl CodeGenerator {
         }
         let mut new_var_slots: Vec<u16> = Vec::new();
         for name in &hoisted_vars {
-            let already_declared = self.scope_stack[0].contains_key(name);
+            let already_declared = self
+                .scope_stack[0]
+                .get(name)
+                .map_or(false, |entry| !entry.is_function_name);
             let slot = self.declare_var(name, VariableKind::Var);
             if !already_declared {
                 new_var_slots.push(slot);
@@ -2411,6 +2454,7 @@ impl CodeGenerator {
                         ctx,
                         func.generator,
                         func.is_async,
+                        false,
                         false,
                         false,
                     )?;
@@ -2549,12 +2593,12 @@ impl CodeGenerator {
         }
         self.is_script_level = saved_is_script_level;
         self.scope_is_global = saved_scope_is_global;
-        let var_name_to_slot: std::rc::Rc<Vec<(u32, u16)>> = std::rc::Rc::new(
+        let var_name_to_slot: std::rc::Rc<Vec<(u32, u16, u8)>> = std::rc::Rc::new(
             self.all_var_names
                 .iter()
-                .map(|(name, slot)| {
+                .map(|(name, slot, tag)| {
                     let atom = ctx.intern(name);
-                    (atom.0, *slot)
+                    (atom.0, *slot, *tag)
                 })
                 .collect(),
         );
@@ -2952,6 +2996,7 @@ impl CodeGenerator {
                     ctx,
                     func.generator,
                     func.is_async,
+                    false,
                     false,
                     false,
                 )?;
@@ -5572,6 +5617,7 @@ impl CodeGenerator {
                 func.is_async,
                 false,
                 false,
+                false,
             ),
             Expression::ArrowFunction(arrow) => {
                 let body = match &arrow.body {
@@ -5591,6 +5637,7 @@ impl CodeGenerator {
                     false,
                     arrow.is_async,
                     true,
+                    false,
                     false,
                 )
             }
@@ -6416,6 +6463,7 @@ impl CodeGenerator {
                 func.is_async,
                 false,
                 false,
+                func.name.is_some(),
             ),
             Expression::ArrowFunction(arrow) => {
                 let body = match &arrow.body {
@@ -6435,6 +6483,7 @@ impl CodeGenerator {
                     false,
                     arrow.is_async,
                     true,
+                    false,
                     false,
                 )
             }
@@ -7148,6 +7197,9 @@ impl CodeGenerator {
                     self.emit_u16(dst);
                     return Ok(dst);
                 }
+                if self.binding_is_function_name(&id.name) {
+                    return self.gen_immutable_binding_update(update, &id.name, ctx);
+                }
                 let with_target = if bypass_with_target || self.with_scopes.is_empty() {
                     false
                 } else {
@@ -7528,6 +7580,174 @@ impl CodeGenerator {
         }
     }
 
+    fn read_binding_temp(&mut self, name: &str, ctx: &mut JSContext) -> u16 {
+        match self.resolve_var(name, ctx) {
+            Some(VarLocation::Local(slot)) => {
+                let tmp = self.alloc_register();
+                self.emit(Opcode::Move);
+                self.emit_u16(tmp);
+                self.emit_u16(slot);
+                tmp
+            }
+            Some(VarLocation::Upvalue(slot)) => {
+                let tmp = self.alloc_register();
+                self.emit(Opcode::GetUpvalue);
+                self.emit_u16(tmp);
+                self.emit_u16(slot);
+                tmp
+            }
+            None => {
+                let idx = self.add_constant(JSValue::new_string(ctx.intern(name)));
+                let tmp = self.alloc_register();
+                self.emit(Opcode::GetGlobal);
+                self.emit_u16(tmp);
+                self.emit_u32(idx);
+                if !self.suppress_ref_error {
+                    self.emit(Opcode::CheckRef);
+                    self.emit_u16(tmp);
+                    self.emit_u32(idx);
+                }
+                tmp
+            }
+        }
+    }
+
+    fn gen_immutable_binding_assignment(
+        &mut self,
+        assign: &AssignmentExpression,
+        name: &str,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        let current = self.read_binding_temp(name, ctx);
+        if matches!(
+            assign.op,
+            AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign
+        ) {
+            let jump_to_end = match assign.op {
+                AssignOp::LogicalAndAssign => {
+                    self.emit(Opcode::JumpIfNot);
+                    self.emit_u16(current);
+                    let patch = self.code.len();
+                    self.emit_i32(0);
+                    patch
+                }
+                AssignOp::LogicalOrAssign => {
+                    self.emit(Opcode::JumpIf);
+                    self.emit_u16(current);
+                    let patch = self.code.len();
+                    self.emit_i32(0);
+                    patch
+                }
+                AssignOp::NullishAssign => {
+                    let null_reg = self.alloc_register();
+                    self.emit(Opcode::LoadNull);
+                    self.emit_u16(null_reg);
+                    let cmp_reg = self.alloc_register();
+                    self.emit(Opcode::StrictEq);
+                    self.emit_u16(cmp_reg);
+                    self.emit_u16(current);
+                    self.emit_u16(null_reg);
+                    self.emit(Opcode::JumpIf);
+                    self.emit_u16(cmp_reg);
+                    let jump_to_assign = self.code.len();
+                    self.emit_i32(0);
+
+                    let undef_reg = self.alloc_register();
+                    self.emit(Opcode::LoadUndefined);
+                    self.emit_u16(undef_reg);
+                    self.emit(Opcode::StrictEq);
+                    self.emit_u16(cmp_reg);
+                    self.emit_u16(current);
+                    self.emit_u16(undef_reg);
+                    self.emit(Opcode::JumpIfNot);
+                    self.emit_u16(cmp_reg);
+                    let jump_to_end = self.code.len();
+                    self.emit_i32(0);
+
+                    let assign_pos = self.code.len();
+                    self.patch_jump(jump_to_assign, assign_pos);
+
+                    self.free_register(undef_reg);
+                    self.free_register(cmp_reg);
+                    self.free_register(null_reg);
+                    jump_to_end
+                }
+                _ => unreachable!(),
+            };
+            let rhs = if assign.lhs_parenthesized {
+                self.gen_expression(&assign.right, ctx)?
+            } else {
+                self.gen_expression_with_assign_name(&assign.right, name, ctx)?
+            };
+            if current != rhs {
+                self.emit(Opcode::Move);
+                self.emit_u16(current);
+                self.emit_u16(rhs);
+                self.free_register(rhs);
+            }
+            if self.is_strict {
+                self.emit_throw_const_assignment(name, ctx);
+            }
+            let end_pos = self.code.len();
+            self.patch_jump(jump_to_end, end_pos);
+            return Ok(current);
+        }
+
+        let val = if assign.lhs_parenthesized {
+            self.gen_expression(&assign.right, ctx)?
+        } else {
+            self.gen_expression_with_assign_name(&assign.right, name, ctx)?
+        };
+        if let Some(opcode) = Self::assign_op_to_reg_opcode(&assign.op) {
+            self.emit(opcode);
+            self.emit_u16(current);
+            self.emit_u16(current);
+            self.emit_u16(val);
+            self.free_register(val);
+        } else if current != val {
+            self.emit(Opcode::Move);
+            self.emit_u16(current);
+            self.emit_u16(val);
+        }
+        if self.is_strict {
+            self.emit_throw_const_assignment(name, ctx);
+        }
+        Ok(current)
+    }
+
+    fn gen_immutable_binding_update(
+        &mut self,
+        update: &UpdateExpression,
+        name: &str,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        let current = self.read_binding_temp(name, ctx);
+        if self.is_strict {
+            self.emit_throw_const_assignment(name, ctx);
+            return Ok(current);
+        }
+        let op = match update.op {
+            UpdateOp::Increment => Opcode::IncLocal,
+            UpdateOp::Decrement => Opcode::DecLocal,
+        };
+        if update.prefix {
+            self.emit(op);
+            self.emit_u16(current);
+            Ok(current)
+        } else {
+            let old_val = self.alloc_register();
+            self.emit(Opcode::Move);
+            self.emit_u16(old_val);
+            self.emit_u16(current);
+            self.emit(Opcode::Pos);
+            self.emit_u16(old_val);
+            self.emit_u16(old_val);
+            self.emit(op);
+            self.emit_u16(current);
+            Ok(old_val)
+        }
+    }
+
     fn gen_assignment_expression(
         &mut self,
         assign: &AssignmentExpression,
@@ -7556,6 +7776,9 @@ impl CodeGenerator {
                     let val = self.gen_expression_with_assign_name(&assign.right, name, ctx)?;
                     self.emit_throw_const_assignment(name, ctx);
                     return Ok(val);
+                }
+                if self.binding_is_function_name(name) {
+                    return self.gen_immutable_binding_assignment(assign, name, ctx);
                 }
 
                 let with_target = if bypass_with_target || self.with_scopes.is_empty() {
@@ -8404,6 +8627,12 @@ impl CodeGenerator {
                     self.emit_throw_const_assignment(&name, ctx);
                     return Ok(());
                 }
+                if self.binding_is_function_name(&name) {
+                    if self.is_strict {
+                        self.emit_throw_const_assignment(&name, ctx);
+                    }
+                    return Ok(());
+                }
                 match location {
                     Some(VarLocation::Local(slot)) => {
                         if self.binding_needs_tdz_check(&name) {
@@ -8495,6 +8724,12 @@ impl CodeGenerator {
             AssignmentTarget::Identifier(name) => {
                 if self.binding_is_const(name) {
                     self.emit_throw_const_assignment(name, ctx);
+                    return Ok(());
+                }
+                if self.binding_is_function_name(name) {
+                    if self.is_strict {
+                        self.emit_throw_const_assignment(name, ctx);
+                    }
                     return Ok(());
                 }
                 match self.resolve_var(name, ctx) {
@@ -10119,6 +10354,7 @@ impl CodeGenerator {
                     func.is_async,
                     false,
                     true,
+                    false,
                 );
             }
         }
@@ -10298,6 +10534,7 @@ impl CodeGenerator {
         is_async: bool,
         is_arrow: bool,
         is_method: bool,
+        is_named_expression: bool,
     ) -> Result<u16, String> {
         let mut nested_codegen = self.nested_codegen();
         nested_codegen.is_arrow = is_arrow;
@@ -10332,6 +10569,7 @@ impl CodeGenerator {
                         initialized: entry.initialized,
                         is_inherited: false,
                         closed: false,
+                        is_function_name: entry.is_function_name,
                     },
                 );
             }
@@ -10346,6 +10584,7 @@ impl CodeGenerator {
                         initialized: true,
                         is_inherited: true,
                         closed: false,
+                        is_function_name: false,
                     },
                 );
             }
@@ -10368,6 +10607,7 @@ impl CodeGenerator {
                 false,
                 is_generator,
                 is_async,
+                is_named_expression,
             )
             .map_err(|e| format!("nested function compile error: {}", e))?;
 
@@ -10436,6 +10676,7 @@ impl CodeGenerator {
                     slot: class_slot,
                     kind: VariableKind::Const,
                     initialized: false,
+                    is_function_name: false,
                 },
             );
             self.emit(Opcode::LoadTdz);
@@ -10500,6 +10741,7 @@ impl CodeGenerator {
                         slot: proto_reg,
                         kind: VariableKind::Let,
                         initialized: true,
+                        is_function_name: false,
                     },
                 );
             }
@@ -10510,6 +10752,7 @@ impl CodeGenerator {
                         slot: class_slot,
                         kind: VariableKind::Let,
                         initialized: true,
+                        is_function_name: false,
                     },
                 );
             }
@@ -10539,6 +10782,7 @@ impl CodeGenerator {
                         initialized: entry.initialized,
                         is_inherited: false,
                         closed: false,
+                        is_function_name: entry.is_function_name,
                     },
                 );
             }
@@ -10554,6 +10798,7 @@ impl CodeGenerator {
                         initialized: true,
                         is_inherited: true,
                         closed: false,
+                        is_function_name: false,
                     },
                 );
             }
@@ -10568,6 +10813,7 @@ impl CodeGenerator {
                     initialized: true,
                     is_inherited: false,
                     closed: false,
+                    is_function_name: false,
                 },
             );
         }
@@ -10679,6 +10925,7 @@ impl CodeGenerator {
                         false,
                         m.generator,
                         m.is_async,
+                        false,
                     )?;
                     plans.push(ElementPlan::Method {
                         key: m.name.clone(),

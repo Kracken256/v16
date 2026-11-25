@@ -608,7 +608,7 @@ pub struct Bytecode {
     pub shared_const_len: usize,
     pub uses_arguments: bool,
     pub is_strict: bool,
-    pub var_name_to_slot: std::rc::Rc<Vec<(u32, u16)>>,
+    pub var_name_to_slot: std::rc::Rc<Vec<(u32, u16, u8)>>,
     pub nested_bytecodes: Vec<(u32, std::sync::Arc<NestedBytecode>)>,
     pub is_simple_constructor: bool,
     pub simple_constructor_props: Vec<(crate::runtime::atom::Atom, u16, u16)>,
@@ -627,7 +627,7 @@ pub struct NestedBytecode {
     pub uses_arguments: bool,
     pub is_strict: bool,
     pub function_kind: u8,
-    pub var_name_to_slot: std::rc::Rc<Vec<(u32, u16)>>,
+    pub var_name_to_slot: std::rc::Rc<Vec<(u32, u16, u8)>>,
     pub line_number_table: Option<std::sync::Arc<crate::compiler::location::LineNumberTable>>,
 
     pub parent_bytecode_span: u32,
