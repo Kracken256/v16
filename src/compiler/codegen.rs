@@ -1288,6 +1288,111 @@ impl CodeGenerator {
         }
     }
 
+    fn push_hoisted_var_name(name: String, out: &mut Vec<String>) {
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+
+    fn collect_pattern_hoisted_var_names(pattern: &BindingPattern, out: &mut Vec<String>) {
+        let mut names = std::collections::HashSet::new();
+        Self::collect_binding_pattern_bindings(pattern, &mut names);
+        let mut sorted: Vec<String> = names.into_iter().collect();
+        sorted.sort();
+        for name in sorted {
+            Self::push_hoisted_var_name(name, out);
+        }
+    }
+
+    fn collect_hoisted_var_names(stmt: &ASTNode, out: &mut Vec<String>) {
+        match stmt {
+            ASTNode::VariableDeclaration(decl) => {
+                if decl.kind == VariableKind::Var {
+                    for d in &decl.declarations {
+                        Self::collect_pattern_hoisted_var_names(&d.id, out);
+                    }
+                }
+            }
+            ASTNode::BlockStatement(b) => {
+                for stmt in &b.body {
+                    Self::collect_hoisted_var_names(stmt, out);
+                }
+            }
+            ASTNode::IfStatement(i) => {
+                Self::collect_hoisted_var_names(&i.consequent, out);
+                if let Some(alt) = &i.alternate {
+                    Self::collect_hoisted_var_names(alt, out);
+                }
+            }
+            ASTNode::ForStatement(f) => {
+                if let Some(ForInit::VariableDeclaration(vd)) = &f.init {
+                    if vd.kind == VariableKind::Var {
+                        for d in &vd.declarations {
+                            Self::collect_pattern_hoisted_var_names(&d.id, out);
+                        }
+                    }
+                }
+                Self::collect_hoisted_var_names(&f.body, out);
+            }
+            ASTNode::ForInStatement(f) => {
+                if let ForInOfLeft::VariableDeclaration(vd) = &f.left {
+                    if vd.kind == VariableKind::Var {
+                        for d in &vd.declarations {
+                            Self::collect_pattern_hoisted_var_names(&d.id, out);
+                        }
+                    }
+                }
+                Self::collect_hoisted_var_names(&f.body, out);
+            }
+            ASTNode::ForOfStatement(f) => {
+                if let ForInOfLeft::VariableDeclaration(vd) = &f.left {
+                    if vd.kind == VariableKind::Var {
+                        for d in &vd.declarations {
+                            Self::collect_pattern_hoisted_var_names(&d.id, out);
+                        }
+                    }
+                }
+                Self::collect_hoisted_var_names(&f.body, out);
+            }
+            ASTNode::WhileStatement(w) => Self::collect_hoisted_var_names(&w.body, out),
+            ASTNode::DoWhileStatement(d) => Self::collect_hoisted_var_names(&d.body, out),
+            ASTNode::SwitchStatement(sw) => {
+                for case in &sw.cases {
+                    for stmt in &case.consequent {
+                        Self::collect_hoisted_var_names(stmt, out);
+                    }
+                }
+            }
+            ASTNode::TryStatement(t) => {
+                for stmt in &t.block.body {
+                    Self::collect_hoisted_var_names(stmt, out);
+                }
+                if let Some(h) = &t.handler {
+                    for stmt in &h.body.body {
+                        Self::collect_hoisted_var_names(stmt, out);
+                    }
+                }
+                if let Some(fin) = &t.finalizer {
+                    for stmt in &fin.body {
+                        Self::collect_hoisted_var_names(stmt, out);
+                    }
+                }
+            }
+            ASTNode::WithStatement(w) => Self::collect_hoisted_var_names(&w.body, out),
+            ASTNode::LabelledStatement(l) => Self::collect_hoisted_var_names(&l.body, out),
+            ASTNode::ExportNamedDeclaration(ed) => {
+                if let Some(ExportDeclaration::Variable(vd)) = &ed.declaration {
+                    if vd.kind == VariableKind::Var {
+                        for d in &vd.declarations {
+                            Self::collect_pattern_hoisted_var_names(&d.id, out);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn collect_assignment_target_bindings(
         target: &AssignmentTarget,
         out: &mut std::collections::HashSet<String>,
@@ -1807,14 +1912,12 @@ impl CodeGenerator {
             }
         }
 
+        let mut hoisted_vars: Vec<String> = Vec::new();
         for stmt in &body.body {
-            if let ASTNode::VariableDeclaration(decl) = stmt {
-                if decl.kind == VariableKind::Var {
-                    for d in &decl.declarations {
-                        self.predeclare_binding_pattern(&d.id, VariableKind::Var);
-                    }
-                }
-            }
+            Self::collect_hoisted_var_names(stmt, &mut hoisted_vars);
+        }
+        for name in &hoisted_vars {
+            let _ = self.declare_var(name, VariableKind::Var);
         }
 
         self.push_scope();
