@@ -2466,6 +2466,58 @@ impl VM {
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
 
+    fn set_function_display_name(
+        &mut self,
+        ctx: &mut JSContext,
+        func_val: JSValue,
+        key_val: JSValue,
+        prefix: Option<&str>,
+    ) {
+        if !func_val.is_function() {
+            return;
+        }
+        let base_atom = if key_val.is_symbol() {
+            let symbol_id = key_val.get_symbol_id();
+            let description = ctx
+                .runtime()
+                .symbol_description(symbol_id)
+                .unwrap_or(crate::builtins::symbol::NO_DESCRIPTION);
+            if description == crate::builtins::symbol::NO_DESCRIPTION {
+                ctx.intern("")
+            } else {
+                let text = format!("[{}]", ctx.get_atom_str(description));
+                ctx.intern(&text)
+            }
+        } else if key_val.is_string() {
+            key_val.get_atom()
+        } else if key_val.is_int() {
+            let text = key_val.get_int().to_string();
+            ctx.intern(&text)
+        } else if key_val.is_float() {
+            VM::js_to_string(&key_val, ctx).get_atom()
+        } else {
+            return;
+        };
+        let display_atom = match prefix {
+            Some(prefix_text) => {
+                let text = format!("{} {}", prefix_text, ctx.get_atom_str(base_atom));
+                ctx.intern(&text)
+            }
+            None => base_atom,
+        };
+        let func = func_val.as_function_mut();
+        func.name = display_atom;
+        let name_desc = crate::object::object::PropertyDescriptor {
+            value: Some(JSValue::new_string(display_atom)),
+            writable: false,
+            enumerable: false,
+            configurable: true,
+            get: None,
+            set: None,
+        };
+        func.base.define_property(ctx.common_atoms.name, name_desc);
+    }
+
     fn value_is_constructor(ctx: &JSContext, value: JSValue) -> bool {
         if value.is_function() {
             let f = value.as_function();
@@ -8431,11 +8483,13 @@ impl VM {
                                 if g.is_function() {
                                     g.as_function_mut().home_object = obj_val;
                                 }
+                                self.set_function_display_name(ctx, g, key_val, Some("get"));
                             }
                             if let Some(s) = setter {
                                 if s.is_function() {
                                     s.as_function_mut().home_object = obj_val;
                                 }
+                                self.set_function_display_name(ctx, s, key_val, Some("set"));
                             }
                             let obj = obj_val.as_object_mut();
                             if class_accessor
@@ -8611,6 +8665,7 @@ impl VM {
                         };
                         if value.is_function() {
                             value.as_function_mut().home_object = obj_val;
+                            self.set_function_display_name(ctx, value, key_val, None);
                         }
                         js_obj.define_property(atom, desc);
                     }
