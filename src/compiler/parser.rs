@@ -1196,8 +1196,13 @@ impl Parser {
         self.expect(")")?;
         self.expect("{")?;
         let mut cases = Vec::new();
+        let mut saw_default = false;
         while !self.at_punct("}") && !self.is_eof() {
             if self.at_keyword("default") {
+                if saw_default {
+                    return Err(self.error("More than one default clause in switch statement"));
+                }
+                saw_default = true;
                 self.advance();
                 self.expect(":")?;
                 let consequent = self.parse_statement_list_until_case()?;
@@ -2423,6 +2428,8 @@ impl Parser {
                 Expression::UpdateExpression(u) => u.parenthesized = true,
                 Expression::AwaitExpression(a) => a.parenthesized = true,
                 Expression::LogicalExpression(l) => l.parenthesized = true,
+                Expression::ArrayExpression(a) => a.parenthesized = true,
+                Expression::ObjectExpression(o) => o.parenthesized = true,
                 _ => {}
             }
             return Ok(expr);
@@ -2787,6 +2794,7 @@ impl Parser {
         Ok(Expression::ArrayExpression(ArrayExpression {
             elements,
             trailing_comma_after_spread,
+            parenthesized: false,
         }))
     }
 
@@ -2816,6 +2824,7 @@ impl Parser {
             if self.at_keyword("async")
                 && !self.peek_at(";")
                 && !self.peek_at(":")
+                && !self.peek_at("(")
                 && !self.peek_at(",")
                 && !self.peek_at("}")
                 && !self.peek_at("=")
@@ -2835,6 +2844,12 @@ impl Parser {
 
             let key_escaped = self.current.as_ref().map_or(false, |t| t.had_escape);
             let (key, computed, shorthand) = self.parse_property_key()?;
+            if matches!(key, PropertyKey::PrivateIdentifier(_)) {
+                return Err(self.error("Private names are not allowed in object literals"));
+            }
+            if is_async && !self.at_punct("(") {
+                return Err(self.error("Async method must have a parameter list"));
+            }
 
             if is_generator && !self.at_punct("(") {
                 return Err(self.error("Generator method must have a parameter list"));
@@ -2878,6 +2893,9 @@ impl Parser {
                     if self.at_punct(":") {
                     } else {
                         let (acc_key, _acc_computed, _acc_shorthand) = self.parse_property_key()?;
+                        if matches!(acc_key, PropertyKey::PrivateIdentifier(_)) {
+                            return Err(self.error("Private names are not allowed in object literals"));
+                        }
                         if self.at_punct("(") {
                             self.expect("(")?;
                             let params = self.parse_parameter_list()?;
@@ -2992,6 +3010,7 @@ impl Parser {
         Ok(Expression::ObjectExpression(ObjectExpression {
             properties,
             trailing_comma_after_spread,
+            parenthesized: false,
         }))
     }
 
@@ -3212,6 +3231,9 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
         Expression::ArrayPattern(p) => Ok(AssignmentTarget::ArrayPattern(p)),
         Expression::ObjectPattern(p) => Ok(AssignmentTarget::ObjectPattern(p)),
         Expression::ArrayExpression(arr) => {
+            if arr.parenthesized {
+                return Err("SyntaxError: invalid assignment target".to_string());
+            }
             let mut elements = Vec::new();
             let len = arr.elements.len();
             let mut last_is_spread = false;
@@ -3250,6 +3272,9 @@ fn expr_to_target(expr: Expression) -> Result<AssignmentTarget, String> {
             Ok(AssignmentTarget::ArrayPattern(ArrayPattern { elements }))
         }
         Expression::ObjectExpression(obj) => {
+            if obj.parenthesized {
+                return Err("SyntaxError: invalid assignment target".to_string());
+            }
             let mut properties = Vec::new();
             let len = obj.properties.len();
             let mut last_is_spread = false;

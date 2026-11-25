@@ -111,6 +111,7 @@ pub enum Literal {
 pub struct ArrayExpression {
     pub elements: Vec<Option<ArrayElement>>,
     pub trailing_comma_after_spread: bool,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +124,7 @@ pub enum ArrayElement {
 pub struct ObjectExpression {
     pub properties: Vec<Property>,
     pub trailing_comma_after_spread: bool,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]
