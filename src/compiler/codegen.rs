@@ -4007,7 +4007,7 @@ impl CodeGenerator {
         };
 
         self.breakable_frames.push(BreakableFrame {
-            label: None,
+            label: self.pending_label.take(),
             handler_depth: self.handler_depth,
             break_patches: vec![break_jump],
             continue_patches: Vec::new(),
