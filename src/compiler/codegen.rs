@@ -4263,7 +4263,13 @@ impl CodeGenerator {
                 Ok(Some(self.gen_if_statement_as_expression(if_stmt, ctx)?))
             }
             ASTNode::BlockStatement(block) => {
-                Ok(Some(self.gen_block_statement_as_expression(block, ctx)?))
+                let reg = self.gen_block_statement_as_expression(block, ctx)?;
+                if Self::statement_list_produces_value(&block.body) {
+                    Ok(Some(reg))
+                } else {
+                    self.free_register(reg);
+                    Ok(None)
+                }
             }
             ASTNode::TryStatement(try_stmt) => {
                 Ok(Some(self.gen_try_statement_as_expression(try_stmt, ctx)?))
@@ -4361,6 +4367,23 @@ impl CodeGenerator {
             }
             ASTNode::EmptyStatement | ASTNode::DebuggerStatement => Ok(None),
             _ => Ok(None),
+        }
+    }
+
+    fn statement_list_produces_value(body: &[ASTNode]) -> bool {
+        body.iter().any(|s| !Self::statement_is_statically_empty(s))
+    }
+
+    fn statement_is_statically_empty(stmt: &ASTNode) -> bool {
+        match stmt {
+            ASTNode::EmptyStatement
+            | ASTNode::VariableDeclaration(_)
+            | ASTNode::FunctionDeclaration(_)
+            | ASTNode::ClassDeclaration(_)
+            | ASTNode::DebuggerStatement => true,
+            ASTNode::BlockStatement(block) => !Self::statement_list_produces_value(&block.body),
+            ASTNode::LabelledStatement(labelled) => Self::statement_is_statically_empty(&labelled.body),
+            _ => false,
         }
     }
 
