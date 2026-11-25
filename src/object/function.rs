@@ -58,16 +58,20 @@ pub struct JSFunction {
     pub source_text: Option<String>,
     pub with_env: Option<JSValue>,
     pub arrow_this: JSValue,
+    pub arrow_this_initialized: bool,
     pub arrow_super: JSValue,
     pub arrow_new_target: JSValue,
     pub home_object: JSValue,
     pub arrow_super_base: JSValue,
+    pub is_derived_constructor: bool,
 }
 
 impl JSFunction {
     pub fn new() -> Self {
+        let mut base = JSObject::new_function();
+        base.is_function_object = true;
         JSFunction {
-            base: JSObject::new_function(),
+            base,
             name: Atom(0),
             param_count: 0,
             locals_count: 256,
@@ -84,10 +88,12 @@ impl JSFunction {
             source_text: None,
             with_env: None,
             arrow_this: JSValue::undefined(),
+            arrow_this_initialized: true,
             arrow_super: JSValue::undefined(),
             arrow_new_target: JSValue::undefined(),
             home_object: JSValue::undefined(),
             arrow_super_base: JSValue::undefined(),
+            is_derived_constructor: false,
         }
     }
 

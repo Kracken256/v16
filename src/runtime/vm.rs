@@ -7164,9 +7164,9 @@ impl VM {
                     let proto_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
                     let proto_val = self.get_reg(proto_reg);
-                    if obj_val.is_object() {
+                    if obj_val.is_object_like() {
                         let obj_ref = obj_val.as_object_mut();
-                        if proto_val.is_object() {
+                        if proto_val.is_object_like() {
                             obj_ref.prototype =
                                 Some(proto_val.get_ptr() as *mut crate::object::object::JSObject);
                         } else if proto_val.is_null() {
@@ -7176,9 +7176,36 @@ impl VM {
                 }
                 Opcode::GetSuper => {
                     let dst = self.read_u16_pc();
-                    self.set_reg(dst, self.frames[self.frame_index].super_ctor);
+                    let value = self.current_super_constructor();
+                    self.set_reg(dst, value);
+                }
+                Opcode::GetNewTarget => {
+                    let dst = self.read_u16_pc();
+                    self.set_reg(dst, self.frames[self.frame_index].new_target);
+                }
+                Opcode::CheckThisInitialized => {
+                    if !self.frames[self.frame_index].this_initialized {
+                        self.set_pending_reference_error(ctx, "this is not initialized");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
                 }
                 Opcode::GetSuperBase => {
+                    if !self.frames[self.frame_index].this_initialized {
+                        self.set_pending_reference_error(ctx, "this is not initialized");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
                     let dst = self.read_u16_pc();
                     self.set_reg(dst, self.frames[self.frame_index].super_base);
                 }
@@ -7192,6 +7219,16 @@ impl VM {
                     }
                 }
                 Opcode::GetSuperProp => {
+                    if !self.frames[self.frame_index].this_initialized {
+                        self.set_pending_reference_error(ctx, "this is not initialized");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
                     let dst = self.read_u16_pc();
                     let base_reg = self.read_u16_pc();
                     let this_reg = self.read_u16_pc();
@@ -7225,6 +7262,16 @@ impl VM {
                     }
                 }
                 Opcode::SetSuperProp => {
+                    if !self.frames[self.frame_index].this_initialized {
+                        self.set_pending_reference_error(ctx, "this is not initialized");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
                     let base_reg = self.read_u16_pc();
                     let this_reg = self.read_u16_pc();
                     let key_reg = self.read_u16_pc();
@@ -7850,6 +7897,44 @@ impl VM {
                     }
 
                     let func_val = self.get_reg(func_reg);
+                    let is_super_call = !is_call_method
+                        && !is_call_new
+                        && {
+                            let s = self.current_super_constructor();
+                            (s.is_function() || s.is_object_like())
+                                && s.raw_bits() == func_val.raw_bits()
+                        };
+                    let caller_new_target = self.frames[self.frame_index].new_target;
+                    if is_super_call {
+                        let is_constructor = if func_val.is_function() {
+                            let f = func_val.as_function();
+                            if f.is_builtin() {
+                                let name = f
+                                    .builtin_atom
+                                    .map(|ba| ctx.get_atom_str(ba).to_string())
+                                    .unwrap_or_default();
+                                ctx.builtin_is_constructor(&name)
+                            } else {
+                                !f.is_arrow()
+                            }
+                        } else {
+                            false
+                        };
+                        if !is_constructor {
+                            self.set_pending_type_error(
+                                ctx,
+                                "Super constructor is not a constructor",
+                            );
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     let this_val = if is_call_method {
                         self.get_reg(obj_reg)
                     } else if is_call_new {
@@ -7921,25 +8006,28 @@ impl VM {
                         self.allocation_count += 1;
                         JSValue::new_object(ptr)
                     } else {
-                        let frame = &self.frames[self.frame_index];
-                        if frame.is_constructor
-                            && !frame.super_ctor.is_undefined()
-                            && func_val.is_function()
-                            && frame.super_ctor.is_function()
-                        {
-                            let sctor_ptr = frame.super_ctor.get_ptr();
-                            let fptr = func_val.get_ptr();
-                            if fptr == sctor_ptr {
-                                frame.this_value
-                            } else {
-                                JSValue::undefined()
+                        if is_super_call {
+                            if self.frames[self.frame_index].this_initialized {
+                                self.set_pending_reference_error(
+                                    ctx,
+                                    "Super constructor already called",
+                                );
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                                continue;
                             }
+                            self.frames[self.frame_index].this_value
                         } else {
                             JSValue::undefined()
                         }
                     };
 
-                    if self.execute_call(
+                    let pushed = self.execute_call(
                         ctx,
                         func_val,
                         this_val,
@@ -7949,7 +8037,23 @@ impl VM {
                         obj_reg,
                         is_call_new,
                         is_call_method,
-                    )? {
+                    )?;
+                    if is_super_call {
+                        if pushed {
+                            let frame = &mut self.frames[self.frame_index];
+                            frame.is_super_call = true;
+                            frame.is_constructor = true;
+                            frame.new_target = caller_new_target;
+                        } else {
+                            let is_builtin = func_val.is_function() && func_val.as_function().is_builtin();
+                            if is_builtin {
+                                self.bind_super_call_builtin_result(dst);
+                            } else {
+                                self.bind_super_call_result(dst);
+                            }
+                        }
+                    }
+                    if pushed {
                         continue;
                     }
                     if let Some(exc) = self.pending_throw.take() {
@@ -8051,6 +8155,44 @@ impl VM {
                         }
                     }
                     let argc = args.len() as u16;
+                    let is_super_call = !is_call_method
+                        && !is_call_new
+                        && {
+                            let s = self.current_super_constructor();
+                            (s.is_function() || s.is_object_like())
+                                && s.raw_bits() == func_val.raw_bits()
+                        };
+                    let caller_new_target = self.frames[self.frame_index].new_target;
+                    if is_super_call {
+                        let is_constructor = if func_val.is_function() {
+                            let f = func_val.as_function();
+                            if f.is_builtin() {
+                                let name = f
+                                    .builtin_atom
+                                    .map(|ba| ctx.get_atom_str(ba).to_string())
+                                    .unwrap_or_default();
+                                ctx.builtin_is_constructor(&name)
+                            } else {
+                                !f.is_arrow()
+                            }
+                        } else {
+                            false
+                        };
+                        if !is_constructor {
+                            self.set_pending_type_error(
+                                ctx,
+                                "Super constructor is not a constructor",
+                            );
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    }
 
                     let this_val = if is_call_method {
                         self.get_reg(obj_reg)
@@ -8114,19 +8256,22 @@ impl VM {
                         self.allocation_count += 1;
                         JSValue::new_object(ptr)
                     } else {
-                        let frame = &self.frames[self.frame_index];
-                        if frame.is_constructor
-                            && !frame.super_ctor.is_undefined()
-                            && func_val.is_function()
-                            && frame.super_ctor.is_function()
-                        {
-                            let sctor_ptr = frame.super_ctor.get_ptr();
-                            let fptr = func_val.get_ptr();
-                            if fptr == sctor_ptr {
-                                frame.this_value
-                            } else {
-                                JSValue::undefined()
+                        if is_super_call {
+                            if self.frames[self.frame_index].this_initialized {
+                                self.set_pending_reference_error(
+                                    ctx,
+                                    "Super constructor already called",
+                                );
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                                continue;
                             }
+                            self.frames[self.frame_index].this_value
                         } else {
                             JSValue::undefined()
                         }
@@ -8166,11 +8311,28 @@ impl VM {
                                 &args,
                                 js_func.uses_arguments(),
                             );
-                            if is_call_new {
+                            if js_func.is_arrow() {
+                                self.frames[self.frame_index].super_ctor = js_func.arrow_super;
+                                self.frames[self.frame_index].super_base = js_func.arrow_super_base;
+                                self.frames[self.frame_index].this_initialized =
+                                    js_func.arrow_this_initialized;
+                            } else {
                                 let super_key = ctx.common_atoms.__super__;
                                 if let Some(super_val) = js_func.base.get(super_key) {
                                     self.frames[self.frame_index].super_ctor = super_val;
                                 }
+                                if js_func.is_derived_constructor {
+                                    self.frames[self.frame_index].this_initialized = false;
+                                }
+                            }
+                            if is_call_new {
+                                self.frames[self.frame_index].new_target = func_val;
+                            }
+                            if is_super_call {
+                                let frame = &mut self.frames[self.frame_index];
+                                frame.is_super_call = true;
+                                frame.is_constructor = true;
+                                frame.new_target = caller_new_target;
                             }
                             continue;
                         } else if js_func.is_builtin() {
@@ -8188,11 +8350,17 @@ impl VM {
                                 JSValue::undefined()
                             };
                             self.set_reg(dst, result);
+                            if is_super_call {
+                                self.bind_super_call_builtin_result(dst);
+                            }
             }
         } else if func_val.is_object() && !is_call_new {
                         let result =
                             self.call_function_with_this(ctx, func_val, this_val, &args)?;
                         self.set_reg(dst, result);
+                        if is_super_call {
+                            self.bind_super_call_result(dst);
+                        }
                     } else {
                         let msg = format!(
                             "{} is not a function",
@@ -8466,9 +8634,11 @@ impl VM {
                     func.set_uses_arguments(uses_arguments);
                     func.set_is_strict(is_strict);
                     func.set_is_arrow(function_kind & 4 != 0);
+                    func.is_derived_constructor = function_kind & 8 != 0;
                     if function_kind & 4 != 0 {
                         let parent = &self.frames[self.frame_index];
                         func.arrow_this = parent.this_value;
+                        func.arrow_this_initialized = parent.this_initialized;
                         func.arrow_super = parent.super_ctor;
                         func.arrow_super_base = parent.super_base;
                     }

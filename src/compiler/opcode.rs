@@ -191,6 +191,8 @@ pub enum Opcode {
     SetHomeObject = 227,
     GetSuperProp = 228,
     SetSuperProp = 229,
+    CheckThisInitialized = 230,
+    GetNewTarget = 231,
 }
 
 impl Opcode {
@@ -373,6 +375,8 @@ impl Opcode {
             227 => Some(Opcode::SetHomeObject),
             228 => Some(Opcode::GetSuperProp),
             229 => Some(Opcode::SetSuperProp),
+            230 => Some(Opcode::CheckThisInitialized),
+            231 => Some(Opcode::GetNewTarget),
             _ => None,
         }
     }
@@ -400,11 +404,13 @@ impl Opcode {
             | Opcode::GatherRest
             | Opcode::GetSuper
             | Opcode::GetSuperBase
+            | Opcode::GetNewTarget
             | Opcode::Yield
             | Opcode::NewObject
             | Opcode::GetArguments
             | Opcode::GetCurrentFunction
             | Opcode::CheckObjectCoercible => 3,
+            Opcode::CheckThisInitialized => 1,
             Opcode::Neg | Opcode::BitNot | Opcode::Not | Opcode::TypeOf | Opcode::Move => 5,
             Opcode::SetHomeObject => 5,
             Opcode::GetSuperProp => 9,
@@ -726,6 +732,7 @@ impl Bytecode {
                 Opcode::Nop
                 | Opcode::End
                 | Opcode::Catch
+                | Opcode::CheckThisInitialized
                 | Opcode::Finally
                 | Opcode::EndFinally => {}
                 Opcode::ParamInitMark => {
@@ -769,6 +776,7 @@ impl Bytecode {
                 | Opcode::GatherRest
                 | Opcode::GetSuper
                 | Opcode::GetSuperBase
+                | Opcode::GetNewTarget
                 | Opcode::Yield
                 | Opcode::NewObject
                 | Opcode::GetArguments

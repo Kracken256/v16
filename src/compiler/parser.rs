@@ -2577,6 +2577,18 @@ impl Parser {
     fn parse_new_expression(&mut self) -> Result<Expression, String> {
         self.expect("new")?;
 
+        if self.at_punct(".") {
+            self.advance();
+            if self.cur_type() == Some(TokenType::Identifier) && self.cur_value() == "target" {
+                self.advance();
+                return Ok(Expression::MetaProperty(MetaProperty {
+                    meta: "new".to_string(),
+                    property: "target".to_string(),
+                }));
+            }
+            return Err(self.error("Unexpected token after 'new.'"));
+        }
+
         // `new import(...)` is not allowed: an ImportCall is a CallExpression,
         // not a MemberExpression, so it cannot be the callee of `new`.
         // A parenthesized form such as `new (import(...))` is valid, and is

@@ -1538,12 +1538,36 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         None
     };
     let mut obj = JSObject::new();
+    let mut proto_set = false;
     if let Some(pv) = proto_val {
-        if pv.is_object() {
+        if pv.is_object_like() {
             obj.prototype = Some(pv.get_ptr() as *mut JSObject);
+            proto_set = true;
         }
-    } else if let Some(op) = ctx.get_object_prototype() {
-        obj.prototype = Some(op);
+    }
+    if !proto_set {
+        let mut cur = new_target;
+        let mut found = false;
+        for _ in 0..2 {
+            if !cur.is_object_like() {
+                break;
+            }
+            match cur.as_object().prototype {
+                Some(p) => {
+                    cur = JSValue::new_object(p as usize);
+                    found = true;
+                }
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if found && cur.is_object_like() {
+            obj.prototype = Some(cur.get_ptr() as *mut JSObject);
+        } else if let Some(op) = ctx.get_object_prototype() {
+            obj.prototype = Some(op);
+        }
     }
     let obj_ptr = Box::into_raw(Box::new(obj)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(obj_ptr);
@@ -1551,6 +1575,7 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
         let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+        vm.pending_new_target = Some(new_target);
         match vm.call_function_with_this(ctx, target, new_obj, &call_args) {
             Ok(result) => {
                 if result.is_object_like() {

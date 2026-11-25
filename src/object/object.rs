@@ -478,6 +478,7 @@ pub struct JSObject {
 
     pub gc_slot: u32,
     flags: u8,
+    pub is_function_object: bool,
     shape: Option<NonNull<Shape>>,
 
     pub shape_id_cache: usize,
@@ -531,6 +532,7 @@ impl JSObject {
             prototype: None,
             gc_slot: u32::MAX,
             flags: FLAG_EXTENSIBLE,
+            is_function_object: false,
             shape: None,
             shape_id_cache: usize::MAX,
             props: SmallPropVec::new(),
@@ -546,6 +548,7 @@ impl JSObject {
             prototype: None,
             gc_slot: u32::MAX,
             flags: FLAG_EXTENSIBLE,
+            is_function_object: false,
             shape: None,
             shape_id_cache: usize::MAX,
             props,

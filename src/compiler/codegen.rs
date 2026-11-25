@@ -227,6 +227,7 @@ pub struct CodeGenerator {
     pub(crate) is_strict: bool,
     pub(crate) is_eval: bool,
     is_arrow: bool,
+    in_derived_constructor: bool,
     in_static_method: bool,
     in_async_generator: bool,
     pending_labels: Vec<String>,
@@ -294,6 +295,7 @@ impl CodeGenerator {
             is_strict: false,
             is_eval: false,
             is_arrow: false,
+            in_derived_constructor: false,
             in_static_method: false,
             in_async_generator: false,
             pending_labels: Vec::new(),
@@ -349,6 +351,7 @@ impl CodeGenerator {
         nested.tiny_inline_functions = self.tiny_inline_functions.clone();
         nested.is_strict = self.is_strict;
         nested.is_eval = self.is_eval;
+        nested.in_derived_constructor = self.in_derived_constructor;
         nested.in_static_method = self.in_static_method;
         nested.with_scopes = self.with_scopes.clone();
         nested.function_id = self.function_id + 1;
@@ -5918,7 +5921,12 @@ impl CodeGenerator {
                     false,
                 )
             }
-            Expression::This => Ok(0),
+            Expression::This => {
+                if self.in_derived_constructor {
+                    self.emit(Opcode::CheckThisInitialized);
+                }
+                Ok(0)
+            }
             Expression::Super => {
                 let r = self.alloc_register();
                 self.emit(Opcode::GetSuper);
@@ -5995,7 +6003,13 @@ impl CodeGenerator {
                 self.gen_class_body(class_slot, class_name, &ce.super_class, &ce.body, ctx)?;
                 Ok(class_slot)
             }
-            Expression::MetaProperty(_) => {
+            Expression::MetaProperty(meta) => {
+                if meta.meta == "new" && meta.property == "target" {
+                    let r = self.alloc_register();
+                    self.emit(Opcode::GetNewTarget);
+                    self.emit_u16(r);
+                    return Ok(r);
+                }
                 let call = Expression::CallExpression(CallExpression {
                     callee: Box::new(Expression::Identifier(Identifier {
                         name: "__v16_import_meta__".to_string(),
@@ -9310,6 +9324,7 @@ impl CodeGenerator {
     ) -> Result<u16, String> {
         let mut nested_codegen = self.nested_codegen();
         nested_codegen.is_arrow = is_arrow;
+        nested_codegen.in_derived_constructor = is_arrow && self.in_derived_constructor;
         let has_prototype = is_generator || (!is_arrow && !is_method && !is_async);
         let function_kind = (if has_prototype { 1 } else { 0 }) | if is_arrow { 4 } else { 0 };
         let mut parent_vars: FxHashMap<String, ParentVar> = FxHashMap::default();
@@ -9550,6 +9565,7 @@ impl CodeGenerator {
             }
             let mut nested = self.nested_codegen();
             nested.is_strict = true;
+            nested.in_derived_constructor = has_super;
             nested.compile_function_with_parent(
                 &m.params,
                 &body,
@@ -9578,6 +9594,7 @@ impl CodeGenerator {
             default_lines.extend(vec![0; instance_fields.len()]);
             let mut nested = self.nested_codegen();
             nested.is_strict = true;
+            nested.in_derived_constructor = has_super;
             nested.compile_function_with_parent(
                 &[],
                 &BlockStatement {
@@ -9720,7 +9737,7 @@ impl CodeGenerator {
             ctor_reg,
             false,
             false,
-            3,
+            3 | if has_super { 8 } else { 0 },
         );
 
         if let Some(super_expr) = super_class {
@@ -9734,6 +9751,11 @@ impl CodeGenerator {
             self.emit_u16(ctor_reg);
             self.emit_u16(super_key);
             self.emit_u16(super_val);
+            if !matches!(**super_expr, Expression::Literal(Literal::Null)) {
+                self.emit(Opcode::SetProto);
+                self.emit_u16(ctor_reg);
+                self.emit_u16(super_val);
+            }
             self.free_register(super_key);
             self.free_register(super_val);
         }
