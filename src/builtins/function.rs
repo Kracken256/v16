@@ -305,50 +305,20 @@ fn throw_type_error_caller_args(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
 const SYMBOL_HAS_INSTANCE_DISPLAY: &str = "[Symbol.hasInstance]";
 
 fn function_has_instance(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if args.len() < 2 {
-        return JSValue::bool(false);
-    }
-    let f = &args[0];
-    let v = &args[1];
-    if !f.is_function() && !f.is_object() {
-        return JSValue::bool(false);
-    }
-    if !v.is_object() && !v.is_function() {
-        return JSValue::bool(false);
-    }
-    let proto_atom = ctx.common_atoms.prototype;
-    let proto_ptr = if f.is_function() {
-        let js_func = f.as_function();
-        if !js_func.cached_prototype_ptr.is_null() {
-            js_func.cached_prototype_ptr as *const crate::object::object::JSObject
-        } else {
-            let pv = js_func.base.get(proto_atom).unwrap_or(JSValue::undefined());
-            if pv.is_object() {
-                pv.get_ptr() as *const crate::object::object::JSObject
-            } else {
-                return JSValue::bool(false);
+    let f = args.first().copied().unwrap_or_else(JSValue::undefined);
+    let v = args.get(1).copied().unwrap_or_else(JSValue::undefined);
+    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
+        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+        match vm.ordinary_has_instance(ctx, f, v) {
+            Some(result) => return JSValue::bool(result),
+            None => {
+                if let Some(exc) = vm.take_pending_exception(ctx) {
+                    ctx.pending_exception = Some(exc);
+                }
             }
         }
-    } else {
-        let pv = f
-            .as_object()
-            .get(proto_atom)
-            .unwrap_or(JSValue::undefined());
-        if pv.is_object() {
-            pv.get_ptr() as *const crate::object::object::JSObject
-        } else {
-            return JSValue::bool(false);
-        }
-    };
-    let obj_ptr = v.get_ptr() as *const crate::object::object::JSObject;
-    let mut current = unsafe { (*obj_ptr).prototype };
-    while let Some(p) = current {
-        if std::ptr::eq(p, proto_ptr) {
-            return JSValue::bool(true);
-        }
-        current = unsafe { (*p).prototype };
     }
-    JSValue::bool(false)
+    JSValue::undefined()
 }
 
 fn function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {

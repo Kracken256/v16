@@ -389,6 +389,7 @@ pub struct VM {
 
     instanceof_cache_ctor: usize,
     instanceof_cache_proto: usize,
+    instanceof_cache_ctor_proto: usize,
     instanceof_cache_result: bool,
 
     regex_lit_cache: std::collections::HashMap<usize, crate::regexp::Regex>,
@@ -467,6 +468,7 @@ impl VM {
             cached_has_instance_atom: crate::runtime::atom::Atom(0),
             instanceof_cache_ctor: 0,
             instanceof_cache_proto: 0,
+            instanceof_cache_ctor_proto: 0,
             instanceof_cache_result: false,
             regex_lit_cache: std::collections::HashMap::new(),
             last_yield_src: None,
@@ -2286,6 +2288,172 @@ impl VM {
         }
     }
 
+    fn is_bound_function_value(&self, ctx: &JSContext, value: JSValue) -> bool {
+        value.is_object() && value.as_object().get_own(ctx.common_atoms.__boundFn).is_some()
+    }
+
+    fn is_callable_value(&self, ctx: &JSContext, value: JSValue) -> bool {
+        if value.is_function() || self.is_bound_function_value(ctx, value) {
+            return true;
+        }
+        if value.is_object() {
+            if let Some(function_prototype) = ctx.get_function_prototype() {
+                return value.get_ptr() as *mut crate::object::object::JSObject
+                    == function_prototype;
+            }
+        }
+        false
+    }
+
+    fn has_instance_atom(&mut self, ctx: &mut JSContext) -> crate::runtime::atom::Atom {
+        if self.cached_has_instance_atom.0 != 0 {
+            return self.cached_has_instance_atom;
+        }
+        let sym = crate::builtins::symbol::get_symbol_has_instance(ctx);
+        let atom = if sym.is_symbol() {
+            crate::runtime::atom::Atom(0x40000000 | sym.get_symbol_id())
+        } else {
+            crate::runtime::atom::Atom(0)
+        };
+        self.cached_has_instance_atom = atom;
+        atom
+    }
+
+    fn get_property_value_full(
+        &mut self,
+        ctx: &mut JSContext,
+        obj_val: JSValue,
+        atom: crate::runtime::atom::Atom,
+    ) -> Option<JSValue> {
+        if !obj_val.is_object() && !obj_val.is_function() {
+            return None;
+        }
+        let base_ptr = if obj_val.is_function() {
+            std::ptr::addr_of!(obj_val.as_function().base)
+        } else {
+            obj_val.get_ptr() as *const crate::object::object::JSObject
+        };
+        let mut current = Some(base_ptr as *mut crate::object::object::JSObject);
+        let mut depth = 0u32;
+        while let Some(ptr) = current {
+            if ptr.is_null() || depth > 1000 {
+                break;
+            }
+            depth += 1;
+            let pobj = unsafe { &*ptr };
+            if let Some(getter) = pobj.get_own_accessor_value(atom) {
+                if getter.is_function() {
+                    match self.call_function_with_this(ctx, getter, obj_val, &[]) {
+                        Ok(value) => return Some(value),
+                        Err(_) => {
+                            self.rethrow_last_caught(ctx);
+                            return None;
+                        }
+                    }
+                }
+                return Some(JSValue::undefined());
+            }
+            if let Some(value) = pobj.get_own(atom) {
+                return Some(value);
+            }
+            current = pobj.prototype;
+        }
+        None
+    }
+
+    pub fn ordinary_has_instance(
+        &mut self,
+        ctx: &mut JSContext,
+        ctor_val: JSValue,
+        obj_val: JSValue,
+    ) -> Option<bool> {
+        if !self.is_callable_value(ctx, ctor_val) {
+            return Some(false);
+        }
+        if self.is_bound_function_value(ctx, ctor_val) {
+            let bound_fn = ctor_val
+                .as_object()
+                .get_own(ctx.common_atoms.__boundFn)
+                .unwrap_or_else(JSValue::undefined);
+            return self.instanceof_operator(ctx, bound_fn, obj_val);
+        }
+        if !obj_val.is_object() && !obj_val.is_function() {
+            return Some(false);
+        }
+        let proto_atom = ctx.common_atoms.prototype;
+        let proto_val = match self.get_property_value_full(ctx, ctor_val, proto_atom) {
+            Some(value) => value,
+            None => {
+                if self.pending_throw.is_some() {
+                    return None;
+                }
+                JSValue::undefined()
+            }
+        };
+        if !proto_val.is_object() && !proto_val.is_function() {
+            self.set_pending_type_error(
+                ctx,
+                "Function has non-object prototype in instanceof check",
+            );
+            return None;
+        }
+        let proto_ptr = proto_val.get_ptr() as *mut crate::object::object::JSObject;
+        let obj_ptr = obj_val.get_ptr() as *const crate::object::object::JSObject;
+        let mut current = unsafe { (*obj_ptr).prototype };
+        let mut depth = 0u32;
+        while let Some(p) = current {
+            if std::ptr::eq(p, proto_ptr) {
+                return Some(true);
+            }
+            current = unsafe { (*p).prototype };
+            depth += 1;
+            if depth > 1000 {
+                break;
+            }
+        }
+        Some(false)
+    }
+
+    fn instanceof_operator(
+        &mut self,
+        ctx: &mut JSContext,
+        ctor_val: JSValue,
+        obj_val: JSValue,
+    ) -> Option<bool> {
+        let hi_atom = self.has_instance_atom(ctx);
+        let handler = match self.get_property_value_full(ctx, ctor_val, hi_atom) {
+            Some(value) => value,
+            None => {
+                if self.pending_throw.is_some() {
+                    return None;
+                }
+                JSValue::undefined()
+            }
+        };
+        if !handler.is_null_or_undefined() {
+            if !self.is_callable_value(ctx, handler) {
+                let msg = format!(
+                    "{} is not a function",
+                    self.format_thrown_value(&handler, ctx)
+                );
+                self.set_pending_type_error(ctx, &msg);
+                return None;
+            }
+            match self.call_function_with_this(ctx, handler, ctor_val, &[obj_val]) {
+                Ok(value) => return Some(value.is_truthy()),
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                    return None;
+                }
+            }
+        }
+        if !self.is_callable_value(ctx, ctor_val) {
+            self.set_pending_type_error(ctx, "Right-hand side of 'instanceof' is not callable");
+            return None;
+        }
+        self.ordinary_has_instance(ctx, ctor_val, obj_val)
+    }
+
     pub fn take_pending_exception(&mut self, ctx: &mut JSContext) -> Option<JSValue> {
         let caught = self.last_caught_exception.take();
         let host = ctx.pending_exception.take();
@@ -3312,6 +3480,15 @@ impl VM {
         args: &[JSValue],
         constructing: bool,
     ) -> Result<JSValue, String> {
+        if func.is_object() && !constructing {
+            if let Some(function_prototype) = ctx.get_function_prototype() {
+                if func.get_ptr() as *mut crate::object::object::JSObject == function_prototype
+                {
+                    return Ok(JSValue::undefined());
+                }
+            }
+        }
+
         if func.is_object() {
             let obj = func.as_object();
             if let Some(bound_fn) = obj.get(ctx.common_atoms.__boundFn) {
@@ -5217,7 +5394,12 @@ impl VM {
                         ca.typeof_function
                     } else if a.is_object() {
                         let obj = a.as_object();
-                        if obj.get(ctx.common_atoms.__boundFn).is_some() {
+                        let is_function_prototype =
+                            ctx.get_function_prototype().map_or(false, |function_prototype| {
+                                a.get_ptr() as *mut crate::object::object::JSObject
+                                    == function_prototype
+                            });
+                        if obj.get(ctx.common_atoms.__boundFn).is_some() || is_function_prototype {
                             ca.typeof_function
                         } else {
                             ca.typeof_object
@@ -7544,117 +7726,32 @@ impl VM {
                         continue;
                     }
 
-                    if ctor_val.is_function() && (obj_val.is_object() || obj_val.is_function()) {
-                        let ctor_ptr = ctor_val.get_ptr();
-                        let obj_ptr = obj_val.get_ptr();
-                        let obj_proto = unsafe {
-                            (*(obj_ptr as *const crate::object::object::JSObject)).prototype
-                        };
-                        if let Some(op) = obj_proto {
-                            if ctor_ptr == self.instanceof_cache_ctor
-                                && op as usize == self.instanceof_cache_proto
+                    if ctor_val.is_function() {
+                        let js_func = ctor_val.as_function();
+                        let ctor_proto = js_func.cached_prototype_ptr as usize;
+                        if ctor_proto != 0
+                            && !js_func.has_symbol_on_base()
+                            && (obj_val.is_object() || obj_val.is_function())
+                        {
+                            let obj_proto = unsafe {
+                                (*(obj_val.get_ptr()
+                                    as *const crate::object::object::JSObject))
+                                    .prototype
+                            };
+                            let obj_proto_key = obj_proto.map(|p| p as usize).unwrap_or(0);
+                            let ctor_ptr = ctor_val.get_ptr();
+                            if self.instanceof_cache_ctor == ctor_ptr
+                                && self.instanceof_cache_proto == obj_proto_key
+                                && self.instanceof_cache_ctor_proto == ctor_proto
                             {
                                 self.set_reg(dst, JSValue::bool(self.instanceof_cache_result));
                                 continue;
                             }
-                        }
-                    }
-
-                    let hi_atom = if self.cached_has_instance_atom.0 != 0 {
-                        self.cached_has_instance_atom
-                    } else {
-                        let sym = crate::builtins::symbol::get_symbol_has_instance(ctx);
-                        let a = if sym.is_symbol() {
-                            crate::runtime::atom::Atom(0x40000000 | sym.get_symbol_id())
-                        } else {
-                            unreachable!()
-                        };
-                        self.cached_has_instance_atom = a;
-                        a
-                    };
-                    let has_instance_handler = if ctor_val.is_function() {
-                        let jf = ctor_val.as_function();
-
-                        if jf.has_symbol_on_base() {
-                            jf.base.get_own(hi_atom)
-                        } else {
-                            None
-                        }
-                    } else {
-                        ctor_val.as_object().get_own(hi_atom)
-                    };
-                    if let Some(handler) = has_instance_handler {
-                        if handler.is_function() || handler.is_object() {
-                            if handler.is_function() {
-                                match self.call_function_with_this(
-                                    ctx,
-                                    handler,
-                                    ctor_val,
-                                    &[obj_val],
-                                ) {
-                                    Ok(v) => {
-                                        self.set_reg(dst, JSValue::bool(v.is_truthy()));
-                                        continue;
-                                    }
-                                    Err(_) => {
-                                        self.set_reg(dst, JSValue::undefined());
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if !ctor_val.is_function() {
-                        self.set_pending_type_error(
-                            ctx,
-                            "Right-hand side of 'instanceof' is not callable",
-                        );
-                        if let Some(exc) = self.pending_throw.take() {
-                            match self.dispatch_throw_value(ctx, exc) {
-                                ThrowDispatch::Caught => {
-                                    self.set_reg(dst, JSValue::undefined());
-                                }
-                                ThrowDispatch::Uncaught(e) => return Err(e),
-                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                            }
-                        }
-                        continue;
-                    }
-
-                    let result = if obj_val.is_object() || obj_val.is_function() {
-                        let ctor_proto_opt = if ctor_val.is_function() {
-                            let js_func = ctor_val.as_function();
-                            if !js_func.cached_prototype_ptr.is_null() {
-                                Some(
-                                    js_func.cached_prototype_ptr
-                                        as *const crate::object::object::JSObject,
-                                )
-                            } else {
-                                let proto_atom = ctx.common_atoms.prototype;
-                                js_func.base.get(proto_atom).and_then(|v| {
-                                    if v.is_object() {
-                                        let ptr =
-                                            v.get_ptr() as *mut crate::object::object::JSObject;
-
-                                        ctor_val.as_function_mut().cached_prototype_ptr = ptr;
-                                        Some(ptr as *const crate::object::object::JSObject)
-                                    } else {
-                                        None
-                                    }
-                                })
-                            }
-                        } else {
-                            None
-                        };
-                        if let Some(ctor_proto_ptr) = ctor_proto_opt {
-                            let obj_ptr = obj_val.get_ptr();
-                            let mut proto_opt = unsafe {
-                                (*(obj_ptr as *const crate::object::object::JSObject)).prototype
-                            };
+                            let mut proto_opt = obj_proto;
                             let mut found = false;
                             let mut limit = 0;
                             while let Some(proto_ptr) = proto_opt {
-                                if std::ptr::eq(proto_ptr, ctor_proto_ptr) {
+                                if proto_ptr as usize == ctor_proto {
                                     found = true;
                                     break;
                                 }
@@ -7664,26 +7761,31 @@ impl VM {
                                     break;
                                 }
                             }
-                            found
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if ctor_val.is_function() && (obj_val.is_object() || obj_val.is_function()) {
-                        let ctor_ptr = ctor_val.get_ptr();
-                        let obj_ptr = obj_val.get_ptr();
-                        let obj_proto = unsafe {
-                            (*(obj_ptr as *const crate::object::object::JSObject)).prototype
-                        };
-                        if let Some(op) = obj_proto {
                             self.instanceof_cache_ctor = ctor_ptr;
-                            self.instanceof_cache_proto = op as usize;
-                            self.instanceof_cache_result = result;
+                            self.instanceof_cache_proto = obj_proto_key;
+                            self.instanceof_cache_ctor_proto = ctor_proto;
+                            self.instanceof_cache_result = found;
+                            self.set_reg(dst, JSValue::bool(found));
+                            continue;
                         }
                     }
-                    self.set_reg(dst, JSValue::bool(result));
+
+                    match self.instanceof_operator(ctx, ctor_val, obj_val) {
+                        Some(result) => self.set_reg(dst, JSValue::bool(result)),
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => {
+                                        self.set_reg(dst, JSValue::undefined());
+                                    }
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            } else {
+                                self.set_reg(dst, JSValue::undefined());
+                            }
+                        }
+                    }
                 }
                 Opcode::NewRegExp => {
                     let cache_key = self.cached_code_ptr as usize + self.pc;
