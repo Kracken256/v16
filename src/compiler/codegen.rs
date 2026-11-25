@@ -4421,6 +4421,11 @@ impl CodeGenerator {
 
         let iterable_reg = self.gen_expression(&stmt.right, ctx)?;
         let iter_reg = self.alloc_register();
+        let await_state_reg = if stmt.is_await {
+            Some(self.alloc_register())
+        } else {
+            None
+        };
         if stmt.is_await {
             self.emit(Opcode::GetAsyncIterator);
         } else {
@@ -4429,6 +4434,12 @@ impl CodeGenerator {
         self.emit_u16(iter_reg);
         self.emit_u16(iterable_reg);
         self.free_register(iterable_reg);
+
+        if let Some(state_reg) = await_state_reg {
+            self.emit(Opcode::LoadInt8);
+            self.emit_u16(state_reg);
+            self.emit_u8(0);
+        }
 
         let loop_start = self.code.len();
 
@@ -4442,6 +4453,9 @@ impl CodeGenerator {
         self.emit_u16(val_reg);
         self.emit_u16(done_reg);
         self.emit_u16(iter_reg);
+        if let Some(state_reg) = await_state_reg {
+            self.emit_u16(state_reg);
+        }
 
         self.emit(Opcode::JumpIf);
         self.emit_u16(done_reg);
@@ -4496,6 +4510,9 @@ impl CodeGenerator {
         }
 
         self.free_register(iter_reg);
+        if let Some(state_reg) = await_state_reg {
+            self.free_register(state_reg);
+        }
 
         if needs_block_scope {
             self.pop_scope();

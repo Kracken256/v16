@@ -96,6 +96,12 @@ pub enum ExecutionOutcome {
     Yield(JSValue),
 }
 
+pub enum PromiseSettlement {
+    Fulfilled(JSValue),
+    Rejected(JSValue),
+    Pending,
+}
+
 pub enum AsyncStepResult {
     Complete(JSValue, Vec<JSValue>, usize, Vec<ExceptionHandler>),
     Suspended(JSValue, u16, Vec<JSValue>, usize, Vec<ExceptionHandler>),
@@ -473,6 +479,121 @@ impl VM {
         ctx.runtime_mut().gc_heap_mut().track(iter_ptr);
         self.allocation_count += 1;
         JSValue::new_object(iter_ptr)
+    }
+
+    fn make_iterator_record(
+        &mut self,
+        ctx: &mut JSContext,
+        iterator: JSValue,
+        next: JSValue,
+        async_from_sync: bool,
+    ) -> JSValue {
+        let mut record = crate::object::object::JSObject::new();
+        let obj_atom = ctx.common_atoms.__iter_obj__;
+        let next_atom = ctx.common_atoms.__iter_next__;
+        let async_atom = ctx.common_atoms.__iter_async__;
+        record.set_cached(obj_atom, iterator, ctx.shape_cache_mut());
+        record.set_cached(next_atom, next, ctx.shape_cache_mut());
+        if async_from_sync {
+            record.set_cached(async_atom, JSValue::bool(true), ctx.shape_cache_mut());
+        }
+        let ptr = Box::into_raw(Box::new(record)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        self.allocation_count += 1;
+        JSValue::new_object(ptr)
+    }
+
+    pub fn iterator_record_parts(
+        ctx: &JSContext,
+        iter_val: JSValue,
+    ) -> Option<(JSValue, JSValue, bool)> {
+        if !iter_val.is_object_like() {
+            return None;
+        }
+        let record = iter_val.as_object();
+        let iter_obj = record.get(ctx.common_atoms.__iter_obj__)?;
+        let next = record
+            .get(ctx.common_atoms.__iter_next__)
+            .unwrap_or_else(JSValue::undefined);
+        let async_from_sync = record
+            .get(ctx.common_atoms.__iter_async__)
+            .map(|v| v.is_truthy())
+            .unwrap_or(false);
+        Some((iter_obj, next, async_from_sync))
+    }
+
+    fn get_method(
+        &mut self,
+        ctx: &mut JSContext,
+        value: JSValue,
+        atom: crate::runtime::atom::Atom,
+        description: &str,
+    ) -> Result<Option<JSValue>, String> {
+        let method = self.get_prop_value(ctx, value, atom)?;
+        if method.is_undefined() || method.is_null() {
+            return Ok(None);
+        }
+        if method.is_function() {
+            return Ok(Some(method));
+        }
+        let msg = format!("{} is not a function", description);
+        self.set_pending_type_error(ctx, &msg);
+        Err(msg)
+    }
+
+    fn get_iterator(
+        &mut self,
+        ctx: &mut JSContext,
+        iterable: JSValue,
+        is_async: bool,
+    ) -> Result<JSValue, String> {
+        if iterable.is_string() && !is_async {
+            return Ok(self.create_iter_object(ctx, iterable));
+        }
+        if iterable.is_object_like() && !is_async {
+            let is_dense = iterable.is_object() && iterable.as_object().is_dense_array();
+            if is_dense && self.array_uses_default_iterator(ctx, iterable) {
+                return Ok(self.create_iter_object(ctx, iterable));
+            }
+        }
+        if is_async {
+            let sym_async = crate::builtins::symbol::get_symbol_async_iterator(ctx);
+            if sym_async.is_symbol() {
+                let atom = crate::runtime::atom::Atom(0x40000000 | sym_async.get_symbol_id());
+                if let Some(method) = self.get_method(ctx, iterable, atom, "Symbol.asyncIterator")? {
+                    let iterator = self.call_function_with_this(ctx, method, iterable, &[])?;
+                    if !iterator.is_object_like() {
+                        let msg = "Result of the Symbol.asyncIterator method is not an object";
+                        self.set_pending_type_error(ctx, msg);
+                        return Err(msg.to_string());
+                    }
+                    let next_atom = ctx.intern("next");
+                    let next = self.get_prop_value(ctx, iterator, next_atom)?;
+                    return Ok(self.make_iterator_record(ctx, iterator, next, false));
+                }
+            }
+        }
+        let sym_iter = crate::builtins::symbol::get_symbol_iterator(ctx);
+        if sym_iter.is_symbol() {
+            let atom = crate::runtime::atom::Atom(0x40000000 | sym_iter.get_symbol_id());
+            if let Some(method) = self.get_method(ctx, iterable, atom, "Symbol.iterator")? {
+                let iterator = self.call_function_with_this(ctx, method, iterable, &[])?;
+                if !iterator.is_object_like() {
+                    let msg = "Result of the Symbol.iterator method is not an object";
+                    self.set_pending_type_error(ctx, msg);
+                    return Err(msg.to_string());
+                }
+                let next_atom = ctx.intern("next");
+                let next = self.get_prop_value(ctx, iterator, next_atom)?;
+                return Ok(self.make_iterator_record(ctx, iterator, next, is_async));
+            }
+        }
+        let msg = format!(
+            "{} is not iterable",
+            self.format_thrown_value(&iterable, ctx)
+        );
+        self.set_pending_type_error(ctx, &msg);
+        Err(msg)
     }
 
     #[inline(always)]
@@ -1626,44 +1747,36 @@ impl VM {
         if !iter_val.is_object() {
             return None;
         }
-        let return_atom = ctx.intern("return");
-        let ret_fn = {
-            let iter_obj = iter_val.as_object();
-            let mut found = iter_obj.get(return_atom);
-            if found.is_none() {
-                let mut proto = iter_obj.prototype;
-                while let Some(p) = proto {
-                    let pobj = unsafe { &*p };
-                    if let Some(v) = pobj.get(return_atom) {
-                        found = Some(v);
-                        break;
-                    }
-                    proto = pobj.prototype;
-                }
-            }
-            found
+        let iterator = match Self::iterator_record_parts(ctx, iter_val) {
+            Some((iterator, _, _)) => iterator,
+            None => iter_val,
         };
-        match ret_fn {
-            None => None,
-            Some(f) if f.is_undefined() || f.is_null() => None,
-            Some(f) if f.is_function() => {
-                match self.call_function_with_this(ctx, f, iter_val, &[]) {
-                    Ok(result) => {
-                        if result.is_object_like() {
-                            None
-                        } else {
-                            self.set_pending_type_error(
-                                ctx,
-                                "Iterator result is not an object",
-                            );
-                            self.take_pending_exception(ctx)
-                        }
-                    }
-                    Err(_) => self.take_pending_exception(ctx),
+        let return_atom = ctx.intern("return");
+        let ret_fn = match self.get_prop_value(ctx, iterator, return_atom) {
+            Ok(v) => v,
+            Err(_) => {
+                self.rethrow_last_caught(ctx);
+                return self.take_pending_exception(ctx);
+            }
+        };
+        if ret_fn.is_undefined() || ret_fn.is_null() {
+            return None;
+        }
+        if !ret_fn.is_function() {
+            self.set_pending_type_error(ctx, "Iterator return is not a function");
+            return self.take_pending_exception(ctx);
+        }
+        match self.call_function_with_this(ctx, ret_fn, iterator, &[]) {
+            Ok(result) => {
+                if result.is_object_like() {
+                    None
+                } else {
+                    self.set_pending_type_error(ctx, "Iterator result is not an object");
+                    self.take_pending_exception(ctx)
                 }
             }
-            Some(_) => {
-                self.set_pending_type_error(ctx, "Iterator return is not a function");
+            Err(_) => {
+                self.rethrow_last_caught(ctx);
                 self.take_pending_exception(ctx)
             }
         }
@@ -8225,133 +8338,37 @@ impl VM {
                     let dst = self.read_u16_pc();
                     let src = self.read_u16_pc();
                     let iterable = self.get_reg(src);
-                    let result = if iterable.is_string() {
-                        self.create_iter_object(ctx, iterable)
-                    } else if iterable.is_object() || iterable.is_function() {
-                        let is_array = iterable.as_object().is_dense_array();
-                        if is_array && self.array_uses_default_iterator(ctx, iterable) {
-                            self.create_iter_object(ctx, iterable)
-                        } else {
-                            let obj: &crate::object::object::JSObject = if iterable.is_function() {
-                                let func = iterable.as_function();
-                                &func.base
-                            } else {
-                                iterable.as_object()
-                            };
-
-                            let mut iter_fn = None;
-                            // Prefer Symbol.asyncIterator for `for await`, then
-                            // fall back to Symbol.iterator.
-                            let lookup = |sym_val: JSValue,
-                                          obj: &crate::object::object::JSObject|
-                             -> Option<JSValue> {
-                                if !sym_val.is_symbol() {
-                                    return None;
+                    match self.get_iterator(ctx, iterable, is_async) {
+                        Ok(record) => self.set_reg(dst, record),
+                        Err(e) => {
+                            if self.pending_throw.is_none() {
+                                let host_exc = ctx.pending_exception.take();
+                                if let Some(exc) =
+                                    self.last_caught_exception.take().or(host_exc)
+                                {
+                                    self.pending_throw = Some(exc);
                                 }
-                                let sym_atom = crate::runtime::atom::Atom(
-                                    0x40000000 | sym_val.get_symbol_id(),
-                                );
-                                let mut found = obj.get(sym_atom);
-                                if found.is_none() {
-                                    let mut current = obj.prototype;
-                                    while let Some(p) = current {
-                                        let pobj = unsafe { &*p };
-                                        found = pobj.get(sym_atom);
-                                        if found.is_some() {
-                                            break;
-                                        }
-                                        current = pobj.prototype;
-                                    }
-                                }
-                                found
-                            };
-                            if is_async {
-                                iter_fn = lookup(
-                                    crate::builtins::symbol::get_symbol_async_iterator(ctx),
-                                    obj,
-                                );
-                                if iter_fn.as_ref().map_or(true, |v| {
-                                    v.is_undefined() || v.is_null()
-                                }) {
-                                    iter_fn = lookup(
-                                        crate::builtins::symbol::get_symbol_iterator(ctx),
-                                        obj,
-                                    );
-                                }
-                            } else if iter_fn.is_none() {
-                                iter_fn = lookup(
-                                    crate::builtins::symbol::get_symbol_iterator(ctx),
-                                    obj,
-                                );
                             }
-
-                            if let Some(fn_val) = iter_fn {
-                                if fn_val.is_function() {
-                                    match self.call_function_with_this(ctx, fn_val, iterable, &[]) {
-                                        Ok(iterator) => {
-                                            if iterator.is_object() {
-                                                iterator
-                                            } else {
-                                                JSValue::undefined()
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let host_exc = ctx.pending_exception.take();
-                                            if let Some(exc) = self
-                                                .last_caught_exception
-                                                .take()
-                                                .or(host_exc)
-                                            {
-                                                match self.dispatch_throw_value(ctx, exc) {
-                                                    ThrowDispatch::Caught => continue,
-                                                    ThrowDispatch::Uncaught(e) => return Err(e),
-                                                    ThrowDispatch::AsyncComplete(o) => {
-                                                        return Ok(o)
-                                                    }
-                                                }
-                                            }
-                                            return Err(e);
-                                        }
-                                    }
-                                } else {
-                                    JSValue::undefined()
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
                                 }
-                            } else {
-                                JSValue::undefined()
                             }
+                            return Err(e);
                         }
-                    } else {
-                        JSValue::undefined()
-                    };
-                    if result.is_undefined() {
-                        let msg = format!(
-                            "{} is not iterable",
-                            self.format_thrown_value(&iterable, ctx)
-                        );
-                        self.set_pending_type_error(ctx, &msg);
-                        if let Some(exc) = self.pending_throw.take() {
-                            let disp = self.dispatch_throw_value(ctx, exc);
-                            match disp {
-                                ThrowDispatch::Caught => {}
-                                ThrowDispatch::Uncaught(e) => return Err(e),
-                                ThrowDispatch::AsyncComplete(o) => match o {
-                                    ExecutionOutcome::Complete(_) => {}
-                                    _ => return Err("get_iterator error".to_string()),
-                                },
-                            }
-                        }
-                    } else {
-                        self.set_reg(dst, result);
                     }
                 }
                 Opcode::IteratorNext => {
+                    let instr_pc = self.pc - 1;
                     let dst_val = self.read_u16_pc();
                     let dst_done = self.read_u16_pc();
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
-                    if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None, false, true)
-                    {
+                    if let Err(e) = self.op_iterator_next(
+                        ctx, instr_pc, dst_val, dst_done, iter_val, None, false, true, None,
+                    ) {
                         if self.pending_throw.is_some() {
                             continue;
                         }
@@ -8359,17 +8376,20 @@ impl VM {
                     }
                 }
                 Opcode::IteratorStep => {
+                    let instr_pc = self.pc - 1;
                     let dst_done = self.read_u16_pc();
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
                     if let Err(e) = self.op_iterator_next(
                         ctx,
+                        instr_pc,
                         dst_done,
                         dst_done,
                         iter_val,
                         None,
                         false,
                         false,
+                        None,
                     ) {
                         if self.pending_throw.is_some() {
                             continue;
@@ -8378,29 +8398,52 @@ impl VM {
                     }
                 }
                 Opcode::IteratorNextAwait => {
+                    let instr_pc = self.pc - 1;
                     let dst_val = self.read_u16_pc();
                     let dst_done = self.read_u16_pc();
                     let iter_reg = self.read_u16_pc();
+                    let state_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
-                    if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, None, true, true)
-                    {
-                        if self.pending_throw.is_some() {
-                            continue;
+                    match self.op_iterator_next(
+                        ctx,
+                        instr_pc,
+                        dst_val,
+                        dst_done,
+                        iter_val,
+                        None,
+                        true,
+                        true,
+                        Some(state_reg),
+                    ) {
+                        Ok(true) => return Ok(ExecutionOutcome::Yield(JSValue::undefined())),
+                        Ok(false) => {}
+                        Err(e) => {
+                            if self.pending_throw.is_some() {
+                                continue;
+                            }
+                            return Err(e);
                         }
-                        return Err(e);
                     }
                 }
                 Opcode::IteratorNextSend => {
+                    let instr_pc = self.pc - 1;
                     let dst_val = self.read_u16_pc();
                     let dst_done = self.read_u16_pc();
                     let iter_reg = self.read_u16_pc();
                     let send_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
                     let send_val = self.get_reg(send_reg);
-                    if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), false, true)
-                    {
+                    if let Err(e) = self.op_iterator_next(
+                        ctx,
+                        instr_pc,
+                        dst_val,
+                        dst_done,
+                        iter_val,
+                        Some(send_val),
+                        false,
+                        true,
+                        None,
+                    ) {
                         if self.pending_throw.is_some() {
                             continue;
                         }
@@ -8408,19 +8451,32 @@ impl VM {
                     }
                 }
                 Opcode::IteratorNextSendAwait => {
+                    let instr_pc = self.pc - 1;
                     let dst_val = self.read_u16_pc();
                     let dst_done = self.read_u16_pc();
                     let iter_reg = self.read_u16_pc();
                     let send_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
                     let send_val = self.get_reg(send_reg);
-                    if let Err(e) =
-                        self.op_iterator_next(ctx, dst_val, dst_done, iter_val, Some(send_val), true, true)
-                    {
-                        if self.pending_throw.is_some() {
-                            continue;
+                    match self.op_iterator_next(
+                        ctx,
+                        instr_pc,
+                        dst_val,
+                        dst_done,
+                        iter_val,
+                        Some(send_val),
+                        true,
+                        true,
+                        None,
+                    ) {
+                        Ok(true) => return Ok(ExecutionOutcome::Yield(JSValue::undefined())),
+                        Ok(false) => {}
+                        Err(e) => {
+                            if self.pending_throw.is_some() {
+                                continue;
+                            }
+                            return Err(e);
                         }
-                        return Err(e);
                     }
                 }
                 Opcode::IteratorClose => {
@@ -9045,27 +9101,38 @@ impl VM {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn op_iterator_next(
         &mut self,
         ctx: &mut JSContext,
+        instr_pc: usize,
         dst_val: u16,
         dst_done: u16,
         iter_val: JSValue,
         send: Option<JSValue>,
         await_result: bool,
         want_value: bool,
-    ) -> Result<(), String> {
-        if !iter_val.is_object() {
+        state_reg: Option<u16>,
+    ) -> Result<bool, String> {
+        let phase = state_reg
+            .map(|r| {
+                let v = self.get_reg(r);
+                if v.is_int() { v.get_int() } else { 0 }
+            })
+            .unwrap_or(0);
+        if !iter_val.is_object_like() {
             self.set_reg(dst_val, JSValue::undefined());
             self.set_reg(dst_done, JSValue::bool(true));
-            return Ok(());
+            return Ok(false);
         }
 
         let iter_ptr = iter_val.get_ptr();
         let iter_obj = unsafe { &mut *(iter_ptr as *mut crate::object::object::JSObject) };
         let arr_atom = ctx.common_atoms.__iter_arr__;
 
-        if let Some(arr_val) = iter_obj.get(arr_atom) {
+        if phase == 0
+            && let Some(arr_val) = iter_obj.get(arr_atom)
+        {
             let idx_atom = ctx.common_atoms.__iter_idx__;
             let idx = iter_obj.get(idx_atom).map(|v| v.get_int()).unwrap_or(0) as usize;
 
@@ -9088,11 +9155,12 @@ impl VM {
                     self.set_reg(dst_val, JSValue::undefined());
                     self.set_reg(dst_done, JSValue::bool(true));
                 }
-                return Ok(());
+                return Ok(false);
             } else if arr_val.is_object() {
                 let arr_ptr = arr_val.get_ptr();
-                let is_jsarray = unsafe { &*(arr_ptr as *const crate::object::object::JSObject) }
-                    .is_dense_array();
+                let is_jsarray =
+                    unsafe { &*(arr_ptr as *const crate::object::object::JSObject) }
+                        .is_dense_array();
                 if is_jsarray {
                     let arr = unsafe {
                         &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
@@ -9116,112 +9184,171 @@ impl VM {
                         self.set_reg(dst_val, JSValue::undefined());
                         self.set_reg(dst_done, JSValue::bool(true));
                     }
-                    return Ok(());
+                    return Ok(false);
                 }
-                // Non-dense array-like iterables fall through to the
-                // iterator's own `next` method so generic index access is used.
             } else {
                 self.set_reg(dst_val, JSValue::undefined());
                 self.set_reg(dst_done, JSValue::bool(true));
-                return Ok(());
+                return Ok(false);
             }
         }
 
-        let next_atom = ctx.intern("next");
-        let next_fn = iter_obj.get(next_atom).or_else(|| {
-            let mut proto = iter_obj.prototype;
-            while let Some(p) = proto {
-                let pobj = unsafe { &*p };
-                if let Some(v) = pobj.get(next_atom) {
-                    return Some(v);
-                }
-                proto = pobj.prototype;
+        let done_atom = ctx.intern("done");
+        let value_atom = ctx.intern("value");
+        let record = Self::iterator_record_parts(ctx, iter_val);
+        let (target, next_fn, async_from_sync) = match record {
+            Some(parts) => parts,
+            None => {
+                let next_atom = ctx.intern("next");
+                let next = self.get_prop_value(ctx, iter_val, next_atom)?;
+                (iter_val, next, false)
             }
-            None
-        });
+        };
 
-        if let Some(next_fn_val) = next_fn {
-            if next_fn_val.is_function() {
-                let args: Vec<JSValue> = match send {
-                    Some(v) => vec![v],
-                    None => Vec::new(),
-                };
-                match self.call_function_with_this(ctx, next_fn_val, iter_val, &args) {
-                    Ok(result) => {
-                        let mut result = result;
-                        if await_result {
-                            match self.await_settled_value(ctx, result) {
-                                Ok(Some(v)) => result = v,
-                                Ok(None) => {
-                                    self.set_reg(dst_val, JSValue::undefined());
-                                    self.set_reg(dst_done, JSValue::bool(true));
-                                    return Ok(());
-                                }
-                                Err(e) => {
-                                    self.set_reg(dst_val, JSValue::undefined());
-                                    self.set_reg(dst_done, JSValue::bool(true));
-                                    return Err(e);
-                                }
-                            }
+        let mut result;
+        if phase == 0 {
+            if !next_fn.is_function() {
+                let msg = "iterator next is not a function";
+                self.set_pending_type_error(ctx, msg);
+                return Err(msg.to_string());
+            }
+            let args: Vec<JSValue> = match send {
+                Some(v) => vec![v],
+                None => Vec::new(),
+            };
+            result = match self.call_function_with_this(ctx, next_fn, target, &args) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.rethrow_last_caught(ctx);
+                    return Err(e);
+                }
+            };
+            if await_result {
+                if async_from_sync {
+                    if result.is_null() || result.is_undefined() {
+                        let msg = "iterator result is not an object";
+                        self.set_pending_type_error(ctx, msg);
+                        return Err(msg.to_string());
+                    }
+                    let value = match self.get_prop_value(ctx, result, value_atom) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.rethrow_last_caught(ctx);
+                            return Err(e);
                         }
-                        if result.is_object() {
-                            let value_atom = ctx.intern("value");
-                            let done_atom = ctx.intern("done");
-                            let done = match self.get_prop_value(ctx, result, done_atom) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    self.set_reg(dst_val, JSValue::undefined());
-                                    self.set_reg(dst_done, JSValue::bool(true));
-                                    self.rethrow_last_caught(ctx);
-                                    return Err(e);
-                                }
-                            };
-                            let mut value = JSValue::undefined();
-                            if want_value && !done.is_truthy() {
-                                value = match self.get_prop_value(ctx, result, value_atom) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        self.set_reg(dst_val, JSValue::undefined());
-                                        self.set_reg(dst_done, JSValue::bool(true));
-                                        self.rethrow_last_caught(ctx);
-                                        return Err(e);
-                                    }
-                                };
-                                if await_result {
-                                    match self.await_settled_value(ctx, value) {
-                                        Ok(Some(v)) => value = v,
-                                        Ok(None) => {}
-                                        Err(e) => {
-                                            self.set_reg(dst_val, JSValue::undefined());
-                                            self.set_reg(dst_done, JSValue::bool(true));
-                                            return Err(e);
-                                        }
-                                    }
-                                }
-                            }
-                            self.set_reg(dst_val, value);
-                            self.set_reg(dst_done, done);
-                        } else {
-                            self.set_reg(dst_val, JSValue::undefined());
+                    };
+                    let done_val = match self.get_prop_value(ctx, result, done_atom) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.rethrow_last_caught(ctx);
+                            return Err(e);
+                        }
+                    };
+                    if done_val.is_truthy() {
+                        self.set_reg(dst_val, value);
+                        self.set_reg(dst_done, JSValue::bool(true));
+                        return Ok(false);
+                    }
+                    let promise = ctx.call_builtin("promise_resolve", &[value]);
+                    match self.promise_settlement(ctx, promise) {
+                        PromiseSettlement::Fulfilled(v) => {
+                            self.set_reg(dst_val, v);
+                            self.set_reg(dst_done, JSValue::bool(false));
+                            return Ok(false);
+                        }
+                        PromiseSettlement::Rejected(reason) => {
                             self.set_reg(dst_done, JSValue::bool(true));
+                            self.last_caught_exception = Some(reason);
+                            self.pending_throw = Some(reason);
+                            return Err("awaited promise rejected".to_string());
+                        }
+                        PromiseSettlement::Pending => {
+                            if let Some(r) = state_reg {
+                                self.set_reg(r, JSValue::new_int(2));
+                            }
+                            self.await_suspend = Some((promise, dst_val));
+                            self.pc = instr_pc;
+                            return Ok(true);
                         }
                     }
-                    Err(e) => {
-                        self.set_reg(dst_val, JSValue::undefined());
-                        self.set_reg(dst_done, JSValue::bool(true));
-                        self.rethrow_last_caught(ctx);
-                        return Err(e);
+                } else {
+                    let promise = ctx.call_builtin("promise_resolve", &[result]);
+                    match self.promise_settlement(ctx, promise) {
+                        PromiseSettlement::Fulfilled(v) => result = v,
+                        PromiseSettlement::Rejected(reason) => {
+                            self.set_reg(dst_done, JSValue::bool(true));
+                            self.last_caught_exception = Some(reason);
+                            self.pending_throw = Some(reason);
+                            return Err("awaited promise rejected".to_string());
+                        }
+                        PromiseSettlement::Pending => {
+                            if let Some(r) = state_reg {
+                                self.set_reg(r, JSValue::new_int(1));
+                            }
+                            self.await_suspend = Some((promise, dst_val));
+                            self.pc = instr_pc;
+                            return Ok(true);
+                        }
                     }
                 }
-            } else {
-                self.set_reg(dst_val, JSValue::undefined());
-                self.set_reg(dst_done, JSValue::bool(true));
+            }
+        } else if phase == 1 {
+            result = self.get_reg(dst_val);
+            if let Some(r) = state_reg {
+                self.set_reg(r, JSValue::new_int(0));
             }
         } else {
-            self.set_reg(dst_val, JSValue::undefined());
-            self.set_reg(dst_done, JSValue::bool(true));
+            if let Some(r) = state_reg {
+                self.set_reg(r, JSValue::new_int(0));
+            }
+            self.set_reg(dst_done, JSValue::bool(false));
+            return Ok(false);
         }
-        Ok(())
+
+        if !result.is_object_like() {
+            let msg = "iterator result is not an object";
+            self.set_pending_type_error(ctx, msg);
+            return Err(msg.to_string());
+        }
+        let done = match self.get_prop_value(ctx, result, done_atom) {
+            Ok(v) => v.is_truthy(),
+            Err(e) => {
+                self.rethrow_last_caught(ctx);
+                return Err(e);
+            }
+        };
+        let mut value = JSValue::undefined();
+        if want_value && !done {
+            value = match self.get_prop_value(ctx, result, value_atom) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.rethrow_last_caught(ctx);
+                    return Err(e);
+                }
+            };
+        }
+        self.set_reg(dst_val, value);
+        self.set_reg(dst_done, JSValue::bool(done));
+        Ok(false)
+    }
+
+    fn promise_settlement(&mut self, ctx: &mut JSContext, promise: JSValue) -> PromiseSettlement {
+        if !promise.is_object() || !crate::builtins::promise::is_promise(&promise) {
+            return PromiseSettlement::Fulfilled(promise);
+        }
+        let obj = promise.as_object();
+        let state = obj
+            .get(ctx.common_atoms.__promise_state__)
+            .map(|v| v.get_int())
+            .unwrap_or(0);
+        let result = obj
+            .get(ctx.common_atoms.__promise_result__)
+            .unwrap_or_else(JSValue::undefined);
+        match state {
+            1 => PromiseSettlement::Fulfilled(result),
+            2 => PromiseSettlement::Rejected(result),
+            _ => PromiseSettlement::Pending,
+        }
     }
 
     #[inline(always)]

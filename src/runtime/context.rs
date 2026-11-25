@@ -127,6 +127,9 @@ pub struct CommonAtoms {
     pub __done__: Atom,
     pub __iter_arr__: Atom,
     pub __iter_idx__: Atom,
+    pub __iter_obj__: Atom,
+    pub __iter_next__: Atom,
+    pub __iter_async__: Atom,
     pub to_string_tag: Atom,
 }
 
@@ -245,6 +248,9 @@ impl CommonAtoms {
             __done__: tbl.intern("__done__"),
             __iter_arr__: tbl.intern("__iter_arr__"),
             __iter_idx__: tbl.intern("__iter_idx__"),
+            __iter_obj__: tbl.intern("__iter_obj__"),
+            __iter_next__: tbl.intern("__iter_next__"),
+            __iter_async__: tbl.intern("__iter_async__"),
             to_string_tag: tbl.intern("Symbol.toStringTag"),
         }
     }

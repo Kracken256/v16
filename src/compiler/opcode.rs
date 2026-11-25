@@ -517,7 +517,7 @@ impl Opcode {
             Opcode::IteratorCloseFinally => 3,
             Opcode::ToPropertyKey => 3,
             Opcode::GetAsyncIterator => 5,
-            Opcode::IteratorNextAwait => 7,
+            Opcode::IteratorNextAwait => 9,
             Opcode::ObjectRest => 7,
             Opcode::IteratorNextSendAwait => 9,
         }
@@ -1217,7 +1217,8 @@ impl Bytecode {
                     let dst_val = read_u16(1);
                     let dst_done = read_u16(3);
                     let iter = read_u16(5);
-                    write!(operands, " r{}, r{}, r{}", dst_val, dst_done, iter).unwrap();
+                    let state = read_u16(7);
+                    write!(operands, " r{}, r{}, r{}, r{}", dst_val, dst_done, iter, state).unwrap();
                 }
                 Opcode::ObjectRest => {
                     let dst = read_u16(1);
