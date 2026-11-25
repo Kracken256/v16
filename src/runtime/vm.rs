@@ -319,8 +319,9 @@ pub struct VM {
     pub(crate) last_caught_exception: Option<JSValue>,
 
     finally_rethrow: Option<JSValue>,
-    pending_finally_rethrow: Option<JSValue>,
-    pending_finally_return: Option<JSValue>,
+    pending_finally_rethrow: Option<(usize, JSValue)>,
+    pending_finally_return: Option<(usize, JSValue)>,
+    pending_finally_jump: Option<(usize, usize, usize)>,
 
     ctx_ptr: *mut crate::runtime::JSContext,
 
@@ -389,6 +390,7 @@ impl VM {
             finally_rethrow: None,
             pending_finally_rethrow: None,
             pending_finally_return: None,
+            pending_finally_jump: None,
             ctx_ptr: std::ptr::null_mut(),
             allocation_count: 0,
             caller_vm: None,
@@ -431,6 +433,27 @@ impl VM {
             .map_or(false, |h| h.frame_index == fi)
         {
             self.exception_handlers.pop();
+        }
+    }
+
+    fn clear_pending_finally_for_frame(&mut self, frame: usize) {
+        if self
+            .pending_finally_rethrow
+            .map_or(false, |(owner, _)| owner == frame)
+        {
+            self.pending_finally_rethrow = None;
+        }
+        if self
+            .pending_finally_return
+            .map_or(false, |(owner, _)| owner == frame)
+        {
+            self.pending_finally_return = None;
+        }
+        if self
+            .pending_finally_jump
+            .map_or(false, |(owner, _, _)| owner == frame)
+        {
+            self.pending_finally_jump = None;
         }
     }
 
@@ -709,6 +732,7 @@ impl VM {
         }
 
         self.frame_index += 1;
+        self.clear_pending_finally_for_frame(self.frame_index);
         if self.frame_index >= self.frames.len() {
             self.frames.resize(self.frames.len() * 2, CallFrame::new());
         }
@@ -859,6 +883,7 @@ impl VM {
         }
 
         self.frame_index += 1;
+        self.clear_pending_finally_for_frame(self.frame_index);
         let is_new_frame = self.frame_index >= self.frames.len();
         if is_new_frame {
             self.frames.resize(self.frames.len() * 2, CallFrame::new());
@@ -1805,13 +1830,31 @@ impl VM {
         ctx: &mut JSContext,
         mut value: JSValue,
     ) -> Option<ExecutionOutcome> {
+        if self
+            .pending_finally_rethrow
+            .map_or(false, |(frame, _)| frame == self.frame_index)
+        {
+            self.pending_finally_rethrow = None;
+        }
+        if self
+            .pending_finally_return
+            .map_or(false, |(frame, _)| frame == self.frame_index)
+        {
+            self.pending_finally_return = None;
+        }
+        if self
+            .pending_finally_jump
+            .map_or(false, |(frame, _, _)| frame == self.frame_index)
+        {
+            self.pending_finally_jump = None;
+        }
         while let Some(handler) = self.exception_handlers.last().cloned() {
             if handler.frame_index != self.frame_index {
                 break;
             }
             self.exception_handlers.pop();
             if let Some(fp) = handler.finally_pc {
-                self.pending_finally_return = Some(value);
+                self.pending_finally_return = Some((self.frame_index, value));
                 self.pc = fp;
                 self.refresh_cache();
                 return None;
@@ -1832,6 +1875,46 @@ impl VM {
         None
     }
 
+    fn execute_jump_completion(&mut self, target: usize, target_depth: usize) {
+        if self
+            .pending_finally_return
+            .map_or(false, |(frame, _)| frame == self.frame_index)
+        {
+            self.pending_finally_return = None;
+        }
+        if self
+            .pending_finally_rethrow
+            .map_or(false, |(frame, _)| frame == self.frame_index)
+        {
+            self.pending_finally_rethrow = None;
+        }
+        if self
+            .pending_finally_jump
+            .map_or(false, |(frame, _, _)| frame == self.frame_index)
+        {
+            self.pending_finally_jump = None;
+        }
+        loop {
+            let depth = self
+                .exception_handlers
+                .iter()
+                .filter(|h| h.frame_index == self.frame_index)
+                .count();
+            if depth <= target_depth {
+                break;
+            }
+            let handler = self.exception_handlers.pop().unwrap();
+            if let Some(fp) = handler.finally_pc {
+                self.pending_finally_jump = Some((self.frame_index, target, target_depth));
+                self.pc = fp;
+                self.refresh_cache();
+                return;
+            }
+        }
+        self.pc = target;
+        self.refresh_cache();
+    }
+
     #[cold]
     fn dispatch_throw_value(&mut self, ctx: &mut JSContext, value: JSValue) -> ThrowDispatch {
         if self
@@ -1845,6 +1928,18 @@ impl VM {
             .map_or(false, |pending| pending.raw_bits() == value.raw_bits())
         {
             ctx.pending_exception = None;
+        }
+        if self
+            .pending_finally_return
+            .map_or(false, |(frame, _)| frame == self.frame_index)
+        {
+            self.pending_finally_return = None;
+        }
+        if self
+            .pending_finally_jump
+            .map_or(false, |(frame, _, _)| frame == self.frame_index)
+        {
+            self.pending_finally_jump = None;
         }
         let find_async_frame = |frames: &[CallFrame], frame_index: usize| {
             for i in (0..=frame_index).rev() {
@@ -2922,7 +3017,7 @@ impl VM {
             }
             match finally_pc {
                 Some(fp) => {
-                    self.pending_finally_return = Some(value);
+                    self.pending_finally_return = Some((self.frame_index, value));
                     start_pc = fp;
                 }
                 None => {
@@ -4166,7 +4261,11 @@ impl VM {
                     }
                 }
                 Opcode::EndFinally => {
-                    if let Some(value) = self.pending_finally_rethrow.take() {
+                    if self
+                        .pending_finally_rethrow
+                        .map_or(false, |(frame, _)| frame == self.frame_index)
+                    {
+                        let (_, value) = self.pending_finally_rethrow.take().unwrap();
                         match self.dispatch_throw_value(ctx, value) {
                             ThrowDispatch::Caught => continue,
                             ThrowDispatch::Uncaught(e) => return Err(e),
@@ -4174,10 +4273,24 @@ impl VM {
                         }
                     }
 
-                    if let Some(value) = self.pending_finally_return.take() {
+                    if self
+                        .pending_finally_return
+                        .map_or(false, |(frame, _)| frame == self.frame_index)
+                    {
+                        let (_, value) = self.pending_finally_return.take().unwrap();
                         if let Some(outcome) = self.execute_return_completion(ctx, value) {
                             return Ok(outcome);
                         }
+                        continue;
+                    }
+
+                    if self
+                        .pending_finally_jump
+                        .map_or(false, |(frame, _, _)| frame == self.frame_index)
+                    {
+                        let (_, target, target_depth) =
+                            self.pending_finally_jump.take().unwrap();
+                        self.execute_jump_completion(target, target_depth);
                         continue;
                     }
                 }
@@ -4199,9 +4312,10 @@ impl VM {
                     }
                 }
                 Opcode::JumpBreak => {
+                    let target_depth = self.read_u16_pc() as usize;
                     let offset = self.read_i32();
-                    self.pc = (self.pc as i32 + offset) as usize;
-                    self.refresh_cache();
+                    let target = (self.pc as i32 + offset) as usize;
+                    self.execute_jump_completion(target, target_depth);
                 }
                 Opcode::Throw => {
                     let src = self.read_u16_pc();
@@ -4310,7 +4424,7 @@ impl VM {
                     // Move finally_rethrow to pending so it can be rethrown
                     // AFTER the finally body executes
                     if let Some(exc) = self.finally_rethrow.take() {
-                        self.pending_finally_rethrow = Some(exc);
+                        self.pending_finally_rethrow = Some((self.frame_index, exc));
                     }
                 }
 
@@ -8493,14 +8607,19 @@ impl VM {
                 Opcode::IteratorCloseFinally => {
                     let iter_reg = self.read_u16_pc();
                     let iter_val = self.get_reg(iter_reg);
-                    let throw_completion = self.pending_finally_rethrow.is_some();
+                    let throw_completion = self
+                        .pending_finally_rethrow
+                        .map_or(false, |(frame, _)| frame == self.frame_index);
                     if let Some(exc) = self.invoke_iterator_return(ctx, iter_val) {
                         if throw_completion {
                             self.last_caught_exception = None;
                             ctx.pending_exception = None;
                             self.pending_throw = None;
                         } else {
-                            if self.pending_finally_return.is_some() {
+                            if self
+                                .pending_finally_return
+                                .map_or(false, |(frame, _)| frame == self.frame_index)
+                            {
                                 self.pending_finally_return = None;
                             }
                             match self.dispatch_throw_value(ctx, exc) {

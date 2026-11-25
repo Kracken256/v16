@@ -423,7 +423,8 @@ impl Opcode {
             Opcode::NewRegExp => 11,
             Opcode::LoadConst | Opcode::LoadInt => 7,
             Opcode::LoadInt8 => 4,
-            Opcode::Jump | Opcode::JumpBreak => 5,
+            Opcode::Jump => 5,
+            Opcode::JumpBreak => 7,
             Opcode::JumpIf | Opcode::JumpIfNot | Opcode::JumpIfNullish => 7,
             Opcode::Jump8 => 2,
             Opcode::JumpIf8 | Opcode::JumpIfNot8 => 4,
@@ -807,10 +808,23 @@ impl Bytecode {
                     let imm = read_i8(5);
                     write!(operands, " r{}, r{}, {}", dst, src, imm).unwrap();
                 }
-                Opcode::Jump | Opcode::JumpBreak => {
+                Opcode::Jump => {
                     let off = read_i32(1);
                     let size = Opcode::instruction_size(Opcode::Jump) as i32;
                     write!(operands, " {} (pc {})", off, pc as i32 + size + off).unwrap();
+                }
+                Opcode::JumpBreak => {
+                    let depth = read_u16(1);
+                    let off = read_i32(3);
+                    let size = Opcode::instruction_size(Opcode::JumpBreak) as i32;
+                    write!(
+                        operands,
+                        " depth {} {} (pc {})",
+                        depth,
+                        off,
+                        pc as i32 + size + off
+                    )
+                    .unwrap();
                 }
                 Opcode::JumpIf | Opcode::JumpIfNot | Opcode::JumpIfNullish => {
                     let src = read_u16(1);

@@ -11,6 +11,7 @@ struct BreakableFrame {
     break_patches: Vec<usize>,
     continue_patches: Vec<usize>,
     continue_target: Option<usize>,
+    handler_depth: usize,
 }
 
 #[derive(Clone)]
@@ -201,6 +202,7 @@ pub struct CodeGenerator {
     scope_stack: Vec<FxHashMap<String, VarEntry>>,
     reserved_slots: std::collections::HashSet<u16>,
     breakable_frames: Vec<BreakableFrame>,
+    handler_depth: usize,
 
     parent_vars: FxHashMap<String, ParentVar>,
     upvalues: Vec<(u32, u16)>,
@@ -268,6 +270,7 @@ impl CodeGenerator {
             scope_stack: vec![FxHashMap::default()],
             reserved_slots: std::collections::HashSet::new(),
             breakable_frames: Vec::new(),
+            handler_depth: 0,
             parent_vars: FxHashMap::default(),
             upvalues: Vec::new(),
             upvalue_slots: FxHashMap::default(),
@@ -580,6 +583,7 @@ impl CodeGenerator {
 
     fn begin_iterator_close_region(&mut self) -> (usize, usize) {
         self.emit(Opcode::Try);
+        self.handler_depth += 1;
         let catch_pc_pos = self.code.len();
         self.emit_i32(0);
         let finally_pc_pos = self.code.len();
@@ -596,6 +600,7 @@ impl CodeGenerator {
         always_close: bool,
     ) {
         self.emit(Opcode::Catch);
+        self.handler_depth -= 1;
         self.emit(Opcode::Jump);
         let normal_jump = self.code.len();
         self.emit_i32(0);
@@ -656,6 +661,11 @@ impl CodeGenerator {
     }
 
     fn patch_jump(&mut self, patch_pos: usize, target_pos: usize) {
+        if patch_pos >= 3 && self.code[patch_pos - 3] == Opcode::JumpBreak as u8 {
+            let offset = (target_pos as i64 - patch_pos as i64 - 4) as i32;
+            self.code[patch_pos..patch_pos + 4].copy_from_slice(&offset.to_le_bytes());
+            return;
+        }
         if patch_pos >= 1 {
             let op_byte = self.code[patch_pos - 1];
             let is_uncond = op_byte == Opcode::Jump as u8;
@@ -2410,7 +2420,21 @@ impl CodeGenerator {
                 } else if self.breakable_frames.is_empty() {
                     return Err("SyntaxError: Illegal break statement".to_string());
                 }
-                self.emit(Opcode::Jump);
+                let depth = if let Some(label) = &stmt.label {
+                    self.breakable_frames
+                        .iter()
+                        .rev()
+                        .find(|f| f.label.as_deref() == Some(label))
+                        .map(|f| f.handler_depth)
+                        .unwrap_or(self.handler_depth)
+                } else {
+                    self.breakable_frames
+                        .last()
+                        .map(|f| f.handler_depth)
+                        .unwrap_or(self.handler_depth)
+                };
+                self.emit(Opcode::JumpBreak);
+                self.emit_u16(depth as u16);
                 let patch = self.code.len();
                 self.emit_i32(0);
                 if let Some(label) = &stmt.label {
@@ -2444,7 +2468,25 @@ impl CodeGenerator {
                 {
                     return Err("SyntaxError: Illegal continue statement".to_string());
                 }
-                self.emit(Opcode::Jump);
+                let depth = if let Some(label) = &stmt.label {
+                    self.breakable_frames
+                        .iter()
+                        .rev()
+                        .find(|f| {
+                            f.label.as_deref() == Some(label) && f.continue_target.is_some()
+                        })
+                        .map(|f| f.handler_depth)
+                        .unwrap_or(self.handler_depth)
+                } else {
+                    self.breakable_frames
+                        .iter()
+                        .rev()
+                        .find(|f| f.continue_target.is_some())
+                        .map(|f| f.handler_depth)
+                        .unwrap_or(self.handler_depth)
+                };
+                self.emit(Opcode::JumpBreak);
+                self.emit_u16(depth as u16);
                 let patch = self.code.len();
                 self.emit_i32(0);
                 if let Some(label) = &stmt.label {
@@ -2505,6 +2547,7 @@ impl CodeGenerator {
                 self.pending_label = None;
                 self.breakable_frames.push(BreakableFrame {
                     label: Some(stmt.label.clone()),
+                    handler_depth: self.handler_depth,
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     continue_target: None,
@@ -3463,6 +3506,7 @@ impl CodeGenerator {
                 self.pending_label = Some(labeled.label.clone());
                 self.breakable_frames.push(BreakableFrame {
                     label: Some(labeled.label.clone()),
+                    handler_depth: self.handler_depth,
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     continue_target: None,
@@ -3964,6 +4008,7 @@ impl CodeGenerator {
 
         self.breakable_frames.push(BreakableFrame {
             label: None,
+            handler_depth: self.handler_depth,
             break_patches: vec![break_jump],
             continue_patches: Vec::new(),
             continue_target: Some(loop_start),
@@ -4099,6 +4144,7 @@ impl CodeGenerator {
         let loop_start_for_continue = loop_start;
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
+            handler_depth: self.handler_depth,
             break_patches: if stmt.test.is_some() {
                 vec![break_jump]
             } else {
@@ -4269,6 +4315,7 @@ impl CodeGenerator {
 
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
+            handler_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: Some(0),
@@ -4465,6 +4512,7 @@ impl CodeGenerator {
 
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
+            handler_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: Some(0),
@@ -4539,6 +4587,7 @@ impl CodeGenerator {
 
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
+            handler_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: Some(0),
@@ -4624,6 +4673,7 @@ impl CodeGenerator {
 
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
+            handler_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: None,
@@ -4684,6 +4734,7 @@ impl CodeGenerator {
         result_reg: Option<u16>,
     ) -> Result<(), String> {
         self.emit(Opcode::Try);
+        self.handler_depth += 1;
         let catch_pc_pos = self.code.len();
         self.emit_i32(0);
         let finally_pc_pos = self.code.len();
@@ -4704,6 +4755,7 @@ impl CodeGenerator {
         self.pop_scope();
 
         self.emit(Opcode::Catch);
+        self.handler_depth -= 1;
 
         self.emit(Opcode::Jump);
         let end_jump_pos = self.code.len();
@@ -4723,6 +4775,7 @@ impl CodeGenerator {
             // Wrap catch body in Try-Finally so exceptions inside catch run finally
             if has_finally {
                 self.emit(Opcode::Try);
+                self.handler_depth += 1;
                 let _catch_inner_catch_pc = self.code.len();
                 self.emit_i32(0); // placeholder for catch_pc (set to finally_start)
                 catch_inner_finally_placeholder = Some(self.code.len());
@@ -4778,6 +4831,7 @@ impl CodeGenerator {
 
             if has_finally {
                 self.emit(Opcode::Catch);
+                self.handler_depth -= 1;
             }
 
             self.emit(Opcode::Jump);
