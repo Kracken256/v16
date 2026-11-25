@@ -144,6 +144,19 @@ impl Parser {
         self.peek_token.as_ref().map_or(false, |t| t.value == value)
     }
 
+    fn peek_starts_class_element_name(&self) -> bool {
+        match self.peek_token.as_ref().map(|t| t.token_type) {
+            Some(TokenType::Identifier)
+            | Some(TokenType::Keyword)
+            | Some(TokenType::PrivateIdentifier)
+            | Some(TokenType::String)
+            | Some(TokenType::Number)
+            | Some(TokenType::BigInt) => true,
+            Some(TokenType::Punctuator) => self.peek_at("["),
+            _ => false,
+        }
+    }
+
     fn peek_value(&self) -> Option<&str> {
         self.peek_token.as_ref().map(|t| t.value.as_str())
     }
@@ -761,11 +774,11 @@ impl Parser {
                 is_generator = true;
             }
 
-            let method_kind = if self.at_keyword("get") && !self.peek_at("(") && !self.peek_at(",")
+            let method_kind = if self.at_keyword("get") && self.peek_starts_class_element_name()
             {
                 self.advance();
                 MethodKind::Get
-            } else if self.at_keyword("set") && !self.peek_at("(") && !self.peek_at(",") {
+            } else if self.at_keyword("set") && self.peek_starts_class_element_name() {
                 self.advance();
                 MethodKind::Set
             } else if is_static && self.at_keyword("constructor") {
