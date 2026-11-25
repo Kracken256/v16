@@ -1309,6 +1309,9 @@ impl Parser {
     }
 
     fn parse_statement_body(&mut self, allow_function: bool) -> Result<ASTNode, String> {
+        if self.is_eof() {
+            return Err("SyntaxError: Unexpected end of input".to_string());
+        }
         if self.is_lexical_declaration_start() {
             return Err(
                 "SyntaxError: Lexical declaration cannot appear in a single-statement context"
@@ -2287,6 +2290,12 @@ impl Parser {
                         computed: false,
                     });
                 } else {
+                    if !matches!(
+                        self.cur_type(),
+                        Some(TokenType::Identifier) | Some(TokenType::Keyword)
+                    ) {
+                        return Err(self.error("Expected identifier name after '.'"));
+                    }
                     let name = self.cur_value().to_string();
                     self.advance();
                     expr = Expression::MemberExpression(MemberExpression {
@@ -2320,6 +2329,12 @@ impl Parser {
                         "Optional chain cannot be followed by a template literal",
                     ));
                 } else {
+                    if !matches!(
+                        self.cur_type(),
+                        Some(TokenType::Identifier) | Some(TokenType::Keyword)
+                    ) {
+                        return Err(self.error("Expected identifier name after '?.'"));
+                    }
                     let name = self.cur_value().to_string();
                     self.advance();
                     expr = Expression::OptionalMemberExpression(OptionalMemberExpression {
@@ -2783,6 +2798,7 @@ impl Parser {
         self.expect("{")?;
         let mut properties = Vec::new();
         let mut trailing_comma_after_spread = false;
+        let mut proto_data_count = 0u32;
         while !self.at_punct("}") && !self.is_eof() {
             if self.at_punct("...") {
                 self.advance();
@@ -2806,6 +2822,9 @@ impl Parser {
             {
                 self.advance();
                 is_async = true;
+                if self.has_line_terminator() {
+                    return Err(self.error("Line terminator not allowed after 'async'"));
+                }
             }
 
             let mut is_generator = false;
@@ -2816,6 +2835,10 @@ impl Parser {
 
             let key_escaped = self.current.as_ref().map_or(false, |t| t.had_escape);
             let (key, computed, shorthand) = self.parse_property_key()?;
+
+            if is_generator && !self.at_punct("(") {
+                return Err(self.error("Generator method must have a parameter list"));
+            }
 
             if self.at_punct("(") && !shorthand {
                 self.expect("(")?;
@@ -2897,6 +2920,19 @@ impl Parser {
             }
 
             if self.at_punct(":") {
+                if !computed && !key_escaped {
+                    let is_proto = match &key {
+                        PropertyKey::Identifier(n) => n == "__proto__",
+                        PropertyKey::Literal(Literal::String(v, _, _)) => v == "__proto__",
+                        _ => false,
+                    };
+                    if is_proto {
+                        proto_data_count += 1;
+                        if proto_data_count > 1 {
+                            return Err(self.error("Duplicate __proto__ fields are not allowed"));
+                        }
+                    }
+                }
                 self.advance();
                 let value = self.parse_assignment_expression()?;
                 properties.push(Property::Property {
