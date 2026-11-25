@@ -1267,11 +1267,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             validate_expression(&l.right, ctx)
         }
         Expression::ConditionalExpression(c) => {
-            if ctx.in_generator
-                && (unparenthesized_yield(&c.test)
-                    || unparenthesized_yield(&c.consequent)
-                    || unparenthesized_yield(&c.alternate))
-            {
+            if ctx.in_generator && unparenthesized_yield(&c.test) {
                 return Err(
                     "SyntaxError: yield expression may not be a conditional operand".to_string()
                 );

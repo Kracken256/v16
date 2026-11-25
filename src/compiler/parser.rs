@@ -2582,6 +2582,9 @@ impl Parser {
             } else {
                 false
             };
+            if !self.has_line_terminator() {
+                self.relex_current_as_regexp();
+            }
             let argument = if self.has_line_terminator()
                 || !self.token_starts_assignment_expression()
             {
