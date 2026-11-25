@@ -117,6 +117,7 @@ struct ParentVar {
     closed: bool,
     is_function_name: bool,
     is_block_decl: bool,
+    is_global_lexical: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1108,6 +1109,7 @@ impl CodeGenerator {
                                 closed: false,
                                 is_function_name: false,
                                 is_block_decl: true,
+                                is_global_lexical: false,
                             },
                         );
                     }
@@ -1383,7 +1385,7 @@ impl CodeGenerator {
         if let Some(parent_var) = self.parent_vars.get(name) {
             // If the variable's scope has been closed (popped), don't resolve
             // it as an upvalue — closures after the scope should not see it.
-            if parent_var.closed {
+            if parent_var.closed || parent_var.is_global_lexical {
                 return None;
             }
             if name == "arguments" && self.is_arrow {
@@ -2739,6 +2741,9 @@ impl CodeGenerator {
         }
         for name in inherited {
             if let Some(parent_var) = parent_vars.get(&name) {
+                if parent_var.is_global_lexical {
+                    continue;
+                }
                 if self.upvalue_slots.contains_key(&name) {
                     continue;
                 }
@@ -2815,6 +2820,7 @@ impl CodeGenerator {
                     closed: false,
                     is_function_name: false,
                     is_block_decl: false,
+                    is_global_lexical: false,
                 },
             );
             let mut arguments_locals: std::collections::HashSet<String> =
@@ -11404,6 +11410,9 @@ impl CodeGenerator {
                 if scope_idx == 0 && !entry.initialized {
                     continue;
                 }
+                let is_global_lexical = self.is_global_scope()
+                    && scope_idx == 1
+                    && self.global_lexical_names.contains(name);
                 parent_vars.insert(
                     name.clone(),
                     ParentVar {
@@ -11414,12 +11423,17 @@ impl CodeGenerator {
                         closed: false,
                         is_function_name: entry.is_function_name,
                         is_block_decl: false,
+                        is_global_lexical,
                     },
                 );
             }
         }
         for (name, &slot) in &self.upvalue_slots {
             if !parent_vars.contains_key(name) {
+                let is_global_lexical = self
+                    .parent_vars
+                    .get(name)
+                    .map_or(false, |pv| pv.is_global_lexical);
                 parent_vars.insert(
                     name.clone(),
                     ParentVar {
@@ -11430,6 +11444,7 @@ impl CodeGenerator {
                         closed: false,
                         is_function_name: false,
                         is_block_decl: false,
+                        is_global_lexical,
                     },
                 );
             }
@@ -11447,6 +11462,7 @@ impl CodeGenerator {
                             closed: false,
                             is_function_name: false,
                             is_block_decl: false,
+                            is_global_lexical: false,
                         },
                     );
                 }
@@ -11664,6 +11680,9 @@ impl CodeGenerator {
                 if scope_idx == 0 && !entry.initialized {
                     continue;
                 }
+                let is_global_lexical = self.is_global_scope()
+                    && scope_idx == 1
+                    && self.global_lexical_names.contains(var_name);
                 class_parent_vars.insert(
                     var_name.clone(),
                     ParentVar {
@@ -11674,6 +11693,7 @@ impl CodeGenerator {
                         closed: false,
                         is_function_name: entry.is_function_name,
                         is_block_decl: false,
+                        is_global_lexical,
                     },
                 );
             }
@@ -11691,6 +11711,7 @@ impl CodeGenerator {
                         closed: false,
                         is_function_name: false,
                         is_block_decl: false,
+                        is_global_lexical: false,
                     },
                 );
             }
@@ -11707,6 +11728,7 @@ impl CodeGenerator {
                     closed: false,
                     is_function_name: false,
                     is_block_decl: false,
+                    is_global_lexical: false,
                 },
             );
         }
