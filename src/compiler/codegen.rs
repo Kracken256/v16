@@ -4394,7 +4394,6 @@ impl CodeGenerator {
         self.emit(Opcode::GetPropertyNames);
         self.emit_u16(keys_reg);
         self.emit_u16(obj_reg);
-        self.free_register(obj_reg);
 
         let idx_reg = self.alloc_register();
         self.emit_int_const(idx_reg, 0);
@@ -4442,6 +4441,17 @@ impl CodeGenerator {
         self.emit_u16(key_val_reg);
         self.emit_u16(keys_reg);
         self.emit_u16(idx_reg);
+
+        let still_present_reg = self.alloc_register();
+        self.emit(Opcode::HasProperty);
+        self.emit_u16(still_present_reg);
+        self.emit_u16(obj_reg);
+        self.emit_u16(key_val_reg);
+        self.emit(Opcode::JumpIfNot);
+        self.emit_u16(still_present_reg);
+        let skip_patch = self.code.len();
+        self.emit_i32(0);
+        self.free_register(still_present_reg);
 
         if needs_block_scope {
             self.emit_reset_per_iter_bindings();
@@ -4518,6 +4528,7 @@ impl CodeGenerator {
         if let Some(frame) = self.breakable_frames.last_mut() {
             frame.continue_target = Some(continue_target);
         }
+        self.patch_jump(skip_patch, continue_target);
 
         self.emit(Opcode::IncLocal);
         self.emit_u16(idx_reg);
@@ -4539,6 +4550,7 @@ impl CodeGenerator {
 
         self.free_register(keys_reg);
         self.free_register(idx_reg);
+        self.free_register(obj_reg);
 
         if needs_block_scope {
             self.pop_scope();
