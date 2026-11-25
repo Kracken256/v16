@@ -1435,10 +1435,18 @@ impl VM {
         obj_reg: u16,
         is_call_new: bool,
         is_call_method: bool,
+        is_super_call: bool,
     ) -> Result<bool, String> {
         if func_val.is_function() {
             let ptr = func_val.get_ptr();
             let js_func = unsafe { JSValue::function_from_ptr(ptr) };
+            if js_func.is_class_constructor && !is_call_new && !is_super_call {
+                self.set_pending_type_error(
+                    ctx,
+                    "Class constructor cannot be invoked without 'new'",
+                );
+                return Ok(false);
+            }
             if let Some(ref rb) = js_func.bytecode {
                 let return_pc = self.pc;
                 let caller_base = self.cached_registers_base;
@@ -3078,6 +3086,12 @@ impl VM {
         if func.is_object() {
             let obj = func.as_object();
             if let Some(bound_fn) = obj.get(ctx.common_atoms.__boundFn) {
+                if bound_fn.is_function() && bound_fn.as_function().is_class_constructor {
+                    let msg = "Class constructor cannot be invoked without 'new'".to_string();
+                    self.set_pending_type_error(ctx, &msg);
+                    self.last_caught_exception = self.pending_throw.take();
+                    return Err(msg);
+                }
                 let bound_this = obj.get(ctx.common_atoms.__boundThis).unwrap_or(this_value);
                 let bound_args_val = obj
                     .get(ctx.common_atoms.__boundArgs)
@@ -9051,6 +9065,7 @@ impl VM {
                         obj_reg,
                         is_call_new,
                         is_call_method,
+                        is_super_call,
                     )?;
                     self.eval_direct_active = false;
                     if is_super_call {
@@ -9112,7 +9127,7 @@ impl VM {
                     let this_val = obj_val;
 
                     if self.execute_call(
-                        ctx, func_val, this_val, dst, argc, arg_regs, obj_reg, false, true,
+                        ctx, func_val, this_val, dst, argc, arg_regs, obj_reg, false, true, false,
                     )? {
                         continue;
                     }
@@ -9281,6 +9296,20 @@ impl VM {
                     if func_val.is_function() {
                         let ptr = func_val.get_ptr();
                         let js_func = func_val.as_function();
+                        if js_func.is_class_constructor && !is_call_new && !is_super_call {
+                            self.set_pending_type_error(
+                                ctx,
+                                "Class constructor cannot be invoked without 'new'",
+                            );
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                         if let Some(ref rb) = js_func.bytecode {
                             if js_func.is_generator() {
                                 match self.instantiate_generator_object(
