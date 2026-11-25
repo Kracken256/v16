@@ -373,6 +373,7 @@ pub struct ArrowFunction {
     pub params: Vec<Parameter>,
     pub body: ArrowBody,
     pub is_async: bool,
+    pub parenthesized: bool,
 }
 
 #[derive(Debug, Clone)]

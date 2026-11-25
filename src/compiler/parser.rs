@@ -702,7 +702,7 @@ impl Parser {
         self.advance();
         let super_class = if self.at_keyword("extends") {
             self.advance();
-            Some(Box::new(self.parse_assignment_expression()?))
+            Some(self.parse_class_heritage()?)
         } else {
             None
         };
@@ -730,7 +730,7 @@ impl Parser {
         };
         let super_class = if self.at_keyword("extends") {
             self.advance();
-            Some(Box::new(self.parse_assignment_expression()?))
+            Some(self.parse_class_heritage()?)
         } else {
             None
         };
@@ -742,6 +742,16 @@ impl Parser {
             super_class,
             body,
         }))
+    }
+
+    fn parse_class_heritage(&mut self) -> Result<Box<Expression>, String> {
+        let expr = self.parse_assignment_expression()?;
+        if let Expression::ArrowFunction(arrow) = &expr {
+            if !arrow.parenthesized {
+                return Err(self.error("Expected expression, got '=>'"));
+            }
+        }
+        Ok(Box::new(expr))
     }
 
     fn parse_class_body(&mut self) -> Result<ClassBody, String> {
@@ -1933,7 +1943,7 @@ impl Parser {
         self.advance();
         let super_class = if self.at_keyword("extends") {
             self.advance();
-            Some(Box::new(self.parse_assignment_expression()?))
+            Some(self.parse_class_heritage()?)
         } else {
             None
         };
@@ -2084,6 +2094,7 @@ impl Parser {
             params,
             body,
             is_async,
+            parenthesized: false,
         })))
     }
 
@@ -2688,6 +2699,7 @@ impl Parser {
             let mut expr = self.with_allow_in(Self::parse_expression)?;
             self.expect(")")?;
             match &mut expr {
+                Expression::ArrowFunction(a) => a.parenthesized = true,
                 Expression::YieldExpression(y) => y.parenthesized = true,
                 Expression::AssignmentExpression(a) => a.parenthesized = true,
                 Expression::Identifier(id) => id.parenthesized = true,
