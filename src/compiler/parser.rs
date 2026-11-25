@@ -14,6 +14,7 @@ pub struct Parser {
     saved_col: u32,
     allow_in: bool,
     in_generator: bool,
+    pub in_async: bool,
 }
 
 impl Parser {
@@ -33,6 +34,7 @@ impl Parser {
             saved_col,
             allow_in: true,
             in_generator: false,
+            in_async: false,
         }
     }
 
@@ -551,7 +553,7 @@ impl Parser {
         self.expect("(")?;
         let params = self.parse_parameter_list()?;
         self.expect(")")?;
-        let body = self.parse_function_body(generator)?;
+        let body = self.parse_function_body(generator, is_async)?;
         Ok(ASTNode::FunctionDeclaration(FunctionDeclaration {
             name,
             params,
@@ -586,7 +588,7 @@ impl Parser {
         self.expect("(")?;
         let params = self.parse_parameter_list()?;
         self.expect(")")?;
-        let body = self.parse_function_body(generator)?;
+        let body = self.parse_function_body(generator, is_async)?;
         Ok(Expression::FunctionExpression(FunctionExpression {
             name,
             params,
@@ -662,14 +664,21 @@ impl Parser {
         Ok(BlockStatement { body, lines })
     }
 
-    fn parse_function_body(&mut self, generator: bool) -> Result<BlockStatement, String> {
+    fn parse_function_body(
+        &mut self,
+        generator: bool,
+        is_async: bool,
+    ) -> Result<BlockStatement, String> {
         let saved = self.in_generator;
+        let saved_async = self.in_async;
         let saved_allow_in = self.allow_in;
         self.in_generator = generator;
+        self.in_async = is_async;
         self.allow_in = true;
         let result = self.parse_block_body();
         self.allow_in = saved_allow_in;
         self.in_generator = saved;
+        self.in_async = saved_async;
         result
     }
 
@@ -837,7 +846,7 @@ impl Parser {
             self.expect("(")?;
             let params = self.parse_parameter_list()?;
             self.expect(")")?;
-            let body = self.parse_function_body(is_generator)?;
+            let body = self.parse_function_body(is_generator, is_async)?;
 
             let is_constructor_name =
                 matches!(&name, PropertyKey::Identifier(n) if n == "constructor");
@@ -1676,7 +1685,7 @@ impl Parser {
         self.expect("(")?;
         let params = self.parse_parameter_list()?;
         self.expect(")")?;
-        let body = self.parse_function_body(generator)?;
+        let body = self.parse_function_body(generator, is_async)?;
         Ok(FunctionDeclaration {
             name,
             params,
@@ -1824,13 +1833,16 @@ impl Parser {
         self.advance();
 
         let saved_generator = self.in_generator;
+        let saved_async = self.in_async;
         self.in_generator = false;
+        self.in_async = is_async;
         let body = if self.at_punct("{") {
             ArrowBody::Block(self.parse_block_body()?)
         } else {
             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
         };
         self.in_generator = saved_generator;
+        self.in_async = saved_async;
 
         Ok(Some(Expression::ArrowFunction(ArrowFunction {
             params,
@@ -2245,7 +2257,7 @@ impl Parser {
             }));
         }
 
-        if self.at_keyword("await") {
+        if self.at_keyword("await") && self.in_async {
             self.advance();
             let arg = self.parse_unary()?;
             return Ok(Expression::AwaitExpression(AwaitExpression {
@@ -2863,7 +2875,7 @@ impl Parser {
                 self.expect("(")?;
                 let params = self.parse_parameter_list()?;
                 self.expect(")")?;
-                let body = self.parse_function_body(is_generator)?;
+                let body = self.parse_function_body(is_generator, is_async)?;
                 properties.push(Property::Property {
                     key,
                     value: Box::new(Expression::FunctionExpression(FunctionExpression {
@@ -2904,7 +2916,7 @@ impl Parser {
                             self.expect("(")?;
                             let params = self.parse_parameter_list()?;
                             self.expect(")")?;
-                            let body = self.parse_function_body(false)?;
+                            let body = self.parse_function_body(false, false)?;
 
                             if accessor_kind == "get" && !params.is_empty() {
                                 return Err(self.error("getter must not have parameters"));
