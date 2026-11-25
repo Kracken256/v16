@@ -14,6 +14,7 @@ thread_local! {
 
 const PRIM_STRING_SHAPE_ID: usize = usize::MAX - 10;
 const PRIM_NUMBER_SHAPE_ID: usize = usize::MAX - 11;
+const PRIM_BOOL_SHAPE_ID: usize = usize::MAX - 12;
 
 #[derive(Clone, Copy)]
 enum BitwiseOp {
@@ -6850,6 +6851,8 @@ impl VM {
                             ctx.get_symbol_prototype()
                         } else if obj_val.is_bigint() {
                             ctx.get_bigint_prototype()
+                        } else if obj_val.is_bool() {
+                            ctx.get_bool_prototype()
                         } else {
                             ctx.get_object_prototype()
                         };
@@ -11869,6 +11872,8 @@ impl VM {
                 ctx.get_symbol_prototype()
             } else if obj_val.is_bigint() {
                 ctx.get_bigint_prototype()
+            } else if obj_val.is_bool() {
+                ctx.get_bool_prototype()
             } else {
                 ctx.get_object_prototype()
             };
@@ -11934,6 +11939,8 @@ impl VM {
                         let pc = if ic_pc == usize::MAX { 0 } else { ic_pc };
                         let pseudo_id = if obj_val.is_string() {
                             PRIM_STRING_SHAPE_ID
+                        } else if obj_val.is_bool() {
+                            PRIM_BOOL_SHAPE_ID
                         } else {
                             PRIM_NUMBER_SHAPE_ID
                         };
@@ -12344,8 +12351,15 @@ impl VM {
             } else {
                 Some(JSValue::undefined())
             }
-        } else if obj_val.is_int() || obj_val.is_float() || obj_val.is_bool() {
+        } else if obj_val.is_int() || obj_val.is_float() {
             if let Some(proto_ptr) = ctx.get_number_prototype() {
+                let proto_obj = unsafe { &*proto_ptr };
+                Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
+            } else {
+                Some(JSValue::undefined())
+            }
+        } else if obj_val.is_bool() {
+            if let Some(proto_ptr) = ctx.get_bool_prototype() {
                 let proto_obj = unsafe { &*proto_ptr };
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
@@ -12559,9 +12573,12 @@ impl VM {
         if (obj_val.is_string() && atom != ctx.common_atoms.length)
             || obj_val.is_int()
             || obj_val.is_float()
+            || obj_val.is_bool()
         {
             let pseudo_id = if obj_val.is_string() {
                 PRIM_STRING_SHAPE_ID
+            } else if obj_val.is_bool() {
+                PRIM_BOOL_SHAPE_ID
             } else {
                 PRIM_NUMBER_SHAPE_ID
             };

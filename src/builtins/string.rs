@@ -416,10 +416,16 @@ pub fn init_string(ctx: &mut JSContext) {
         ctx.intern("split"),
         create_builtin_function(ctx, "string_split"),
     );
-    set_ne(
-        &mut proto_obj,
+    proto_obj.define_property(
         ctx.common_atoms.length,
-        create_builtin_function(ctx, "string_length"),
+        crate::object::object::PropertyDescriptor {
+            value: Some(JSValue::new_int(0)),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
     );
     set_ne(
         &mut proto_obj,
