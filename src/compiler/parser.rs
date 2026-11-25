@@ -1,5 +1,5 @@
 use super::ast::*;
-use crate::compiler::lexer::{Lexer, Token, TokenType};
+use crate::compiler::lexer::{LastTokenKind, Lexer, Token, TokenType};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static TAGGED_TEMPLATE_SITE: AtomicU32 = AtomicU32::new(1);
@@ -46,6 +46,35 @@ impl Parser {
         self.saved_pos = self.lexer.pos;
         self.peek_token = self.lexer.next_token();
         cur
+    }
+
+    fn relex_current_as_regexp(&mut self) {
+        let Some(token) = self.current.as_ref() else {
+            return;
+        };
+        if token.token_type != TokenType::Punctuator || token.value != "/" {
+            return;
+        }
+        let start_pos = token.start_pos;
+        let line = token.line;
+        let column = token.column;
+        let line_terminator_before = token.line_terminator_before;
+        self.lexer.set_pos(start_pos);
+        self.lexer.line = line;
+        self.lexer.column = column;
+        self.lexer.set_last_token_kind(LastTokenKind::RegexPrefix);
+        let Some(mut token) = self.lexer.next_token() else {
+            return;
+        };
+        token.line_terminator_before = line_terminator_before;
+        if token.token_type != TokenType::Regex {
+            return;
+        }
+        self.current = Some(token);
+        self.saved_pos = self.lexer.pos;
+        self.saved_line = self.lexer.line;
+        self.saved_col = self.lexer.column;
+        self.peek_token = self.lexer.next_token();
     }
 
     fn expect(&mut self, value: &str) -> Result<Token, String> {
@@ -180,6 +209,7 @@ impl Parser {
         if self.is_eof() {
             return Ok(ASTNode::EmptyStatement);
         }
+        self.relex_current_as_regexp();
 
         let tok = self.current.clone();
 

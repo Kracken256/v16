@@ -29,6 +29,7 @@ pub struct Token {
     pub raw: String,
     pub line: u32,
     pub column: u32,
+    pub start_pos: usize,
     pub line_terminator_before: bool,
     pub had_escape: bool,
     pub had_legacy_escape: bool,
@@ -70,6 +71,7 @@ pub struct Lexer {
     pub last_string_had_escape: bool,
     pub error: Option<String>,
 
+    token_start_pos: usize,
     pending_line_terminator: bool,
 }
 
@@ -84,6 +86,7 @@ impl Lexer {
             cached_peek: None,
             last_string_had_escape: false,
             error: None,
+            token_start_pos: 0,
             pending_line_terminator: false,
         }
     }
@@ -121,6 +124,7 @@ impl Lexer {
 
     fn error_token(&self, message: String) -> Token {
         Token {
+            start_pos: 0,
             token_type: TokenType::Error,
             value: message,
             line: self.line,
@@ -144,6 +148,7 @@ impl Lexer {
 
     fn next_token_uncached(&mut self) -> Option<Token> {
         let mut token = self.next_token_uncached_inner()?;
+        token.start_pos = self.token_start_pos;
         token.line_terminator_before = token.line_terminator_before || self.pending_line_terminator;
         self.pending_line_terminator = false;
         Some(token)
@@ -151,6 +156,7 @@ impl Lexer {
 
     fn next_token_uncached_inner(&mut self) -> Option<Token> {
         self.skip_whitespace()?;
+        self.token_start_pos = self.pos;
         if self.pos >= self.source.len() {
             return None;
         }
@@ -197,6 +203,7 @@ impl Lexer {
                 TokenType::NoSubstitutionTemplate
             };
             return Some(Token {
+                start_pos: 0,
                 token_type,
                 value,
                 raw,
@@ -427,6 +434,7 @@ impl Lexer {
                 self.check_number_end();
             }
             return Token {
+                start_pos: 0,
                 token_type: if !valid {
                     TokenType::Punctuator
                 } else if is_bigint {
@@ -526,6 +534,7 @@ impl Lexer {
         }
 
         Token {
+            start_pos: 0,
             token_type: if !valid {
                 TokenType::Punctuator
             } else if is_bigint {
@@ -751,6 +760,7 @@ impl Lexer {
             self.fail("Unterminated string literal");
         }
         Token {
+            start_pos: 0,
             token_type: TokenType::String,
             value,
             line: token_line,
@@ -777,6 +787,7 @@ impl Lexer {
         }
         let value: String = self.source[start..self.pos].iter().collect();
         Token {
+            start_pos: 0,
             token_type: TokenType::Hashbang,
             value,
             line: self.line,
@@ -818,6 +829,7 @@ impl Lexer {
             TokenType::Identifier
         };
         Token {
+            start_pos: 0,
             token_type,
             value,
             line: self.line,
@@ -891,6 +903,7 @@ impl Lexer {
             }
         }
         Token {
+            start_pos: 0,
             token_type: TokenType::PrivateIdentifier,
             value,
             line: self.line,
@@ -920,6 +933,7 @@ impl Lexer {
                     value: String::new(),
                     line: self.line,
                     column: self.column,
+                    start_pos: 0,
                     line_terminator_before: false,
                     raw: String::new(),
                     had_escape: false,
@@ -949,6 +963,7 @@ impl Lexer {
                     value: String::new(),
                     line: self.line,
                     column: self.column,
+                    start_pos: 0,
                     line_terminator_before: false,
                     raw: String::new(),
                     had_escape: false,
@@ -963,6 +978,7 @@ impl Lexer {
                     self.advance();
                     self.last_token_kind = LastTokenKind::Dividend;
                     return Token {
+                        start_pos: 0,
                         token_type: TokenType::Punctuator,
                         value: "/=".to_string(),
                         line: self.line,
@@ -977,6 +993,7 @@ impl Lexer {
 
                 self.last_token_kind = LastTokenKind::RegexPrefix;
                 return Token {
+                    start_pos: 0,
                     token_type: TokenType::Punctuator,
                     value: "/".to_string(),
                     line: self.line,
@@ -1036,6 +1053,7 @@ impl Lexer {
             self.last_token_kind = LastTokenKind::Dividend;
 
             return Token {
+                start_pos: 0,
                 token_type: TokenType::Regex,
                 value: format!("{}/{}", pattern, flags),
                 line: self.line,
@@ -1049,6 +1067,7 @@ impl Lexer {
         }
         self.last_token_kind = LastTokenKind::RegexPrefix;
         Token {
+            start_pos: 0,
             token_type: TokenType::Punctuator,
             value: "/".to_string(),
             line: self.line,
@@ -1229,6 +1248,7 @@ impl Lexer {
         };
 
         Token {
+            start_pos: 0,
             token_type: TokenType::Punctuator,
             value,
             line: self.line,
@@ -1571,6 +1591,7 @@ impl Lexer {
         };
         self.last_token_kind = LastTokenKind::Dividend;
         Some(Token {
+            start_pos: 0,
             token_type,
             value,
             raw,
