@@ -86,7 +86,19 @@ fn parse_quantifier(state: &mut ParseState) -> Result<Option<Quantifier>, String
             state.next();
             Quantifier::question()
         }
-        '{' => parse_brace_quantifier(state)?,
+        '{' => {
+            let start = state.pos;
+            match parse_brace_quantifier(state)? {
+                Some(q) => q,
+                None => {
+                    if state.is_unicode {
+                        return Err("Incomplete quantifier".to_string());
+                    }
+                    state.pos = start;
+                    return Ok(None);
+                }
+            }
+        }
         _ => unreachable!(),
     };
 
@@ -100,29 +112,32 @@ fn parse_quantifier(state: &mut ParseState) -> Result<Option<Quantifier>, String
     Ok(Some(q))
 }
 
-fn parse_brace_quantifier(state: &mut ParseState) -> Result<Quantifier, String> {
+fn parse_brace_quantifier(state: &mut ParseState) -> Result<Option<Quantifier>, String> {
     state.expect('{')?;
 
-    let min = state
-        .parse_number()
-        .ok_or_else(|| "Expected number in quantifier".to_string())?;
+    let min = match state.parse_number() {
+        Some(n) => n,
+        None => return Ok(None),
+    };
 
     let max = if state.peek() == Some(',') {
         state.next();
         if state.peek() == Some('}') {
             None
         } else {
-            Some(
-                state
-                    .parse_number()
-                    .ok_or_else(|| "Expected number in quantifier".to_string())?,
-            )
+            match state.parse_number() {
+                Some(n) => Some(n),
+                None => return Ok(None),
+            }
         }
     } else {
         Some(min)
     };
 
-    state.expect('}')?;
+    if state.peek() != Some('}') {
+        return Ok(None);
+    }
+    state.next();
 
     if let Some(max_val) = max {
         if min > max_val {
@@ -130,7 +145,7 @@ fn parse_brace_quantifier(state: &mut ParseState) -> Result<Quantifier, String> 
         }
     }
 
-    Ok(Quantifier::range(min, max))
+    Ok(Some(Quantifier::range(min, max)))
 }
 
 fn parse_atom(state: &mut ParseState) -> Result<Ast, String> {
@@ -155,6 +170,18 @@ fn parse_atom(state: &mut ParseState) -> Result<Ast, String> {
         Some('\\') => parse_escape(state),
         Some('(') => parse_group(state),
         Some('[') => parse_char_class(state),
+        Some('{') if !state.is_unicode => {
+            if is_braced_quantifier_shape(state) {
+                Err("Nothing to repeat".to_string())
+            } else {
+                state.next();
+                Ok(Ast::Char('{'))
+            }
+        }
+        Some(']') | Some('}') if !state.is_unicode => {
+            let c = state.next().unwrap();
+            Ok(Ast::Char(c))
+        }
         Some(c) if is_special_char(c) => Err(format!(
             "Unexpected special character '{}' at position {}",
             c, state.pos
@@ -164,6 +191,40 @@ fn parse_atom(state: &mut ParseState) -> Result<Ast, String> {
             Ok(Ast::Char(c))
         }
     }
+}
+
+fn is_braced_quantifier_shape(state: &ParseState) -> bool {
+    let pattern = &state.pattern;
+    let mut pos = state.pos + 1;
+
+    if pos >= pattern.len() || !pattern[pos].is_ascii_digit() {
+        return false;
+    }
+    while pos < pattern.len() && pattern[pos].is_ascii_digit() {
+        pos += 1;
+    }
+
+    if pos >= pattern.len() {
+        return false;
+    }
+    if pattern[pos] == '}' {
+        return true;
+    }
+    if pattern[pos] != ',' {
+        return false;
+    }
+    pos += 1;
+
+    if pos < pattern.len() && pattern[pos] == '}' {
+        return true;
+    }
+    if pos >= pattern.len() || !pattern[pos].is_ascii_digit() {
+        return false;
+    }
+    while pos < pattern.len() && pattern[pos].is_ascii_digit() {
+        pos += 1;
+    }
+    pos < pattern.len() && pattern[pos] == '}'
 }
 
 fn parse_escape(state: &mut ParseState) -> Result<Ast, String> {
