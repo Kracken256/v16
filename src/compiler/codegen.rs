@@ -4352,6 +4352,7 @@ impl CodeGenerator {
             ForInOfLeft::AssignmentTarget(at) => !matches!(at, AssignmentTarget::Identifier(_)),
         };
 
+        let mut dynamic_target = false;
         let var_slot = if has_complex_left {
             let tmp_slot = self.alloc_register();
             self.free_register(tmp_slot);
@@ -4379,7 +4380,8 @@ impl CodeGenerator {
                     } else if !self.is_strict {
                         self.declare_var(name, VariableKind::Var)
                     } else {
-                        return Err(format!("for-in: undefined variable {}", name));
+                        dynamic_target = true;
+                        self.alloc_register()
                     }
                 }
                 _ => 255,
@@ -4487,7 +4489,7 @@ impl CodeGenerator {
             }
 
             if let Some(ref name) = loop_var_name {
-                if self.is_global_var(name) {
+                if self.is_global_var(name) || dynamic_target {
                     let atom = ctx.intern(name);
                     let idx = self.add_constant(JSValue::new_string(atom));
                     let src = if var_slot != key_val_reg {
@@ -4499,6 +4501,9 @@ impl CodeGenerator {
                     self.emit_u32(idx);
                     self.emit_u16(src);
                 }
+            }
+            if dynamic_target {
+                self.free_register(var_slot);
             }
         }
         self.free_register(key_val_reg);
