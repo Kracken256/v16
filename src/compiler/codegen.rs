@@ -27,6 +27,53 @@ struct BreakableFrame {
     continue_depth: usize,
 }
 
+struct DisposalRegion {
+    stack: u16,
+    state: u16,
+    index: u16,
+    awaited: u16,
+    error: u16,
+    flags: u16,
+    catch_pc_pos: usize,
+    finally_pc_pos: usize,
+}
+
+impl DisposalRegion {
+    fn alloc(cg: &mut CodeGenerator) -> Self {
+        let stack = cg.alloc_register();
+        let state = cg.alloc_register();
+        let index = cg.alloc_register();
+        let awaited = cg.alloc_register();
+        let error = cg.alloc_register();
+        let flags = cg.alloc_register();
+        DisposalRegion {
+            stack,
+            state,
+            index,
+            awaited,
+            error,
+            flags,
+            catch_pc_pos: 0,
+            finally_pc_pos: 0,
+        }
+    }
+
+    fn free(self, cg: &mut CodeGenerator) {
+        cg.free_register(self.stack);
+        cg.free_register(self.state);
+        cg.free_register(self.index);
+        cg.free_register(self.awaited);
+        cg.free_register(self.error);
+        cg.free_register(self.flags);
+    }
+}
+
+fn body_has_using_declaration(body: &[ASTNode]) -> bool {
+    body.iter().any(
+        |stmt| matches!(stmt, ASTNode::VariableDeclaration(decl) if decl.kind.is_using()),
+    )
+}
+
 #[derive(Clone)]
 struct WithScope {
     function_id: u32,
@@ -221,6 +268,7 @@ pub struct CodeGenerator {
     reserved_slots: std::collections::HashSet<u16>,
     breakable_frames: Vec<BreakableFrame>,
     handler_depth: usize,
+    scope_dispose_stack: Vec<Option<u16>>,
 
     parent_vars: FxHashMap<String, ParentVar>,
     upvalues: Vec<(u32, u16)>,
@@ -297,6 +345,7 @@ impl CodeGenerator {
             reserved_slots: std::collections::HashSet::new(),
             breakable_frames: Vec::new(),
             handler_depth: 0,
+            scope_dispose_stack: vec![None],
             parent_vars: FxHashMap::default(),
             upvalues: Vec::new(),
             upvalue_slots: FxHashMap::default(),
@@ -810,11 +859,11 @@ impl CodeGenerator {
 
     fn binding_is_const(&self, name: &str) -> bool {
         if let Some(entry) = self.lookup_var(name) {
-            return entry.kind == VariableKind::Const;
+            return entry.kind == VariableKind::Const || entry.kind.is_using();
         }
-        self.parent_vars
-            .get(name)
-            .map_or(false, |parent| parent.kind == VariableKind::Const)
+        self.parent_vars.get(name).map_or(false, |parent| {
+            parent.kind == VariableKind::Const || parent.kind.is_using()
+        })
     }
 
     fn binding_is_function_name(&self, name: &str) -> bool {
@@ -948,6 +997,7 @@ impl CodeGenerator {
     fn push_scope(&mut self) {
         self.scope_stack.push(FxHashMap::default());
         self.scope_is_global.push(false);
+        self.scope_dispose_stack.push(None);
         self.depth += 1;
     }
 
@@ -967,6 +1017,7 @@ impl CodeGenerator {
         }
         self.scope_stack.pop();
         self.scope_is_global.pop();
+        self.scope_dispose_stack.pop();
         self.depth = self.depth.saturating_sub(1);
     }
 
@@ -2680,6 +2731,8 @@ impl CodeGenerator {
             self.free_register(r);
         }
 
+        let disposal = self.begin_scope_disposal(&body.body);
+
         for (i, stmt) in body.body.iter().enumerate() {
             if let Some((start, end)) = self.pending_field_init_range {
                 self.in_field_initializer = i >= start && i < end;
@@ -2728,6 +2781,7 @@ impl CodeGenerator {
             }
         }
 
+        self.end_scope_disposal(disposal);
         self.pop_scope();
 
         if !already_returns {
@@ -2849,6 +2903,60 @@ impl CodeGenerator {
         self.function_uses_arguments = false;
 
         result
+    }
+
+    fn begin_disposal_region(&mut self) -> DisposalRegion {
+        let mut region = DisposalRegion::alloc(self);
+        for r in [
+            region.stack,
+            region.state,
+            region.index,
+            region.awaited,
+            region.error,
+            region.flags,
+        ] {
+            self.emit(Opcode::LoadUndefined);
+            self.emit_u16(r);
+        }
+        self.emit(Opcode::Try);
+        region.catch_pc_pos = self.code.len();
+        self.emit_i32(0);
+        region.finally_pc_pos = self.code.len();
+        self.emit_i32(0);
+        self.handler_depth += 1;
+        region
+    }
+
+    fn begin_scope_disposal(&mut self, body: &[ASTNode]) -> Option<DisposalRegion> {
+        if !body_has_using_declaration(body) {
+            return None;
+        }
+        let region = self.begin_disposal_region();
+        *self.scope_dispose_stack.last_mut().unwrap() = Some(region.stack);
+        Some(region)
+    }
+
+    fn end_scope_disposal(&mut self, region: Option<DisposalRegion>) {
+        let Some(region) = region else {
+            return;
+        };
+        self.emit(Opcode::Catch);
+        self.handler_depth -= 1;
+        let disposal_start = self.code.len();
+        let bytes = (disposal_start as i32).to_le_bytes();
+        self.code[region.catch_pc_pos..region.catch_pc_pos + 4].copy_from_slice(&bytes);
+        self.code[region.finally_pc_pos..region.finally_pc_pos + 4].copy_from_slice(&bytes);
+        self.emit(Opcode::Finally);
+        self.emit(Opcode::DisposeResourcesFinally);
+        self.emit_u16(region.stack);
+        self.emit_u16(region.state);
+        self.emit_u16(region.index);
+        self.emit_u16(region.awaited);
+        self.emit_u16(region.error);
+        self.emit_u16(region.flags);
+        self.emit(Opcode::EndFinally);
+        *self.scope_dispose_stack.last_mut().unwrap() = None;
+        region.free(self);
     }
 
     fn pre_scan_let_const(&mut self, body: &[ASTNode]) -> Result<(), String> {
@@ -3235,12 +3343,14 @@ impl CodeGenerator {
                 self.push_scope();
                 self.pre_scan_let_const(&block.body)?;
                 self.emit_tdz_for_block(&block.body)?;
+                let disposal = self.begin_scope_disposal(&block.body);
                 for (i, s) in block.body.iter().enumerate() {
                     if let Some(&line) = block.lines.get(i) {
                         self.emit_line(line);
                     }
                     self.gen_statement(s, ctx)?;
                 }
+                self.end_scope_disposal(disposal);
                 self.pop_scope();
             }
             ASTNode::IfStatement(stmt) => {
@@ -4190,6 +4300,26 @@ impl CodeGenerator {
         }
     }
 
+    fn emit_add_disposable_resource(
+        &mut self,
+        value_reg: u16,
+        async_kind: bool,
+    ) -> Result<(), String> {
+        let Some(Some(stack_reg)) = self.scope_dispose_stack.last().copied() else {
+            return Err("using declaration outside of a dispose scope".to_string());
+        };
+        self.emit_add_disposable_resource_to(value_reg, async_kind, stack_reg);
+        Ok(())
+    }
+
+    fn emit_add_disposable_resource_to(&mut self, value_reg: u16, async_kind: bool, stack_reg: u16) {
+        self.emit(Opcode::AddDisposableResource);
+        self.emit_u16(value_reg);
+        self.emit_u16(0xFFFF);
+        self.emit_u8(if async_kind { 1 } else { 0 });
+        self.emit_u16(stack_reg);
+    }
+
     fn gen_variable_declaration(
         &mut self,
         decl: &VariableDeclaration,
@@ -4202,6 +4332,9 @@ impl CodeGenerator {
 
             if let Some(init) = &d.init {
                 let reg = self.gen_expression_with_name(init, &d.id, ctx)?;
+                if decl.kind.is_using() {
+                    self.emit_add_disposable_resource(reg, decl.kind.is_await_using())?;
+                }
                 self.gen_binding_pattern(&d.id, reg, decl.kind, ctx)?;
                 self.free_register(reg);
             } else {
@@ -4408,6 +4541,7 @@ impl CodeGenerator {
         self.push_scope();
         self.pre_scan_let_const(&block.body)?;
         self.emit_tdz_for_block(&block.body)?;
+        let disposal = self.begin_scope_disposal(&block.body);
 
         for (i, s) in block.body.iter().enumerate() {
             if let Some(&line) = block.lines.get(i) {
@@ -4415,6 +4549,7 @@ impl CodeGenerator {
             }
             self.gen_statement_with_target(s, ctx, target_reg)?;
         }
+        self.end_scope_disposal(disposal);
         self.pop_scope();
         Ok(())
     }
@@ -4430,12 +4565,14 @@ impl CodeGenerator {
                 self.push_scope();
                 self.pre_scan_let_const(&block.body)?;
                 self.emit_tdz_for_block(&block.body)?;
+                let disposal = self.begin_scope_disposal(&block.body);
                 for (i, s) in block.body.iter().enumerate() {
                     if let Some(&line) = block.lines.get(i) {
                         self.emit_line(line);
                     }
                     self.gen_statement_with_target(s, ctx, target_reg)?;
                 }
+                self.end_scope_disposal(disposal);
                 self.pop_scope();
             }
             ASTNode::WithStatement(stmt) => {
@@ -4926,6 +5063,18 @@ impl CodeGenerator {
             }
         }
 
+        let using_init = matches!(
+            &stmt.init,
+            Some(ForInit::VariableDeclaration(decl)) if decl.kind.is_using()
+        );
+        let disposal = if using_init {
+            let region = self.begin_disposal_region();
+            *self.scope_dispose_stack.last_mut().unwrap() = Some(region.stack);
+            Some(region)
+        } else {
+            None
+        };
+
         if let Some(init) = &stmt.init {
             match init {
                 ForInit::VariableDeclaration(decl) => {
@@ -5056,6 +5205,8 @@ impl CodeGenerator {
         for patch in frame.continue_patches {
             self.patch_jump(patch, frame.continue_target.unwrap());
         }
+
+        self.end_scope_disposal(disposal);
 
         if needs_block_scope {
             self.pop_scope();
@@ -5414,6 +5565,18 @@ impl CodeGenerator {
             close_region = Some((catch_pc_pos, finally_pc_pos));
         }
 
+        let using_disposal = match &stmt.left {
+            ForInOfLeft::VariableDeclaration(decl)
+                if decl
+                    .declarations
+                    .first()
+                    .map_or(false, |_| decl.kind.is_using()) =>
+            {
+                Some(self.begin_disposal_region())
+            }
+            _ => None,
+        };
+
         self.breakable_frames.push(BreakableFrame {
             labels: std::mem::take(&mut self.pending_labels),
             is_label: false,
@@ -5430,6 +5593,15 @@ impl CodeGenerator {
         match &stmt.left {
             ForInOfLeft::VariableDeclaration(decl) => {
                 if let Some(first) = decl.declarations.first() {
+                    if decl.kind.is_using() {
+                        if let Some(region) = &using_disposal {
+                            self.emit_add_disposable_resource_to(
+                                val_reg,
+                                decl.kind.is_await_using(),
+                                region.stack,
+                            );
+                        }
+                    }
                     self.gen_binding_pattern(&first.id, val_reg, decl.kind, ctx)?;
                 } else {
                     return Err("for-of without variable".to_string());
@@ -5450,6 +5622,10 @@ impl CodeGenerator {
         let continue_target = self.code.len();
         if let Some(frame) = self.breakable_frames.last_mut() {
             frame.continue_target = Some(continue_target);
+        }
+
+        if using_disposal.is_some() {
+            self.end_scope_disposal(using_disposal);
         }
 
         if close_iterators {
@@ -5690,6 +5866,7 @@ impl CodeGenerator {
         self.push_scope();
         self.pre_scan_let_const(&stmt.block.body)?;
         self.emit_tdz_for_block(&stmt.block.body)?;
+        let block_disposal = self.begin_scope_disposal(&stmt.block.body);
         if let Some(v_reg) = result_reg {
             for s in &stmt.block.body {
                 self.gen_statement_with_target(s, ctx, v_reg)?;
@@ -5699,6 +5876,7 @@ impl CodeGenerator {
                 self.gen_statement(s, ctx)?;
             }
         }
+        self.end_scope_disposal(block_disposal);
         self.pop_scope();
 
         self.emit(Opcode::Catch);
@@ -5770,6 +5948,7 @@ impl CodeGenerator {
             }
             self.pre_scan_let_const(&handler.body.body)?;
             self.emit_tdz_for_block(&handler.body.body)?;
+            let handler_disposal = self.begin_scope_disposal(&handler.body.body);
             if let Some(v_reg) = result_reg {
                 for s in &handler.body.body {
                     self.gen_statement_with_target(s, ctx, v_reg)?;
@@ -5779,6 +5958,7 @@ impl CodeGenerator {
                     self.gen_statement(s, ctx)?;
                 }
             }
+            self.end_scope_disposal(handler_disposal);
             self.pop_scope();
 
             if has_finally {
@@ -5833,6 +6013,7 @@ impl CodeGenerator {
             self.push_scope();
             self.pre_scan_let_const(&finalizer.body)?;
             self.emit_tdz_for_block(&finalizer.body)?;
+            let finalizer_disposal = self.begin_scope_disposal(&finalizer.body);
             if let Some(v_reg) = result_reg {
                 for s in &finalizer.body {
                     self.gen_statement_with_target(s, ctx, v_reg)?;
@@ -5842,6 +6023,7 @@ impl CodeGenerator {
                     self.gen_statement(s, ctx)?;
                 }
             }
+            self.end_scope_disposal(finalizer_disposal);
             self.pop_scope();
             self.emit(Opcode::EndFinally);
 

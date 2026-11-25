@@ -798,6 +798,10 @@ pub struct VM {
 }
 
 impl VM {
+    const DISPOSE_FLAG_NEEDS_AWAIT: i32 = 1;
+    const DISPOSE_FLAG_HAS_AWAITED: i32 = 2;
+    const DISPOSE_FLAG_OUTPUT_THROW: i32 = 4;
+
     fn builtin_needs_callee(name: &str) -> bool {
         matches!(
             name,
@@ -3464,6 +3468,330 @@ impl VM {
             ThrowDispatch::Uncaught(e) => Err(e),
             ThrowDispatch::AsyncComplete(o) => Ok((false, Some(o))),
         }
+    }
+
+    fn ensure_dispose_stack(&mut self, ctx: &mut JSContext, stack_reg: u16) -> JSValue {
+        let stack_val = self.get_reg(stack_reg);
+        if stack_val.is_object_like() {
+            return stack_val;
+        }
+        let mut arr = crate::object::array_obj::JSArrayObject::with_capacity(24);
+        if let Some(proto) = ctx.get_array_prototype() {
+            arr.header.set_prototype_raw(proto);
+        }
+        arr.header.ensure_shape(ctx.shape_cache_mut());
+        let ptr = Box::into_raw(Box::new(arr)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track_array(ptr);
+        self.allocation_count += 1;
+        let val = JSValue::new_object(ptr);
+        self.set_reg(stack_reg, val);
+        val
+    }
+
+    fn dispatch_pending_throw(
+        &mut self,
+        ctx: &mut JSContext,
+    ) -> Result<Option<ExecutionOutcome>, String> {
+        let Some(exc) = self.take_pending_exception(ctx) else {
+            return Ok(None);
+        };
+        match self.dispatch_throw_value(ctx, exc) {
+            ThrowDispatch::Caught => Ok(None),
+            ThrowDispatch::Uncaught(e) => Err(e),
+            ThrowDispatch::AsyncComplete(o) => Ok(Some(o)),
+        }
+    }
+
+    fn get_dispose_method(
+        &mut self,
+        ctx: &mut JSContext,
+        value: JSValue,
+        async_kind: bool,
+    ) -> Result<Option<(i32, JSValue)>, String> {
+        if !async_kind {
+            let atom = crate::builtins::symbol::get_symbol_dispose_atom(ctx);
+            return match self.get_method(ctx, value, atom, "Symbol.dispose")? {
+                Some(method) => Ok(Some((0, method))),
+                None => Ok(None),
+            };
+        }
+        let async_atom = crate::builtins::symbol::get_symbol_async_dispose_atom(ctx);
+        if let Some(method) = self.get_method(ctx, value, async_atom, "Symbol.asyncDispose")? {
+            return Ok(Some((1, method)));
+        }
+        let sync_atom = crate::builtins::symbol::get_symbol_dispose_atom(ctx);
+        match self.get_method(ctx, value, sync_atom, "Symbol.dispose")? {
+            Some(method) => Ok(Some((2, method))),
+            None => Ok(None),
+        }
+    }
+
+    fn add_disposable_resource(
+        &mut self,
+        ctx: &mut JSContext,
+        value_reg: u16,
+        method_reg: u16,
+        async_kind: bool,
+        stack_reg: u16,
+    ) -> Result<Option<ExecutionOutcome>, String> {
+        let stack_val = self.ensure_dispose_stack(ctx, stack_reg);
+        let value = self.get_reg(value_reg);
+        let method_present = method_reg != 0xFFFF;
+        let mut record: Option<(JSValue, JSValue, i32)> = None;
+        if method_present {
+            let method = self.get_reg(method_reg);
+            record = Some((JSValue::undefined(), method, if async_kind { 1 } else { 0 }));
+        } else if value.is_null() || value.is_undefined() {
+            if async_kind {
+                record = Some((JSValue::undefined(), JSValue::undefined(), 3));
+            }
+        } else if !value.is_object_like() {
+            self.set_pending_type_error(ctx, "The value of a using declaration is not an object");
+            return self.dispatch_pending_throw(ctx);
+        } else {
+            match self.get_dispose_method(ctx, value, async_kind) {
+                Ok(Some((kind, method))) => {
+                    record = Some((value, method, kind));
+                }
+                Ok(None) => {
+                    self.set_pending_type_error(
+                        ctx,
+                        "The value of a using declaration has no dispose method",
+                    );
+                    return self.dispatch_pending_throw(ctx);
+                }
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                    let exc = self
+                        .take_pending_exception(ctx)
+                        .unwrap_or_else(JSValue::undefined);
+                    match self.dispatch_throw_value(ctx, exc) {
+                        ThrowDispatch::Caught => return Ok(None),
+                        ThrowDispatch::Uncaught(e) => return Err(e),
+                        ThrowDispatch::AsyncComplete(o) => return Ok(Some(o)),
+                    }
+                }
+            }
+        }
+        if let Some((resource_value, method, kind)) = record {
+            let ptr = stack_val.get_ptr() as *mut crate::object::array_obj::JSArrayObject;
+            let arr = unsafe { &mut *ptr };
+            arr.push(resource_value);
+            arr.push(method);
+            arr.push(JSValue::new_int(kind as i64));
+        }
+        Ok(None)
+    }
+
+    fn handle_dispose_error(
+        &mut self,
+        ctx: &mut JSContext,
+        flags: i32,
+        error_reg: u16,
+        flags_reg: u16,
+        error: JSValue,
+    ) -> i32 {
+        let mut flags = flags;
+        if flags & Self::DISPOSE_FLAG_OUTPUT_THROW != 0 {
+            let suppressed = self.get_reg(error_reg);
+            let combined =
+                crate::builtins::error::create_suppressed_error(ctx, error, suppressed);
+            self.set_reg(error_reg, combined);
+        } else {
+            flags |= Self::DISPOSE_FLAG_OUTPUT_THROW;
+            self.set_reg(error_reg, error);
+        }
+        self.set_reg(flags_reg, JSValue::new_int(flags as i64));
+        flags
+    }
+
+    fn dispose_resources_finally(
+        &mut self,
+        ctx: &mut JSContext,
+        instr_pc: usize,
+        stack_reg: u16,
+        state_reg: u16,
+        index_reg: u16,
+        await_reg: u16,
+        error_reg: u16,
+        flags_reg: u16,
+    ) -> Result<(bool, Option<ExecutionOutcome>), String> {
+        let mut flags = self.get_reg(flags_reg).get_int() as i32;
+        let state = self.get_reg(state_reg).get_int();
+        if state == 0 {
+            flags = 0;
+            let rethrow = self.pending_finally_rethrow.and_then(|(frame, exc)| {
+                if frame == self.frame_index {
+                    Some(exc)
+                } else {
+                    None
+                }
+            });
+            if let Some(exc) = rethrow {
+                flags |= Self::DISPOSE_FLAG_OUTPUT_THROW;
+                self.set_reg(error_reg, exc);
+            }
+            let stack_val = self.get_reg(stack_reg);
+            let count = if stack_val.is_object_like() {
+                let arr = unsafe {
+                    &*(stack_val.get_ptr() as *const crate::object::array_obj::JSArrayObject)
+                };
+                (arr.len() / 3) as i64
+            } else {
+                0
+            };
+            self.set_reg(index_reg, JSValue::new_int(count - 1));
+            self.set_reg(flags_reg, JSValue::new_int(flags as i64));
+        } else if state == -1 {
+            let exc = self.get_reg(await_reg);
+            flags = self.handle_dispose_error(ctx, flags, error_reg, flags_reg, exc);
+        } else if state == 4 {
+            self.finish_disposal(ctx, flags, error_reg);
+            self.reset_disposal_registers(
+                stack_reg, state_reg, index_reg, await_reg, error_reg, flags_reg,
+            );
+            return Ok((false, None));
+        } else {
+            self.set_reg(state_reg, JSValue::new_int(0));
+        }
+        loop {
+            let idx = self.get_reg(index_reg).get_int();
+            if idx < 0 {
+                break;
+            }
+            self.set_reg(index_reg, JSValue::new_int(idx - 1));
+            let (value, method, kind) = {
+                let stack_val = self.get_reg(stack_reg);
+                let arr = unsafe {
+                    &*(stack_val.get_ptr() as *const crate::object::array_obj::JSArrayObject)
+                };
+                let base = (idx as usize) * 3;
+                let value = arr.get(base).unwrap_or_else(JSValue::undefined);
+                let method = arr.get(base + 1).unwrap_or_else(JSValue::undefined);
+                let kind = arr.get(base + 2).map(|v| v.get_int()).unwrap_or(0);
+                (value, method, kind)
+            };
+            if kind == 0
+                && flags & Self::DISPOSE_FLAG_NEEDS_AWAIT != 0
+                && flags & Self::DISPOSE_FLAG_HAS_AWAITED == 0
+            {
+                flags &= !Self::DISPOSE_FLAG_NEEDS_AWAIT;
+                self.set_reg(flags_reg, JSValue::new_int(flags as i64));
+                return self.suspend_disposal(
+                    ctx, instr_pc, state_reg, await_reg, 2, JSValue::undefined(),
+                );
+            }
+            if !method.is_undefined() {
+                let result = self.call_function_with_this(ctx, method, value, &[]);
+                match result {
+                    Ok(resource_result) => {
+                        if kind == 0 {
+                        } else {
+                            flags |= Self::DISPOSE_FLAG_HAS_AWAITED;
+                            self.set_reg(flags_reg, JSValue::new_int(flags as i64));
+                            let promise = if kind == 2 {
+                                JSValue::undefined()
+                            } else {
+                                resource_result
+                            };
+                            let promise = ctx.call_builtin("promise_resolve", &[promise]);
+                            self.adopt_pending_host_exception(ctx);
+                            return self.suspend_disposal(
+                                ctx, instr_pc, state_reg, await_reg, 3, promise,
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        if kind == 2 {
+                            flags |= Self::DISPOSE_FLAG_HAS_AWAITED;
+                            self.set_reg(flags_reg, JSValue::new_int(flags as i64));
+                            self.rethrow_last_caught(ctx);
+                            let exc = self
+                                .take_pending_exception(ctx)
+                                .unwrap_or_else(JSValue::undefined);
+                            let promise = ctx.call_builtin("promise_reject", &[exc]);
+                            return self.suspend_disposal(
+                                ctx, instr_pc, state_reg, await_reg, 3, promise,
+                            );
+                        }
+                        self.rethrow_last_caught(ctx);
+                        let exc = self
+                            .take_pending_exception(ctx)
+                            .unwrap_or_else(JSValue::undefined);
+                        flags = self.handle_dispose_error(ctx, flags, error_reg, flags_reg, exc);
+                    }
+                }
+            } else {
+                flags |= Self::DISPOSE_FLAG_NEEDS_AWAIT;
+                self.set_reg(flags_reg, JSValue::new_int(flags as i64));
+            }
+        }
+        if flags & Self::DISPOSE_FLAG_NEEDS_AWAIT != 0 && flags & Self::DISPOSE_FLAG_HAS_AWAITED == 0 {
+            flags &= !Self::DISPOSE_FLAG_NEEDS_AWAIT;
+            self.set_reg(flags_reg, JSValue::new_int(flags as i64));
+            return self.suspend_disposal(ctx, instr_pc, state_reg, await_reg, 4, JSValue::undefined());
+        }
+        self.finish_disposal(ctx, flags, error_reg);
+        self.reset_disposal_registers(stack_reg, state_reg, index_reg, await_reg, error_reg, flags_reg);
+        Ok((false, None))
+    }
+
+    fn suspend_disposal(
+        &mut self,
+        ctx: &mut JSContext,
+        instr_pc: usize,
+        state_reg: u16,
+        await_reg: u16,
+        state: i64,
+        promise: JSValue,
+    ) -> Result<(bool, Option<ExecutionOutcome>), String> {
+        let promise = if promise.is_undefined() {
+            ctx.call_builtin("promise_resolve", &[JSValue::undefined()])
+        } else {
+            promise
+        };
+        self.set_reg(state_reg, JSValue::new_int(state));
+        self.set_reg(await_reg, JSValue::undefined());
+        self.await_suspend = Some((promise, await_reg));
+        self.pc = instr_pc;
+        self.pending_close_state = Some(state_reg);
+        Ok((true, None))
+    }
+
+    fn finish_disposal(&mut self, ctx: &mut JSContext, flags: i32, error_reg: u16) {
+        if flags & Self::DISPOSE_FLAG_OUTPUT_THROW != 0 {
+            if self
+                .pending_finally_return
+                .map_or(false, |(frame, _)| frame == self.frame_index)
+            {
+                self.pending_finally_return = None;
+            }
+            if self
+                .pending_finally_jump
+                .map_or(false, |(frame, _, _)| frame == self.frame_index)
+            {
+                self.pending_finally_jump = None;
+            }
+            let exc = self.get_reg(error_reg);
+            self.pending_finally_rethrow = Some((self.frame_index, exc));
+        }
+    }
+
+    fn reset_disposal_registers(
+        &mut self,
+        stack_reg: u16,
+        state_reg: u16,
+        index_reg: u16,
+        await_reg: u16,
+        error_reg: u16,
+        flags_reg: u16,
+    ) {
+        self.set_reg(stack_reg, JSValue::undefined());
+        self.set_reg(state_reg, JSValue::new_int(0));
+        self.set_reg(index_reg, JSValue::new_int(0));
+        self.set_reg(await_reg, JSValue::undefined());
+        self.set_reg(error_reg, JSValue::undefined());
+        self.set_reg(flags_reg, JSValue::new_int(0));
     }
 
     fn async_iterator_close_finally(
@@ -11725,6 +12053,47 @@ impl VM {
                         state_reg,
                         await_reg,
                         done_reg,
+                    ) {
+                        Ok((true, _)) => return Ok(ExecutionOutcome::Yield(JSValue::undefined())),
+                        Ok((false, Some(outcome))) => return Ok(outcome),
+                        Ok((false, None)) => {}
+                        Err(e) => {
+                            if self.pending_throw.is_some() {
+                                continue;
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
+                Opcode::AddDisposableResource => {
+                    let value_reg = self.read_u16_pc();
+                    let method_reg = self.read_u16_pc();
+                    let kind = self.read_u8();
+                    let stack_reg = self.read_u16_pc();
+                    match self.add_disposable_resource(ctx, value_reg, method_reg, kind != 0, stack_reg)
+                    {
+                        Ok(Some(outcome)) => return Ok(outcome),
+                        Ok(None) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+                Opcode::DisposeResourcesFinally => {
+                    let instr_pc = self.pc - 1;
+                    let stack_reg = self.read_u16_pc();
+                    let state_reg = self.read_u16_pc();
+                    let index_reg = self.read_u16_pc();
+                    let await_reg = self.read_u16_pc();
+                    let error_reg = self.read_u16_pc();
+                    let flags_reg = self.read_u16_pc();
+                    match self.dispose_resources_finally(
+                        ctx,
+                        instr_pc,
+                        stack_reg,
+                        state_reg,
+                        index_reg,
+                        await_reg,
+                        error_reg,
+                        flags_reg,
                     ) {
                         Ok((true, _)) => return Ok(ExecutionOutcome::Yield(JSValue::undefined())),
                         Ok((false, Some(outcome))) => return Ok(outcome),

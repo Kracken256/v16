@@ -210,6 +210,8 @@ pub enum Opcode {
     ToNumeric = 246,
     AsyncYieldStarStep = 247,
     AsyncIteratorCloseFinally = 248,
+    AddDisposableResource = 249,
+    DisposeResourcesFinally = 250,
 }
 
 impl Opcode {
@@ -411,6 +413,8 @@ impl Opcode {
             246 => Some(Opcode::ToNumeric),
             247 => Some(Opcode::AsyncYieldStarStep),
             248 => Some(Opcode::AsyncIteratorCloseFinally),
+            249 => Some(Opcode::AddDisposableResource),
+            250 => Some(Opcode::DisposeResourcesFinally),
             _ => None,
         }
     }
@@ -584,6 +588,8 @@ impl Opcode {
             Opcode::YieldStarStep => 9,
             Opcode::AsyncYieldStarStep => 13,
             Opcode::AsyncIteratorCloseFinally => 9,
+            Opcode::AddDisposableResource => 7,
+            Opcode::DisposeResourcesFinally => 12,
             Opcode::IteratorNextSend => 9,
             Opcode::IteratorClose => 3,
             Opcode::IteratorStep => 5,
@@ -1398,6 +1404,32 @@ impl Bytecode {
                     let awaited = read_u16(5);
                     let done = read_u16(7);
                     write!(operands, " r{}, r{}, r{}, r{}", iter, state, awaited, done)
+                    .unwrap();
+                }
+                Opcode::AddDisposableResource => {
+                    let value = read_u16(1);
+                    let method = read_u16(3);
+                    let kind = read_u8(5);
+                    let stack = read_u16(6);
+                    write!(
+                        operands,
+                        " r{}, r{}, {}, r{}",
+                        value, method, kind, stack
+                    )
+                    .unwrap();
+                }
+                Opcode::DisposeResourcesFinally => {
+                    let stack = read_u16(1);
+                    let state = read_u16(3);
+                    let index = read_u16(5);
+                    let awaited = read_u16(7);
+                    let error = read_u16(9);
+                    let flags = read_u16(11);
+                    write!(
+                        operands,
+                        " r{}, r{}, r{}, r{}, r{}, r{}",
+                        stack, state, index, awaited, error, flags
+                    )
                     .unwrap();
                 }
                 Opcode::IteratorNextSend => {
