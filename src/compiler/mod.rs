@@ -378,6 +378,68 @@ pub fn eval_code_via_ast_with_opt_level(
     result
 }
 
+fn eval_exception_from_message(ctx: &mut JSContext, message: &str) -> JSValue {
+    let trimmed = message.strip_prefix("Uncaught: ").unwrap_or(message);
+    let label = trimmed.split(':').next().unwrap_or("");
+    let name = match label {
+        "TypeError" | "SyntaxError" | "ReferenceError" | "RangeError" | "URIError"
+        | "EvalError" => label,
+        _ => "Error",
+    };
+    let mut err = crate::object::object::JSObject::new();
+    err.set(ctx.intern("name"), JSValue::new_string(ctx.intern(name)));
+    err.set(
+        ctx.intern("message"),
+        JSValue::new_string(ctx.intern(trimmed)),
+    );
+    let proto = match name {
+        "TypeError" => ctx.get_type_error_prototype(),
+        "SyntaxError" => ctx.get_syntax_error_prototype(),
+        "ReferenceError" => ctx.get_reference_error_prototype(),
+        "RangeError" => ctx.get_range_error_prototype(),
+        "URIError" => ctx.get_uri_error_prototype(),
+        "EvalError" => ctx.get_eval_error_prototype(),
+        _ => ctx.get_error_prototype(),
+    };
+    if let Some(proto) = proto {
+        err.prototype = Some(proto);
+    }
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
+pub fn eval_code_with_exception(
+    ctx: &mut JSContext,
+    source: &str,
+) -> Result<JSValue, JSValue> {
+    let opt_level = ctx.get_compiler_opt_level();
+    let rb = match compile_script_to_bytecode_with_opt_level(ctx, source, opt_level, false, false) {
+        Ok(rb) => rb,
+        Err(e) => return Err(eval_exception_from_message(ctx, &e)),
+    };
+
+    let saved_register_vm_ptr = ctx.get_register_vm_ptr();
+
+    let mut vm = crate::runtime::vm::VM::new();
+    let vm_ptr = &mut vm as *mut _ as usize;
+    ctx.set_register_vm_ptr(Some(vm_ptr));
+
+    let result = match vm.execute_preserving_registers(ctx, &rb) {
+        Ok(crate::runtime::vm::ExecutionOutcome::Complete(v)) => Ok(v),
+        Ok(crate::runtime::vm::ExecutionOutcome::Yield(v)) => Ok(v),
+        Err(e) => Err(vm
+            .take_pending_exception(ctx)
+            .unwrap_or_else(|| eval_exception_from_message(ctx, &e))),
+    };
+
+    run_microtasks_with_vm(ctx, &mut vm);
+
+    ctx.set_register_vm_ptr(saved_register_vm_ptr);
+
+    result
+}
+
 pub fn run_event_loop(ctx: &mut JSContext) -> Result<EventLoopResult, String> {
     ctx.run_event_loop()
 }

@@ -23,9 +23,12 @@ fn test262_eval_script(ctx: &mut v16::JSContext, args: &[JSValue]) -> JSValue {
     } else {
         String::new()
     };
-    match eval(ctx, &script) {
+    match v16::eval_script_with_exception(ctx, &script) {
         Ok(v) => v,
-        Err(_) => JSValue::undefined(),
+        Err(exc) => {
+            ctx.pending_exception = Some(exc);
+            JSValue::undefined()
+        }
     }
 }
 

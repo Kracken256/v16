@@ -175,7 +175,7 @@ fn test262_create_realm(ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue 
 }
 
 fn test262_eval_script(ctx: &mut v16::JSContext, args: &[JSValue]) -> JSValue {
-    let script = if let Some(v) = args.get(1) {
+    let script = if let Some(v) = args.get(0) {
         if v.is_string() {
             let atom = v.get_atom();
             ctx.get_atom_str(atom).to_string()
@@ -185,9 +185,12 @@ fn test262_eval_script(ctx: &mut v16::JSContext, args: &[JSValue]) -> JSValue {
     } else {
         String::new()
     };
-    match eval(ctx, &script) {
+    match v16::eval_script_with_exception(ctx, &script) {
         Ok(v) => v,
-        Err(_) => JSValue::undefined(),
+        Err(exc) => {
+            ctx.pending_exception = Some(exc);
+            JSValue::undefined()
+        }
     }
 }
 

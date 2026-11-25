@@ -31,6 +31,13 @@ pub fn eval_with_opt_level(
     result
 }
 
+pub fn eval_script_with_exception(
+    ctx: &mut JSContext,
+    code: &str,
+) -> Result<JSValue, JSValue> {
+    compiler::eval_code_with_exception(ctx, code)
+}
+
 pub fn eval_via_ast(ctx: &mut JSContext, code: &str) -> Result<JSValue, String> {
     compiler::eval_code_via_ast(ctx, code)
 }
