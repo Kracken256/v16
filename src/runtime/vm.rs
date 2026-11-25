@@ -9367,7 +9367,29 @@ impl VM {
                         .unwrap_or(0)
                         .max(arr.len());
                     if idx < length {
-                        let value = arr.get(idx).unwrap_or(JSValue::undefined());
+                        let index_atom = self.int_atom(idx, ctx);
+                        let value = if let Some(entry) = arr.header.get_own_accessor_entry(index_atom)
+                        {
+                            if let Some(getter) = entry.get {
+                                if getter.is_function() {
+                                    match self.call_function_with_this(ctx, getter, arr_val, &[]) {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            if let Some(exc) = self.last_caught_exception.take() {
+                                                self.pending_throw = Some(exc);
+                                            }
+                                            return Err(e);
+                                        }
+                                    }
+                                } else {
+                                    JSValue::undefined()
+                                }
+                            } else {
+                                JSValue::undefined()
+                            }
+                        } else {
+                            arr.get(idx).unwrap_or(JSValue::undefined())
+                        };
                         iter_obj.set_cached(
                             idx_atom,
                             JSValue::new_int((idx + 1) as i64),
