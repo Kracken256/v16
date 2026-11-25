@@ -12,6 +12,7 @@ struct BreakableFrame {
     continue_patches: Vec<usize>,
     continue_target: Option<usize>,
     handler_depth: usize,
+    continue_depth: usize,
 }
 
 #[derive(Clone)]
@@ -2475,14 +2476,14 @@ impl CodeGenerator {
                         .find(|f| {
                             f.label.as_deref() == Some(label) && f.continue_target.is_some()
                         })
-                        .map(|f| f.handler_depth)
+                        .map(|f| f.continue_depth)
                         .unwrap_or(self.handler_depth)
                 } else {
                     self.breakable_frames
                         .iter()
                         .rev()
                         .find(|f| f.continue_target.is_some())
-                        .map(|f| f.handler_depth)
+                        .map(|f| f.continue_depth)
                         .unwrap_or(self.handler_depth)
                 };
                 self.emit(Opcode::JumpBreak);
@@ -2548,6 +2549,7 @@ impl CodeGenerator {
                 self.breakable_frames.push(BreakableFrame {
                     label: Some(stmt.label.clone()),
                     handler_depth: self.handler_depth,
+                    continue_depth: self.handler_depth,
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     continue_target: None,
@@ -3507,6 +3509,7 @@ impl CodeGenerator {
                 self.breakable_frames.push(BreakableFrame {
                     label: Some(labeled.label.clone()),
                     handler_depth: self.handler_depth,
+                    continue_depth: self.handler_depth,
                     break_patches: Vec::new(),
                     continue_patches: Vec::new(),
                     continue_target: None,
@@ -4009,6 +4012,7 @@ impl CodeGenerator {
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
             handler_depth: self.handler_depth,
+            continue_depth: self.handler_depth,
             break_patches: vec![break_jump],
             continue_patches: Vec::new(),
             continue_target: Some(loop_start),
@@ -4145,6 +4149,7 @@ impl CodeGenerator {
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
             handler_depth: self.handler_depth,
+            continue_depth: self.handler_depth,
             break_patches: if stmt.test.is_some() {
                 vec![break_jump]
             } else {
@@ -4316,6 +4321,7 @@ impl CodeGenerator {
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
             handler_depth: self.handler_depth,
+            continue_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: Some(0),
@@ -4510,9 +4516,23 @@ impl CodeGenerator {
         self.emit_i32(0);
         self.free_register(done_reg);
 
+        let close_iterators = !stmt.is_await;
+        let outer_depth = self.handler_depth;
+        let mut close_region: Option<(usize, usize)> = None;
+        if close_iterators {
+            self.emit(Opcode::Try);
+            self.handler_depth += 1;
+            let catch_pc_pos = self.code.len();
+            self.emit_i32(0);
+            let finally_pc_pos = self.code.len();
+            self.emit_i32(0);
+            close_region = Some((catch_pc_pos, finally_pc_pos));
+        }
+
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
-            handler_depth: self.handler_depth,
+            handler_depth: outer_depth,
+            continue_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: Some(0),
@@ -4543,9 +4563,26 @@ impl CodeGenerator {
             frame.continue_target = Some(continue_target);
         }
 
+        if close_iterators {
+            self.emit(Opcode::Catch);
+            self.handler_depth -= 1;
+        }
+
         self.emit_backward_jump(loop_start);
 
         let frame = self.breakable_frames.pop().unwrap();
+
+        if let Some((catch_pc_pos, finally_pc_pos)) = close_region {
+            let close_start = self.code.len();
+            let close_bytes = (close_start as i32).to_le_bytes();
+            self.code[catch_pc_pos..catch_pc_pos + 4].copy_from_slice(&close_bytes);
+            self.code[finally_pc_pos..finally_pc_pos + 4].copy_from_slice(&close_bytes);
+            self.emit(Opcode::Finally);
+            self.emit(Opcode::IteratorCloseFinally);
+            self.emit_u16(iter_reg);
+            self.emit(Opcode::EndFinally);
+        }
+
         let end_pos = self.code.len();
 
         self.patch_jump(exit_patch, end_pos);
@@ -4588,6 +4625,7 @@ impl CodeGenerator {
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
             handler_depth: self.handler_depth,
+            continue_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: Some(0),
@@ -4674,6 +4712,7 @@ impl CodeGenerator {
         self.breakable_frames.push(BreakableFrame {
             label: self.pending_label.take(),
             handler_depth: self.handler_depth,
+            continue_depth: self.handler_depth,
             break_patches: Vec::new(),
             continue_patches: Vec::new(),
             continue_target: None,

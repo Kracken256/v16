@@ -8622,6 +8622,12 @@ impl VM {
                             {
                                 self.pending_finally_return = None;
                             }
+                            if self
+                                .pending_finally_jump
+                                .map_or(false, |(frame, _, _)| frame == self.frame_index)
+                            {
+                                self.pending_finally_jump = None;
+                            }
                             match self.dispatch_throw_value(ctx, exc) {
                                 ThrowDispatch::Caught => continue,
                                 ThrowDispatch::Uncaught(e) => return Err(e),
