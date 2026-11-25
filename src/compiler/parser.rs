@@ -1661,16 +1661,6 @@ impl Parser {
     }
 
     fn parse_assignment_expression(&mut self) -> Result<Expression, String> {
-        if self.at_keyword("async") && self.peek_at("function") {
-            self.advance();
-            self.expect("function")?;
-            let generator = self.at_punct("*");
-            if generator {
-                self.advance();
-            }
-            return self.parse_function_expression(true, generator);
-        }
-
         if self.at_keyword("async") {
             if self.peek_at("(") || (self.peek_value().map_or(false, |v| v != "function")) {
                 let saved_pos = self.lexer.pos();
@@ -2504,6 +2494,16 @@ impl Parser {
                 delegate,
                 parenthesized: false,
             }));
+        }
+
+        if self.at_keyword("async") && self.peek_at("function") {
+            self.advance();
+            self.expect("function")?;
+            let generator = self.at_punct("*");
+            if generator {
+                self.advance();
+            }
+            return self.parse_function_expression(true, generator);
         }
 
         if self.cur_type() == Some(TokenType::Identifier)
