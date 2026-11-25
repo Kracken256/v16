@@ -193,6 +193,7 @@ pub enum Opcode {
     SetSuperProp = 229,
     CheckThisInitialized = 230,
     GetNewTarget = 231,
+    MarkDirectEval = 232,
 }
 
 impl Opcode {
@@ -377,6 +378,7 @@ impl Opcode {
             229 => Some(Opcode::SetSuperProp),
             230 => Some(Opcode::CheckThisInitialized),
             231 => Some(Opcode::GetNewTarget),
+            232 => Some(Opcode::MarkDirectEval),
             _ => None,
         }
     }
@@ -410,7 +412,7 @@ impl Opcode {
             | Opcode::GetArguments
             | Opcode::GetCurrentFunction
             | Opcode::CheckObjectCoercible => 3,
-            Opcode::CheckThisInitialized => 1,
+            Opcode::CheckThisInitialized | Opcode::MarkDirectEval => 1,
             Opcode::Neg | Opcode::BitNot | Opcode::Not | Opcode::TypeOf | Opcode::Move => 5,
             Opcode::SetHomeObject => 5,
             Opcode::GetSuperProp => 9,
@@ -733,6 +735,7 @@ impl Bytecode {
                 | Opcode::End
                 | Opcode::Catch
                 | Opcode::CheckThisInitialized
+                | Opcode::MarkDirectEval
                 | Opcode::Finally
                 | Opcode::EndFinally => {}
                 Opcode::ParamInitMark => {

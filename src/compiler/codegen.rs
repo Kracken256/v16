@@ -8980,6 +8980,8 @@ impl CodeGenerator {
             .iter()
             .any(|arg| matches!(arg, Argument::Spread(_)));
 
+        let is_direct_eval = matches!(&*call.callee, Expression::Identifier(id) if id.name == "eval");
+
         if is_self_recursive_call && !has_spread {
             let mut arg_regs = Vec::new();
             for arg in &call.arguments {
@@ -9162,6 +9164,9 @@ impl CodeGenerator {
                     }
                 }
             }
+            if is_direct_eval {
+                self.emit(Opcode::MarkDirectEval);
+            }
             if let Some(obj_reg) = obj {
                 self.emit(Opcode::CallMethodSpread);
                 self.emit_u16(dst);
@@ -9191,6 +9196,9 @@ impl CodeGenerator {
                     }
                     _ => {}
                 }
+            }
+            if is_direct_eval {
+                self.emit(Opcode::MarkDirectEval);
             }
             if let Some(obj_reg) = obj {
                 self.emit(Opcode::CallMethod);

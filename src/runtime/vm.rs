@@ -378,6 +378,10 @@ pub struct VM {
 
     pub pending_new_target: Option<JSValue>,
 
+    pub eval_direct_call: bool,
+
+    pub eval_direct_active: bool,
+
     pub async_step: bool,
 
     pub await_suspend: Option<(JSValue, u16)>,
@@ -434,6 +438,8 @@ impl VM {
             pending_handlers: None,
             pending_return_value: None,
             pending_new_target: None,
+            eval_direct_call: false,
+            eval_direct_active: false,
             async_step: false,
             await_suspend: None,
             gc_roots: Vec::with_capacity(512),
@@ -2931,6 +2937,13 @@ impl VM {
             is_strict_caller,
             caller_vm_ptr,
         ) {
+            Ok(v) => Ok(v),
+            Err(e) => self.convert_eval_error_to_exc(ctx, e),
+        }
+    }
+
+    pub fn indirect_eval(&mut self, ctx: &mut JSContext, source: &str) -> Result<JSValue, String> {
+        match crate::eval(ctx, source) {
             Ok(v) => Ok(v),
             Err(e) => self.convert_eval_error_to_exc(ctx, e),
         }
@@ -7197,6 +7210,9 @@ impl VM {
                     let dst = self.read_u16_pc();
                     self.set_reg(dst, self.frames[self.frame_index].new_target);
                 }
+                Opcode::MarkDirectEval => {
+                    self.eval_direct_call = true;
+                }
                 Opcode::CheckThisInitialized => {
                     if !self.frames[self.frame_index].this_initialized {
                         self.set_pending_reference_error(ctx, "this is not initialized");
@@ -8041,6 +8057,9 @@ impl VM {
                         }
                     };
 
+                    let direct_eval = self.eval_direct_call;
+                    self.eval_direct_call = false;
+                    self.eval_direct_active = direct_eval;
                     let pushed = self.execute_call(
                         ctx,
                         func_val,
@@ -8052,6 +8071,7 @@ impl VM {
                         is_call_new,
                         is_call_method,
                     )?;
+                    self.eval_direct_active = false;
                     if is_super_call {
                         if pushed {
                             let frame = &mut self.frames[self.frame_index];

@@ -785,7 +785,14 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
         let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        match vm.direct_eval(ctx, &source) {
+        let direct = vm.eval_direct_active;
+        vm.eval_direct_active = false;
+        let result = if direct {
+            vm.direct_eval(ctx, &source)
+        } else {
+            vm.indirect_eval(ctx, &source)
+        };
+        match result {
             Ok(v) => return v,
             Err(_) => return JSValue::undefined(),
         }
