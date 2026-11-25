@@ -5208,7 +5208,20 @@ impl VM {
                                 }
                             }
                             let atom = self.int_atom(idx as usize, ctx);
-                            js_obj.get(atom).unwrap_or(JSValue::undefined())
+                            if let Some(v) =
+                                self.get_named_prop_result(ctx, dst, obj_val, atom, usize::MAX)
+                            {
+                                v
+                            } else {
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                                continue;
+                            }
                         }
                     } else if obj_val.is_string() && key_val.is_int() {
                         let s = ctx.get_atom_str(obj_val.get_atom());
@@ -5277,18 +5290,55 @@ impl VM {
                                 js_obj.get(atom).unwrap_or(JSValue::undefined())
                             }
                         } else {
-                            js_obj.get(atom).unwrap_or(JSValue::undefined())
+                            if let Some(v) =
+                                self.get_named_prop_result(ctx, dst, obj_val, atom, usize::MAX)
+                            {
+                                v
+                            } else {
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                                continue;
+                            }
                         }
                     } else if obj_val.is_object_like() && key_val.is_symbol() {
-                        let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
                         let sym_key =
                             crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
-                        js_obj.get(sym_key).unwrap_or(JSValue::undefined())
+                        if let Some(v) =
+                            self.get_named_prop_result(ctx, dst, obj_val, sym_key, usize::MAX)
+                        {
+                            v
+                        } else {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     } else if obj_val.is_object_like() && key_val.is_float() {
-                        let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
                         let s = VM::js_to_string(&key_val, ctx);
                         let atom = s.get_atom();
-                        js_obj.get(atom).unwrap_or(JSValue::undefined())
+                        if let Some(v) =
+                            self.get_named_prop_result(ctx, dst, obj_val, atom, usize::MAX)
+                        {
+                            v
+                        } else {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     } else if obj_val.is_symbol() && key_val.is_string() {
                         if let Some(proto_ptr) = ctx.get_symbol_prototype() {
                             let proto_obj = unsafe { &*proto_ptr };
@@ -5484,9 +5534,32 @@ impl VM {
                             crate::builtins::typedarray::ta_set_element(ctx, js_obj, idx, value);
                         } else {
                             let idx = key_val.get_int();
-                            if idx >= 0 && js_obj.maybe_set_indexed(idx as usize, value) {
+                            let atom = self.int_atom(idx as usize, ctx);
+                            let setter = {
+                                let mut found =
+                                    js_obj.get_own_accessor_entry(atom).and_then(|e| e.set);
+                                if found.is_none() {
+                                    let mut proto = js_obj.prototype;
+                                    while let Some(p) = proto {
+                                        let pobj = unsafe { &*p };
+                                        if let Some(e) = pobj.get_own_accessor_entry(atom) {
+                                            found = e.set;
+                                            break;
+                                        }
+                                        proto = pobj.prototype;
+                                    }
+                                }
+                                found
+                            };
+                            if let Some(s) = setter {
+                                if s.is_function() {
+                                    match self.call_function_with_this(ctx, s, obj_val, &[value]) {
+                                        Ok(_) => {}
+                                        Err(_) => {}
+                                    }
+                                }
+                            } else if idx >= 0 && js_obj.maybe_set_indexed(idx as usize, value) {
                             } else {
-                                let atom = self.int_atom(idx as usize, ctx);
                                 js_obj.set_cached(atom, value, ctx.shape_cache_mut());
                             }
                         }
@@ -7138,9 +7211,16 @@ impl VM {
                     let key_reg = self.read_u16_pc();
                     let val_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
-                    let key_val = self.get_reg(key_reg);
+                    let mut key_val = self.get_reg(key_reg);
                     let value = self.get_reg(val_reg);
                     if obj_val.is_object_like() {
+                        if !key_val.is_string()
+                            && !key_val.is_symbol()
+                            && !key_val.is_int()
+                            && !key_val.is_float()
+                        {
+                            key_val = self.to_property_key_value(ctx, key_val);
+                        }
                         let js_obj = unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
                         let atom = if key_val.is_string() {
                             key_val.get_atom()
