@@ -601,7 +601,12 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
         }
         ASTNode::ForStatement(f) => {
             match &f.init {
-                Some(ForInit::VariableDeclaration(vd)) => validate_variable_declaration(vd, ctx)?,
+                Some(ForInit::VariableDeclaration(vd)) => {
+                    validate_variable_declaration(vd, ctx)?;
+                    if vd.kind != VariableKind::Var {
+                        check_lexical_head_against_body(vd, &f.body)?;
+                    }
+                }
                 Some(ForInit::Expression(e)) => validate_expression(e, ctx)?,
                 None => {}
             }
@@ -934,6 +939,27 @@ fn validate_function_body_with_super(
     }
     check_parameters_against_body_lexical(params, &body.body)?;
     validate_body(&body.body, ctx)
+}
+
+fn check_lexical_head_against_body(
+    vd: &VariableDeclaration,
+    body: &ASTNode,
+) -> Result<(), String> {
+    let mut lexical: Vec<(String, bool)> = Vec::new();
+    for d in &vd.declarations {
+        collect_binding_pattern_names(&d.id, &mut lexical);
+    }
+    if lexical.is_empty() {
+        return Ok(());
+    }
+    let mut vars: HashSet<String> = HashSet::new();
+    collect_var_names(body, false, &mut vars);
+    for (name, _) in &lexical {
+        if vars.contains(name) {
+            return Err(redeclaration_error(name));
+        }
+    }
+    Ok(())
 }
 
 fn check_parameters_against_body_lexical(
@@ -1546,6 +1572,15 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                     "SyntaxError: await expression is not allowed in arrow parameters".to_string(),
                 );
             }
+            let param_ctx = Ctx {
+                strict: ctx.strict,
+                in_async: ctx.in_async || arrow.is_async,
+                in_generator: ctx.in_generator,
+                in_static_block: ctx.in_static_block,
+                allow_super_property: ctx.allow_super_property,
+                allow_super_call: ctx.allow_super_call,
+                in_function: ctx.in_function,
+            };
             let inner = Ctx {
                 strict: ctx.strict,
                 in_async: arrow.is_async,
@@ -1557,7 +1592,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             };
             validate_parameters_unique(&arrow.params, true)?;
             for p in &arrow.params {
-                validate_parameter(p, inner)?;
+                validate_parameter(p, param_ctx)?;
             }
             if let ArrowBody::Block(b) = &arrow.body {
                 check_parameters_against_body_lexical(&arrow.params, &b.body)?;
