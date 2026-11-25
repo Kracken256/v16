@@ -1803,12 +1803,8 @@ impl JSObject {
                     // Check if it's an accessor property
                     if let Some(ref accs) = extra.accessors {
                         if let Some(entry) = accs.get(atom) {
-                            if entry.enumerable {
-                                if let Some(getter) = entry.get {
-                                    if seen.insert(*atom) {
-                                        result.push((*atom, getter));
-                                    }
-                                }
+                            if entry.enumerable && seen.insert(*atom) {
+                                result.push((*atom, entry.get.unwrap_or_else(JSValue::undefined)));
                             }
                         }
                     }
@@ -1837,9 +1833,7 @@ impl JSObject {
                     }
                     if entry.enumerable && !seen.contains(atom) {
                         seen.insert(*atom);
-                        if let Some(getter) = entry.get {
-                            result.push((*atom, getter));
-                        }
+                        result.push((*atom, entry.get.unwrap_or_else(JSValue::undefined)));
                     }
                 }
             }

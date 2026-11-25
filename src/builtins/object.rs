@@ -604,7 +604,14 @@ fn object_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
-    let values: Vec<_> = obj.own_properties().into_iter().map(|(_, v)| v).collect();
+    let keys = obj.enumerable_keys();
+    let mut values: Vec<JSValue> = Vec::with_capacity(keys.len());
+    for key in keys {
+        values.push(object_get_property(ctx, this, key));
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+    }
     let mut result = JSObject::new_array();
     if let Some(proto_ptr) = ctx.get_array_prototype() {
         result.prototype = Some(proto_ptr);
@@ -637,7 +644,15 @@ fn object_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
-    let entries: Vec<_> = obj.own_properties().into_iter().collect();
+    let keys = obj.enumerable_keys();
+    let mut entries: Vec<(Atom, JSValue)> = Vec::with_capacity(keys.len());
+    for key in keys {
+        let val = object_get_property(ctx, this, key);
+        if ctx.pending_exception.is_some() {
+            return JSValue::undefined();
+        }
+        entries.push((key, val));
+    }
     let mut result = JSObject::new_array();
     if let Some(proto_ptr) = ctx.get_array_prototype() {
         result.prototype = Some(proto_ptr);
@@ -690,22 +705,25 @@ fn object_assign(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return to;
     }
 
-    let to_obj = to.as_object_mut();
-
     for arg in args.iter().skip(1) {
         let from = if arg.is_object() || arg.is_function() {
-            arg.as_object()
-        } else if arg.is_string() {
-            continue;
+            *arg
         } else {
             continue;
         };
-
-        from.for_each_property(|key, val, attrs| {
-            if attrs & crate::object::object::ATTR_ENUMERABLE != 0 {
-                to_obj.set(key, val);
+        let keys: Vec<Atom> = from
+            .as_object()
+            .own_properties_including_symbols()
+            .into_iter()
+            .map(|(atom, _)| atom)
+            .collect();
+        for key in keys {
+            let val = object_get_property(ctx, &from, key);
+            if ctx.pending_exception.is_some() {
+                return JSValue::undefined();
             }
-        });
+            to.as_object_mut().set(key, val);
+        }
     }
 
     to
