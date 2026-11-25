@@ -1454,6 +1454,19 @@ impl VM {
                 );
                 return Ok(false);
             }
+            if is_call_new
+                && (js_func.is_arrow()
+                    || js_func.is_async()
+                    || js_func.is_generator()
+                    || js_func.is_method)
+            {
+                let msg = format!(
+                    "{} is not a constructor",
+                    self.format_thrown_value(&func_val, ctx)
+                );
+                self.set_pending_type_error(ctx, &msg);
+                return Ok(false);
+            }
             if let Some(ref rb) = js_func.bytecode {
                 let return_pc = self.pc;
                 let caller_base = self.cached_registers_base;
@@ -1769,6 +1782,14 @@ impl VM {
                 for r in arg_regs {
                     actual_args.push(self.get_reg(*r));
                 }
+                if !Self::value_is_constructor(ctx, bound_fn) {
+                    let msg = format!(
+                        "{} is not a constructor",
+                        self.format_thrown_value(&func_val, ctx)
+                    );
+                    self.set_pending_type_error(ctx, &msg);
+                    return Ok(false);
+                }
                 let mut new_obj = crate::object::object::JSObject::new();
                 if bound_fn.is_function() {
                     let target_func = bound_fn.as_function();
@@ -1783,7 +1804,8 @@ impl VM {
                 let new_ptr = Box::into_raw(Box::new(new_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(new_ptr);
                 let new_val = JSValue::new_object(new_ptr);
-                let result = self.call_function_with_this(ctx, bound_fn, new_val, &actual_args);
+                let result =
+                    self.call_function_with_this_impl(ctx, bound_fn, new_val, &actual_args, true);
                 match result {
                     Ok(r) => {
                         let final_val = if r.is_object_like() { r } else { new_val };
@@ -2535,7 +2557,7 @@ impl VM {
                     .unwrap_or_default();
                 ctx.builtin_is_constructor(&name)
             } else {
-                !f.is_arrow()
+                !f.is_arrow() && !f.is_async() && !f.is_generator() && !f.is_method
             }
         } else if value.is_object() {
             value
@@ -3111,7 +3133,7 @@ impl VM {
         ctor: JSValue,
         args: &[JSValue],
     ) -> Result<JSValue, String> {
-        if !ctor.is_function() {
+        if !ctor.is_function() || !Self::value_is_constructor(ctx, ctor) {
             return Err("not a constructor".to_string());
         }
 
@@ -9855,6 +9877,7 @@ impl VM {
                     func.set_is_arrow(function_kind & 4 != 0);
                     func.is_derived_constructor = function_kind & 8 != 0;
                     func.is_class_constructor = function_kind & 2 != 0;
+                    func.is_method = function_kind & 32 != 0;
                     func.has_private_elements = function_kind & 16 != 0;
                     if function_kind & 4 != 0 {
                         if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {

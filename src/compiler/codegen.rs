@@ -10104,7 +10104,7 @@ impl CodeGenerator {
                 return self.gen_function_expression(
                     &func.params,
                     &func.body,
-                    func.name.as_deref(),
+                    name.or(func.name.as_deref()),
                     ctx,
                     func.generator,
                     func.is_async,
@@ -10295,7 +10295,9 @@ impl CodeGenerator {
         nested_codegen.in_derived_constructor = is_arrow && self.in_derived_constructor;
         nested_codegen.in_field_initializer = is_arrow && self.in_field_initializer;
         let has_prototype = is_generator || (!is_arrow && !is_method && !is_async);
-        let function_kind = (if has_prototype { 1 } else { 0 }) | if is_arrow { 4 } else { 0 };
+        let function_kind = (if has_prototype { 1 } else { 0 })
+            | if is_arrow { 4 } else { 0 }
+            | if is_method { 32 } else { 0 };
         let mut parent_vars: FxHashMap<String, ParentVar> = FxHashMap::default();
         for (scope_idx, scope) in self.scope_stack.iter().enumerate() {
             if self
@@ -10891,7 +10893,7 @@ impl CodeGenerator {
                         method_reg,
                         is_gen,
                         is_async,
-                        if is_gen { 1 } else { 0 },
+                        (if is_gen { 1 } else { 0 }) | 32,
                     );
                     match kind {
                         MethodKind::Get if is_private => {
