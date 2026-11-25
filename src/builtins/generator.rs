@@ -333,7 +333,9 @@ fn dynamic_generator_function_constructor(
     prefix: &str,
 ) -> JSValue {
     let body_idx = args.len().saturating_sub(1);
-    let body_str = if args[body_idx].is_string() {
+    let body_str = if args.is_empty() {
+        String::new()
+    } else if args[body_idx].is_string() {
         ctx.get_atom_str(args[body_idx].get_atom()).to_string()
     } else {
         let s = crate::builtins::global::to_property_key_string(ctx, &args[body_idx]);
