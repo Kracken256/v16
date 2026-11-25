@@ -265,13 +265,39 @@ pub fn compile_script_to_bytecode_with_opt_level_and_super(
     allow_super_call: bool,
     in_field_initializer: bool,
 ) -> Result<Bytecode, String> {
+    compile_script_to_bytecode_with_opt_level_and_super_new_target(
+        ctx,
+        source,
+        opt_level,
+        is_strict,
+        is_eval,
+        allow_super_property,
+        allow_super_call,
+        in_field_initializer,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compile_script_to_bytecode_with_opt_level_and_super_new_target(
+    ctx: &mut JSContext,
+    source: &str,
+    opt_level: OptLevel,
+    is_strict: bool,
+    is_eval: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    in_field_initializer: bool,
+    allow_new_target: bool,
+) -> Result<Bytecode, String> {
     let ast = parser::Parser::new(source).parse()?;
-    early_errors::validate_program_with_field_initializer(
+    early_errors::validate_program_with_field_initializer_and_new_target(
         &ast,
         is_strict,
         allow_super_property,
         allow_super_call,
         in_field_initializer,
+        allow_new_target,
     )?;
 
     let mut func_codegen = CodeGenerator::with_opt_level(opt_level);
@@ -353,8 +379,9 @@ pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
     allow_super_property: bool,
     allow_super_call: bool,
     in_field_initializer: bool,
+    allow_new_target: bool,
 ) -> Result<JSValue, String> {
-    let rb = compile_script_to_bytecode_with_opt_level_and_super(
+    let rb = compile_script_to_bytecode_with_opt_level_and_super_new_target(
         ctx,
         source,
         opt_level,
@@ -363,6 +390,7 @@ pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
         allow_super_property,
         allow_super_call,
         in_field_initializer,
+        allow_new_target,
     )?;
     eval_bytecode_with_caller(ctx, &rb, Some(caller_vm))
 }

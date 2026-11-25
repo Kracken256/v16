@@ -5414,6 +5414,32 @@ impl VM {
             (allow_property, allow_call)
         };
         let caller_vm_ptr = self as *mut VM;
+        let mut allow_new_target = false;
+        {
+            let mut vm_ptr = self as *mut VM;
+            loop {
+                let caller = unsafe { &*(vm_ptr as *const VM) };
+                let mut found = false;
+                for fi in (0..=caller.frame_index).rev() {
+                    if let Some(fptr) = caller.frames[fi].function_ptr {
+                        let func =
+                            unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+                        if !func.is_arrow() {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if found {
+                    allow_new_target = true;
+                    break;
+                }
+                match caller.caller_vm {
+                    Some(ptr) => vm_ptr = ptr as *mut VM,
+                    None => break,
+                }
+            }
+        }
         let mut eval_private_names: Vec<crate::runtime::atom::Atom> = Vec::new();
         for fi in (0..=self.frame_index).rev() {
             let frame = &self.frames[fi];
@@ -5496,6 +5522,7 @@ impl VM {
             allow_super_property,
             allow_super_call,
             in_field_initializer,
+            allow_new_target,
         );
         ctx.eval_private_names = saved_eval_private_names;
         match eval_result {

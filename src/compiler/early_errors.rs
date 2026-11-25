@@ -233,6 +233,7 @@ pub fn validate_program_with_source_type(
         allow_super_call,
         is_module,
         false,
+        false,
     )
 }
 
@@ -250,6 +251,27 @@ pub fn validate_program_with_field_initializer(
         allow_super_call,
         program.source_type == SourceType::Module,
         in_field_initializer,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn validate_program_with_field_initializer_and_new_target(
+    program: &Program,
+    is_strict: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    in_field_initializer: bool,
+    allow_new_target: bool,
+) -> Result<(), String> {
+    validate_program_with_context(
+        program,
+        is_strict,
+        allow_super_property,
+        allow_super_call,
+        program.source_type == SourceType::Module,
+        in_field_initializer,
+        allow_new_target,
     )
 }
 
@@ -260,6 +282,7 @@ fn validate_program_with_context(
     allow_super_call: bool,
     is_module: bool,
     in_field_initializer: bool,
+    allow_new_target: bool,
 ) -> Result<(), String> {
     if !is_module {
         for stmt in &program.body {
@@ -292,7 +315,10 @@ fn validate_program_with_context(
         in_static_block: false,
         allow_super_property,
         allow_super_call,
-        in_function: allow_super_property || allow_super_call || in_field_initializer,
+        in_function: allow_super_property
+            || allow_super_call
+            || in_field_initializer
+            || allow_new_target,
         in_field_initializer,
     };
     validate_body(&program.body, ctx)
