@@ -357,7 +357,7 @@ pub fn load_module_source(specifier: &str) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Failed to load module '{}': {}", path, e))
 }
 
-fn create_syntax_error(ctx: &mut JSContext, message: &str) -> JSValue {
+pub fn create_syntax_error(ctx: &mut JSContext, message: &str) -> JSValue {
     let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
     err.set(
         ctx.common_atoms.name,

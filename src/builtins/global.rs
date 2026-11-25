@@ -87,6 +87,14 @@ pub fn init_globals(ctx: &mut JSContext) {
     );
     ctx.register_builtin("import", HostFunction::new("import", 1, js_import));
     ctx.register_builtin(
+        "import.defer",
+        HostFunction::new("import.defer", 1, js_import_defer),
+    );
+    ctx.register_builtin(
+        "import.source",
+        HostFunction::new("import.source", 1, js_import_source),
+    );
+    ctx.register_builtin(
         "__v16_import__",
         HostFunction::new("__v16_import__", 2, v16_import),
     );
@@ -573,15 +581,10 @@ fn template_object(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if args.is_empty() {
-        let err_msg = JSValue::new_string(ctx.intern("Error: import requires a module specifier"));
-        return promise::create_rejected_promise(ctx, err_msg);
-    }
-
-    let specifier = to_property_key_string(ctx, &args[0]);
-    if let Some(exc) = ctx.pending_exception.take() {
-        return promise::create_rejected_promise(ctx, exc);
-    }
+    let specifier = match import_specifier_to_string(ctx, args) {
+        Ok(specifier) => specifier,
+        Err(exc) => return promise::create_rejected_promise(ctx, exc),
+    };
 
     match crate::runtime::module::load_and_evaluate_module(ctx, &specifier) {
         Ok(ns_ptr) => {
@@ -597,6 +600,41 @@ fn js_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             promise::create_rejected_promise(ctx, err_msg)
         }
     }
+}
+
+fn import_specifier_to_string(ctx: &mut JSContext, args: &[JSValue]) -> Result<String, JSValue> {
+    if args.is_empty() {
+        return Err(JSValue::new_string(
+            ctx.intern("Error: import requires a module specifier"),
+        ));
+    }
+    let specifier = to_property_key_string(ctx, &args[0]);
+    if let Some(exc) = ctx.pending_exception.take() {
+        return Err(exc);
+    }
+    Ok(specifier)
+}
+
+fn js_import_phased(ctx: &mut JSContext, args: &[JSValue], phase: &str) -> JSValue {
+    match import_specifier_to_string(ctx, args) {
+        Ok(_) => {
+            let message = format!(
+                "Cannot import a {} module from script code",
+                phase
+            );
+            let error = crate::runtime::module::create_syntax_error(ctx, &message);
+            promise::create_rejected_promise(ctx, error)
+        }
+        Err(exc) => promise::create_rejected_promise(ctx, exc),
+    }
+}
+
+fn js_import_defer(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    js_import_phased(ctx, args, "deferred")
+}
+
+fn js_import_source(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    js_import_phased(ctx, args, "source-phase")
 }
 
 fn v16_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -3627,6 +3665,16 @@ fn init_global_funcs(ctx: &mut JSContext) {
             global_obj,
             ctx.intern("import"),
             create_builtin_function(ctx, "import"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("import.defer"),
+            create_builtin_function(ctx, "import.defer"),
+        );
+        set_non_enumerable(
+            global_obj,
+            ctx.intern("import.source"),
+            create_builtin_function(ctx, "import.source"),
         );
         set_non_enumerable(
             global_obj,

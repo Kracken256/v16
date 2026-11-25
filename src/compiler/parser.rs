@@ -209,7 +209,7 @@ impl Parser {
     }
 
     fn parse_statement_list_item(&mut self) -> Result<ASTNode, String> {
-        if self.at_keyword("import") && !self.peek_at("(") {
+        if self.at_keyword("import") && !self.peek_at("(") && !self.peek_at(".") {
             return self
                 .parse_import_declaration()
                 .map(ASTNode::ImportDeclaration);
@@ -283,7 +283,7 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(ASTNode::DebuggerStatement)
             }
-            Some((TokenType::Keyword, "import")) if self.peek_at("(") => {
+            Some((TokenType::Keyword, "import")) if self.peek_at("(") || self.peek_at(".") => {
                 self.parse_expression_statement()
             }
             _ => self.parse_expression_statement_or_labelled(),
@@ -2472,13 +2472,19 @@ impl Parser {
                     || self.cur_type() == Some(TokenType::Keyword))
                     && (self.cur_value() == "defer" || self.cur_value() == "source");
                 if is_defer_or_source {
+                    let name = if self.cur_value() == "defer" {
+                        "import.defer"
+                    } else {
+                        "import.source"
+                    }
+                    .to_string();
                     self.advance();
                     self.expect("(")?;
                     let arg = self.parse_assignment_expression()?;
                     self.expect(")")?;
                     return Ok(Expression::CallExpression(CallExpression {
                         callee: Box::new(Expression::Identifier(Identifier {
-                            name: "import".to_string(),
+                            name,
                             parenthesized: false,
                         })),
                         arguments: vec![Argument::Expression(arg)],
