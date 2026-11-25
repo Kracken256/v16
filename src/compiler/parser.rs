@@ -1110,7 +1110,8 @@ impl Parser {
             return self.parse_for_rest(Some(ForInit::VariableDeclaration(decl)));
         }
 
-        if self.at_keyword("async")
+        if !is_await
+            && self.at_keyword("async")
             && !self.current.as_ref().map_or(false, |t| t.had_escape)
             && self.peek_at("of")
         {
