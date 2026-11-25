@@ -973,6 +973,43 @@ impl VM {
         None
     }
 
+    fn raise_named_error(
+        &mut self,
+        ctx: &mut JSContext,
+        name: &str,
+        message: &str,
+    ) -> Option<Result<ExecutionOutcome, String>> {
+        let mut err = crate::object::object::JSObject::new();
+        err.set(
+            ctx.intern("name"),
+            JSValue::new_string(ctx.intern(name)),
+        );
+        err.set(
+            ctx.intern("message"),
+            JSValue::new_string(ctx.intern(message)),
+        );
+        let proto = match name {
+            "TypeError" => ctx.get_type_error_prototype(),
+            "SyntaxError" => ctx.get_syntax_error_prototype(),
+            "ReferenceError" => ctx.get_reference_error_prototype(),
+            "RangeError" => ctx.get_range_error_prototype(),
+            "URIError" => ctx.get_uri_error_prototype(),
+            _ => ctx.get_error_prototype(),
+        };
+        if let Some(proto) = proto {
+            err.prototype = Some(proto);
+        }
+        let ptr = Box::into_raw(Box::new(err)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        self.pending_throw = Some(JSValue::new_object(ptr));
+        let exc = self.pending_throw.take().unwrap();
+        match self.dispatch_throw_value(ctx, exc) {
+            ThrowDispatch::Caught => None,
+            ThrowDispatch::Uncaught(e) => Some(Err(e)),
+            ThrowDispatch::AsyncComplete(o) => Some(Ok(o)),
+        }
+    }
+
     /// Returns true when `Symbol.iterator` on the array still resolves to the
     /// built-in array iterator, so the fast array iteration path is valid.
     fn array_uses_default_iterator(&mut self, ctx: &mut JSContext, arr: JSValue) -> bool {
@@ -1764,6 +1801,18 @@ impl VM {
                 }
             }
 
+            if caller.frame_index == 0 {
+                let global = ctx.global();
+                if global.is_object() {
+                    global.as_object_mut().set_cached(
+                        crate::runtime::atom::Atom(name_atom),
+                        value,
+                        ctx.shape_cache_mut(),
+                    );
+                }
+                return CallerVarSet::Stored;
+            }
+
             for fi in (0..=caller.frame_index).rev() {
                 if caller.frames[fi].function_ptr.is_some() || fi == 0 {
                     if caller.frames[fi].eval_bindings.is_none() {
@@ -1815,6 +1864,20 @@ impl VM {
                 }
             }
 
+            if fi == 0 {
+                let global = ctx.global();
+                if global.is_object() {
+                    if global.as_object().get_own(crate::runtime::atom::Atom(name_atom)).is_none()
+                    {
+                        global.as_object_mut().set_cached(
+                            crate::runtime::atom::Atom(name_atom),
+                            value,
+                            ctx.shape_cache_mut(),
+                        );
+                    }
+                }
+                return true;
+            }
             if caller.frames[fi].eval_bindings.is_none() {
                 caller.frames[fi].eval_bindings =
                     Some(Box::new(std::collections::HashMap::new()));
@@ -1825,16 +1888,6 @@ impl VM {
                 .as_mut()
                 .unwrap()
                 .insert(name_atom, value);
-            if fi == 0 {
-                let global = ctx.global();
-                if global.is_object() {
-                    global.as_object_mut().set_cached(
-                        crate::runtime::atom::Atom(name_atom),
-                        value,
-                        ctx.shape_cache_mut(),
-                    );
-                }
-            }
             return true;
         }
         false
@@ -4496,6 +4549,11 @@ impl VM {
         if global.is_object() || global.is_function() {
             roots.push(global);
         }
+        for &value in ctx.global_lexical_bindings.values() {
+            if value.is_object() || value.is_function() {
+                roots.push(value);
+            }
+        }
 
         for fi in 0..=self.frame_index {
             let frame = &self.frames[fi];
@@ -4559,6 +4617,11 @@ impl VM {
         let global = ctx.global();
         if global.is_object() || global.is_function() {
             roots.push(global);
+        }
+        for &value in ctx.global_lexical_bindings.values() {
+            if value.is_object() || value.is_function() {
+                roots.push(value);
+            }
         }
 
         for fi in 0..=self.frame_index {
@@ -5260,7 +5323,9 @@ impl VM {
             if let Some(var_names) = crate::compiler::eval_source_var_names(source) {
                 for name in var_names {
                     let atom = ctx.intern(&name);
-                    if self.eval_direct_scope_contains(atom.0) {
+                    if self.eval_direct_scope_contains(atom.0)
+                        || ctx.global_lexical_kinds.contains_key(&atom.0)
+                    {
                         let mut err = crate::object::object::JSObject::new();
                         err.set(
                             ctx.intern("name"),
@@ -7344,6 +7409,26 @@ impl VM {
                     if !resolved {
                         if let Some(val) = self.get_var_in_caller_vm(atom.0) {
                             self.set_reg(dst, val);
+                        } else if ctx.global_lexical_kinds.contains_key(&atom.0) {
+                            let binding = ctx
+                                .global_lexical_bindings
+                                .get(&atom.0)
+                                .copied()
+                                .unwrap_or(JSValue::undefined());
+                            if binding.is_tdz() {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message = format!(
+                                    "Cannot access '{}' before initialization",
+                                    name_str
+                                );
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "ReferenceError", &message)
+                                {
+                                    return result;
+                                }
+                                continue;
+                            }
+                            self.set_reg(dst, binding);
                         } else {
                             let global = ctx.global();
                             let mut result = JSValue::undefined();
@@ -7432,6 +7517,39 @@ impl VM {
                     };
                     let atom = name.get_atom();
                     let is_strict = self.frames[self.frame_index].is_strict_frame;
+
+                    if let Some(kind) = ctx.global_lexical_kinds.get(&atom.0).copied() {
+                        let current = ctx
+                            .global_lexical_bindings
+                            .get(&atom.0)
+                            .copied()
+                            .unwrap_or(JSValue::new_tdz());
+                        if current.is_tdz() {
+                            let name_str = ctx.get_atom_str(atom).to_string();
+                            let message = format!(
+                                "Cannot access '{}' before initialization",
+                                name_str
+                            );
+                            if let Some(result) =
+                                self.raise_named_error(ctx, "ReferenceError", &message)
+                            {
+                                return result;
+                            }
+                            continue;
+                        }
+                        if kind == 1 {
+                            if let Some(result) = self.raise_named_error(
+                                ctx,
+                                "TypeError",
+                                "Assignment to constant variable.",
+                            ) {
+                                return result;
+                            }
+                            continue;
+                        }
+                        ctx.global_lexical_bindings.insert(atom.0, val);
+                        continue;
+                    }
 
                     if self.caller_vm.is_some() {
                         let caller_var_set = self.set_var_in_caller_vm(ctx, atom.0, val);
@@ -7593,6 +7711,19 @@ impl VM {
                     };
                     let atom = name.get_atom();
                     let is_strict = self.frames[self.frame_index].is_strict_frame;
+                    if ctx.global_lexical_kinds.contains_key(&atom.0) {
+                        let name_str = ctx.get_atom_str(atom).to_string();
+                        let message = format!(
+                            "Identifier '{}' has already been declared",
+                            name_str
+                        );
+                        if let Some(result) =
+                            self.raise_named_error(ctx, "SyntaxError", &message)
+                        {
+                            return result;
+                        }
+                        continue;
+                    }
                     if self.caller_vm.is_some() {
                         let caller_var_set = self.set_var_in_caller_vm(ctx, atom.0, val);
                         if matches!(caller_var_set, CallerVarSet::Immutable) {
@@ -7740,16 +7871,245 @@ impl VM {
                         JSValue::undefined()
                     };
                     let atom = name.get_atom();
+                    if ctx.global_lexical_kinds.contains_key(&atom.0) {
+                        let name_str = ctx.get_atom_str(atom).to_string();
+                        let message = format!(
+                            "Identifier '{}' has already been declared",
+                            name_str
+                        );
+                        if let Some(result) =
+                            self.raise_named_error(ctx, "SyntaxError", &message)
+                        {
+                            return result;
+                        }
+                        continue;
+                    }
                     if self.caller_vm.is_some() {
                         self.init_var_in_caller_vm(ctx, atom.0, val);
                     } else {
-                        let global = ctx.global();
-                        if global.is_object() {
-                            let global_obj = global.as_object_mut();
-                            if !global_obj.has_own(atom) {
-                                global_obj.define_cached(atom, val, ctx.shape_cache_mut());
+                        let mut failure = false;
+                        {
+                            let global = ctx.global();
+                            if global.is_object() {
+                                let global_obj = global.as_object_mut();
+                                if !global_obj.has_own(atom) {
+                                    let descriptor =
+                                        crate::object::object::PropertyDescriptor {
+                                            value: Some(val),
+                                            writable: true,
+                                            enumerable: true,
+                                            configurable: false,
+                                            get: None,
+                                            set: None,
+                                        };
+                                    if !global_obj.define_property(atom, descriptor) {
+                                        failure = true;
+                                    }
+                                }
                             }
                         }
+                        if failure {
+                            let name_str = ctx.get_atom_str(atom).to_string();
+                            let message =
+                                format!("Cannot declare global variable '{}'", name_str);
+                            if let Some(result) =
+                                self.raise_named_error(ctx, "TypeError", &message)
+                            {
+                                return result;
+                            }
+                        }
+                    }
+                }
+                Opcode::GlobalBinding => {
+                    let mode = self.read_u8();
+                    let idx = self.read_u32() as usize;
+                    let src = self.read_u16_pc();
+                    let name = if idx < self.frames[self.frame_index].constants_len {
+                        unsafe { *self.cached_const_ptr.add(idx) }
+                    } else {
+                        JSValue::undefined()
+                    };
+                    let atom = name.get_atom();
+                    match mode {
+                        0 => {
+                            let mut conflict = ctx.global_lexical_kinds.contains_key(&atom.0);
+                            if !conflict {
+                                let global = ctx.global();
+                                if global.is_object() {
+                                    if let Some(desc) = global.as_object().get_own_descriptor(atom) {
+                                        conflict = !desc.configurable;
+                                    }
+                                }
+                            }
+                            if conflict {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message = format!(
+                                    "Identifier '{}' has already been declared",
+                                    name_str
+                                );
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "SyntaxError", &message)
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        1 => {
+                            if ctx.global_lexical_kinds.contains_key(&atom.0) {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message = format!(
+                                    "Identifier '{}' has already been declared",
+                                    name_str
+                                );
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "SyntaxError", &message)
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        2 => {
+                            let mut definable = false;
+                            let global = ctx.global();
+                            if global.is_object() {
+                                let global_obj = global.as_object();
+                                match global_obj.get_own_descriptor(atom) {
+                                    None => definable = global_obj.extensible(),
+                                    Some(desc) => {
+                                        definable = desc.configurable
+                                            || (desc.get.is_none()
+                                                && desc.set.is_none()
+                                                && desc.writable
+                                                && desc.enumerable);
+                                    }
+                                }
+                            }
+                            if !definable {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message = format!(
+                                    "Cannot declare global function '{}'",
+                                    name_str
+                                );
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "TypeError", &message)
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        3 => {
+                            let mut definable = false;
+                            let global = ctx.global();
+                            if global.is_object() {
+                                let global_obj = global.as_object();
+                                definable = global_obj.has_own(atom) || global_obj.extensible();
+                            }
+                            if !definable {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message =
+                                    format!("Cannot declare global variable '{}'", name_str);
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "TypeError", &message)
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        4 | 5 => {
+                            ctx.global_lexical_kinds.insert(atom.0, if mode == 5 { 1 } else { 0 });
+                            ctx.global_lexical_bindings.insert(atom.0, JSValue::new_tdz());
+                        }
+                        6 => {
+                            let value = self.get_reg(src);
+                            ctx.global_lexical_bindings.insert(atom.0, value);
+                        }
+                        7 => {
+                            let value = self.get_reg(src);
+                            let mut failure = false;
+                            {
+                                let global = ctx.global();
+                                if global.is_object() {
+                                    let global_obj = global.as_object_mut();
+                                    match global_obj.get_own_descriptor(atom) {
+                                        Some(desc) if !desc.configurable => {
+                                            if desc.get.is_none()
+                                                && desc.set.is_none()
+                                                && desc.writable
+                                                && desc.enumerable
+                                            {
+                                                global_obj.set_cached(
+                                                    atom,
+                                                    value,
+                                                    ctx.shape_cache_mut(),
+                                                );
+                                            } else {
+                                                failure = true;
+                                            }
+                                        }
+                                        _ => {
+                                            let descriptor =
+                                                crate::object::object::PropertyDescriptor {
+                                                    value: Some(value),
+                                                    writable: true,
+                                                    enumerable: true,
+                                                    configurable: false,
+                                                    get: None,
+                                                    set: None,
+                                                };
+                                            if !global_obj.define_property(atom, descriptor) {
+                                                failure = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if failure {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message = format!(
+                                    "Cannot declare global function '{}'",
+                                    name_str
+                                );
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "TypeError", &message)
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        8 => {
+                            let mut failure = false;
+                            {
+                                let global = ctx.global();
+                                if global.is_object() {
+                                    let global_obj = global.as_object_mut();
+                                    if !global_obj.has_own(atom) {
+                                        let descriptor =
+                                            crate::object::object::PropertyDescriptor {
+                                                value: Some(JSValue::undefined()),
+                                                writable: true,
+                                                enumerable: true,
+                                                configurable: false,
+                                                get: None,
+                                                set: None,
+                                            };
+                                        if !global_obj.define_property(atom, descriptor) {
+                                            failure = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if failure {
+                                let name_str = ctx.get_atom_str(atom).to_string();
+                                let message =
+                                    format!("Cannot declare global variable '{}'", name_str);
+                                if let Some(result) =
+                                    self.raise_named_error(ctx, "TypeError", &message)
+                                {
+                                    return result;
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 Opcode::DefineGlobal => {
@@ -11968,6 +12328,9 @@ impl VM {
                         if !exists && self.get_var_in_caller_vm(atom.0).is_some() {
                             exists = true;
                         }
+                    }
+                    if !exists && ctx.global_lexical_kinds.contains_key(&atom.0) {
+                        exists = true;
                     }
                     if !exists {
                         let global = ctx.global();

@@ -213,6 +213,7 @@ pub enum Opcode {
     AddDisposableResource = 249,
     DisposeResourcesFinally = 250,
     SetUpvalueDirect = 251,
+    GlobalBinding = 252,
 }
 
 impl Opcode {
@@ -417,6 +418,7 @@ impl Opcode {
             249 => Some(Opcode::AddDisposableResource),
             250 => Some(Opcode::DisposeResourcesFinally),
             251 => Some(Opcode::SetUpvalueDirect),
+            252 => Some(Opcode::GlobalBinding),
             _ => None,
         }
     }
@@ -555,6 +557,7 @@ impl Opcode {
             Opcode::ThrowConstAssignment => 5,
             Opcode::SetGlobalVar => 7,
             Opcode::InitGlobalVar => 7,
+            Opcode::GlobalBinding => 8,
             Opcode::NewFunction => 1,
             Opcode::DeleteProp => 7,
             Opcode::HasProperty => 7,
@@ -1350,6 +1353,12 @@ impl Bytecode {
                     let idx = read_u32(1);
                     let src = read_u16(5);
                     write!(operands, " {}, r{}", idx, src).unwrap();
+                }
+                Opcode::GlobalBinding => {
+                    let mode = read_u8(1);
+                    let idx = read_u32(2);
+                    let src = read_u16(6);
+                    write!(operands, " {}, {}, r{}", mode, idx, src).unwrap();
                 }
                 Opcode::Await => {
                     let src = read_u16(1);
