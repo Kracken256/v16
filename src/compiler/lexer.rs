@@ -811,6 +811,15 @@ impl Lexer {
                 self.advance();
             } else if c == '\\' {
                 if let Some(ch) = self.read_identifier_escape() {
+                    let valid = if value.is_empty() {
+                        Self::is_identifier_start(ch)
+                    } else {
+                        Self::is_identifier_part(ch)
+                    };
+                    if !valid {
+                        self.fail("Invalid escape sequence in identifier");
+                        break;
+                    }
                     value.push(ch);
                     had_escape = true;
                 } else {
@@ -887,14 +896,31 @@ impl Lexer {
     fn read_private_identifier(&mut self) -> Token {
         self.advance();
         let mut value = String::from("#");
+        let mut first = true;
         while self.pos < self.source.len() {
             let c = self.source[self.pos];
-            if Self::is_identifier_part(c) {
+            let unescaped_valid = if first {
+                Self::is_identifier_start(c)
+            } else {
+                Self::is_identifier_part(c)
+            };
+            if unescaped_valid {
                 value.push(c);
                 self.advance();
+                first = false;
             } else if c == '\\' {
                 if let Some(ch) = self.read_identifier_escape() {
+                    let valid = if first {
+                        Self::is_identifier_start(ch)
+                    } else {
+                        Self::is_identifier_part(ch)
+                    };
+                    if !valid {
+                        self.fail("Invalid escape sequence in private identifier");
+                        break;
+                    }
                     value.push(ch);
+                    first = false;
                 } else {
                     break;
                 }
