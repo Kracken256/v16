@@ -570,69 +570,23 @@ fn js_to_string_value(ctx: &mut JSContext, val: &JSValue) -> Result<String, ()> 
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return Err(());
     }
-    if val.is_object() {
-        let obj = val.as_object();
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-            let to_string_atom = ctx.intern("toString");
-            let value_of_atom = ctx.intern("valueOf");
-            let hint_string = ctx.intern("string");
-            if let Some(to_prim) = obj.get(ctx.intern("__toPrimitive__hook__")) {
-                let _ = obj;
-                if to_prim.is_function() {
-                    let result = vm.call_function_with_this(
-                        ctx,
-                        to_prim,
-                        val.clone(),
-                        &[JSValue::new_string(hint_string)],
-                    );
-                    if ctx.pending_exception.is_some() {
-                        return Err(());
-                    }
-                    if let Ok(prim) = result {
-                        if !prim.is_object() {
-                            return js_to_string_value(ctx, &prim);
-                        }
-                    }
-                }
-            }
-            let to_string_fn = obj.get(to_string_atom);
-            let _ = obj;
-            if let Some(fn_val) = to_string_fn {
-                if fn_val.is_function() {
-                    let result = vm.call_function_with_this(ctx, fn_val, val.clone(), &[]);
-                    if ctx.pending_exception.is_some() {
-                        return Err(());
-                    }
-                    if let Ok(r) = result {
-                        if !r.is_object() {
-                            return js_to_string_value(ctx, &r);
-                        }
-                    }
-                }
-            }
-            if ctx.pending_exception.is_some() {
-                return Err(());
-            }
-            let obj2 = val.as_object();
-            let value_of_fn = obj2.get(value_of_atom);
-            let _ = obj2;
-            if let Some(fn_val) = value_of_fn {
-                if fn_val.is_function() {
-                    let result = vm.call_function_with_this(ctx, fn_val, val.clone(), &[]);
-                    if ctx.pending_exception.is_some() {
-                        return Err(());
-                    }
-                    if let Ok(r) = result {
-                        if !r.is_object() {
-                            return js_to_string_value(ctx, &r);
-                        }
-                    }
-                }
-            }
-            if ctx.pending_exception.is_some() {
-                return Err(());
-            }
+    if val.is_object_like() {
+        let Some(vm_ptr) = ctx.get_register_vm_ptr() else {
+            return Ok(String::new());
+        };
+        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+        let prim = vm.ordinary_to_primitive(val, "string", ctx);
+        if let Some(exc) = ctx
+            .pending_exception
+            .take()
+            .or_else(|| vm.pending_throw.take())
+            .or_else(|| vm.last_caught_exception.take())
+        {
+            ctx.pending_exception = Some(exc);
+            return Err(());
+        }
+        if !prim.is_object_like() {
+            return js_to_string_value(ctx, &prim);
         }
         let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
         if let Some(proto) = ctx.get_type_error_prototype() {
