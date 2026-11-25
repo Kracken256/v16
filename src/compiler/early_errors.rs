@@ -564,12 +564,12 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
             validate_single_statement(&f.body, ctx, false)
         }
         ASTNode::ForInStatement(f) => {
-            validate_for_in_of_left(&f.left, ctx)?;
+            validate_for_in_of(&f.left, &f.body, ctx)?;
             validate_expression(&f.right, ctx)?;
             validate_single_statement(&f.body, ctx, false)
         }
         ASTNode::ForOfStatement(f) => {
-            validate_for_in_of_left(&f.left, ctx)?;
+            validate_for_in_of(&f.left, &f.body, ctx)?;
             validate_expression(&f.right, ctx)?;
             validate_single_statement(&f.body, ctx, false)
         }
@@ -724,6 +724,17 @@ fn validate_single_statement(
 fn validate_variable_declaration(vd: &VariableDeclaration, ctx: Ctx) -> Result<(), String> {
     for d in &vd.declarations {
         validate_binding_pattern(&d.id, ctx)?;
+        if vd.kind != VariableKind::Var {
+            let mut names: Vec<(String, bool)> = Vec::new();
+            collect_binding_pattern_names(&d.id, &mut names);
+            for (name, _) in &names {
+                if name == "let" {
+                    return Err(
+                        "SyntaxError: 'let' is disallowed as a lexically bound name".to_string(),
+                    );
+                }
+            }
+        }
         if let Some(init) = &d.init {
             validate_expression(init, ctx)?;
         }
@@ -736,6 +747,38 @@ fn validate_for_in_of_left(left: &ForInOfLeft, ctx: Ctx) -> Result<(), String> {
         ForInOfLeft::VariableDeclaration(vd) => validate_variable_declaration(vd, ctx),
         ForInOfLeft::AssignmentTarget(t) => validate_assignment_target(t, ctx),
     }
+}
+
+fn validate_for_in_of(
+    left: &ForInOfLeft,
+    body: &ASTNode,
+    ctx: Ctx,
+) -> Result<(), String> {
+    validate_for_in_of_left(left, ctx)?;
+    let ForInOfLeft::VariableDeclaration(vd) = left else {
+        return Ok(());
+    };
+    if vd.kind == VariableKind::Var {
+        return Ok(());
+    }
+    let mut names: Vec<(String, bool)> = Vec::new();
+    for d in &vd.declarations {
+        collect_binding_pattern_names(&d.id, &mut names);
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    for (name, _) in &names {
+        if !seen.insert(name.clone()) {
+            return Err(redeclaration_error(name));
+        }
+    }
+    let mut vars: HashSet<String> = HashSet::new();
+    collect_var_names(body, false, &mut vars);
+    for (name, _) in &names {
+        if vars.contains(name) {
+            return Err(redeclaration_error(name));
+        }
+    }
+    Ok(())
 }
 
 fn validate_function_declaration(fd: &FunctionDeclaration, ctx: Ctx) -> Result<(), String> {
