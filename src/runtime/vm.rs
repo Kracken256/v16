@@ -9938,6 +9938,43 @@ impl VM {
         atom: crate::runtime::atom::Atom,
     ) -> Result<JSValue, String> {
         if !obj.is_object_like() {
+            if obj.is_string()
+                || obj.is_int()
+                || obj.is_float()
+                || obj.is_bool()
+                || obj.is_symbol()
+                || obj.is_bigint()
+            {
+                if obj.is_string() && atom == ctx.common_atoms.length {
+                    return Ok(JSValue::new_int(ctx.string_char_count(obj.get_atom()) as i64));
+                }
+                let mut current = if obj.is_string() {
+                    ctx.get_string_prototype()
+                } else if obj.is_int() || obj.is_float() {
+                    ctx.get_number_prototype()
+                } else if obj.is_symbol() {
+                    ctx.get_symbol_prototype()
+                } else if obj.is_bigint() {
+                    ctx.get_bigint_prototype()
+                } else {
+                    ctx.get_bool_prototype()
+                };
+                while let Some(ptr) = current {
+                    let proto = unsafe { &*ptr };
+                    if let Some(entry) = proto.get_own_accessor_entry(atom) {
+                        if let Some(getter) = entry.get {
+                            if getter.is_function() {
+                                return self.call_function_with_this(ctx, getter, obj, &[]);
+                            }
+                        }
+                        return Ok(JSValue::undefined());
+                    }
+                    if let Some(v) = proto.get(atom) {
+                        return Ok(v);
+                    }
+                    current = proto.prototype;
+                }
+            }
             return Ok(JSValue::undefined());
         }
         let js_obj = unsafe { obj.as_object() };
