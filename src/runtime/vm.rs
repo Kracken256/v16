@@ -11664,6 +11664,8 @@ impl VM {
                                         return None;
                                     }
                                 }
+                            } else if getter.is_undefined() {
+                                self.set_reg(dst, JSValue::undefined());
                             } else {
                                 self.set_pending_type_error(
                                     ctx,
@@ -11715,6 +11717,8 @@ impl VM {
                                                     return None;
                                                 }
                                             }
+                                        } else if getter.is_undefined() {
+                                            self.set_reg(dst, JSValue::undefined());
                                         } else {
                                             self.set_pending_type_error(
                                                 ctx,
@@ -11774,6 +11778,8 @@ impl VM {
                                                     return None;
                                                 }
                                             }
+                                        } else if getter.is_undefined() {
+                                            self.set_reg(dst, JSValue::undefined());
                                         } else {
                                             self.set_pending_type_error(
                                                 ctx,
@@ -11813,6 +11819,8 @@ impl VM {
                                     return None;
                                 }
                             }
+                        } else if getter.is_undefined() {
+                            JSValue::undefined()
                         } else {
                             self.set_pending_type_error(ctx, "Property getter is not a function");
                             JSValue::undefined()
@@ -11848,6 +11856,8 @@ impl VM {
                                                 return None;
                                             }
                                         }
+                                    } else if getter.is_undefined() {
+                                        JSValue::undefined()
                                     } else {
                                         self.set_pending_type_error(
                                             ctx,
@@ -11880,6 +11890,8 @@ impl VM {
                                             return None;
                                         }
                                     }
+                                } else if getter.is_undefined() {
+                                    JSValue::undefined()
                                 } else {
                                     self.set_pending_type_error(
                                         ctx,

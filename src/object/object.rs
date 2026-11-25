@@ -176,6 +176,7 @@ pub const ATTR_WRITABLE: u8 = 1 << 0;
 pub const ATTR_ENUMERABLE: u8 = 1 << 1;
 pub const ATTR_CONFIGURABLE: u8 = 1 << 2;
 const ATTR_DELETED: u8 = 1 << 7;
+const ATTR_ACCESSOR: u8 = 1 << 6;
 const ATTR_DEFAULT: u8 = ATTR_WRITABLE | ATTR_ENUMERABLE | ATTR_CONFIGURABLE;
 
 #[derive(Clone, Debug)]
@@ -999,13 +1000,13 @@ impl JSObject {
         let len = self.props.len();
 
         if len > 0 && self.props[len - 1].atom == prop {
-            if self.props[len - 1].attrs != ATTR_DELETED {
+            if self.props[len - 1].attrs & (ATTR_DELETED | ATTR_ACCESSOR) == 0 {
                 return Some(len - 1);
             }
         }
         for i in 0..len.saturating_sub(1) {
             if self.props[i].atom == prop {
-                if self.props[i].attrs == ATTR_DELETED {
+                if self.props[i].attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0 {
                     continue;
                 }
                 return Some(i);
@@ -1018,7 +1019,9 @@ impl JSObject {
     pub fn find_offset(&self, prop: Atom) -> Option<usize> {
         if let Some(offset) = self.shape_offset(prop) {
             let off = offset as usize;
-            if off < self.props.len() && self.props[off].attrs == ATTR_DELETED {
+            if off < self.props.len()
+                && self.props[off].attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0
+            {
             } else {
                 return Some(off);
             }
@@ -1028,7 +1031,9 @@ impl JSObject {
             if let Some(ref map) = extra.property_map {
                 if let Some(&offset) = map.get(&prop) {
                     let off = offset as usize;
-                    if off < self.props.len() && self.props[off].attrs == ATTR_DELETED {
+                    if off < self.props.len()
+                        && self.props[off].attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0
+                    {
                     } else {
                         return Some(off);
                     }
@@ -1036,6 +1041,16 @@ impl JSObject {
             }
         }
         self.find_offset_linear(prop)
+    }
+
+    fn find_accessor_slot(&self, prop: Atom) -> Option<usize> {
+        for i in 0..self.props.len() {
+            let slot = self.props.get(i).expect("valid index");
+            if slot.atom == prop && slot.attrs & ATTR_ACCESSOR != 0 {
+                return Some(i);
+            }
+        }
+        None
     }
 
     pub fn is_property_writable(&self, prop: Atom) -> bool {
@@ -1079,7 +1094,7 @@ impl JSObject {
     pub fn get_by_offset(&self, offset: usize) -> Option<JSValue> {
         if offset < self.props.len as usize {
             let slot = unsafe { self.props.inline[offset].assume_init_ref() };
-            if slot.attrs != ATTR_DELETED {
+            if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) == 0 {
                 return Some(slot.value);
             }
             return None;
@@ -1088,7 +1103,7 @@ impl JSObject {
         if let Some(ref v) = self.props.heap {
             let h_idx = offset - INLINE_PROPS;
             if let Some(slot) = v.get(h_idx) {
-                if slot.attrs != ATTR_DELETED {
+                if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) == 0 {
                     return Some(slot.value);
                 }
             }
@@ -1128,7 +1143,7 @@ impl JSObject {
     pub fn set_by_offset(&mut self, offset: usize, value: JSValue) -> bool {
         if offset < self.props.len as usize {
             let slot = unsafe { self.props.inline[offset].assume_init_mut() };
-            if slot.attrs == ATTR_DELETED {
+            if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0 {
                 return false;
             }
             if slot.attrs & ATTR_WRITABLE == 0 {
@@ -1141,7 +1156,7 @@ impl JSObject {
         if let Some(ref mut v) = self.props.heap {
             let h_idx = offset - INLINE_PROPS;
             if let Some(slot) = v.get_mut(h_idx) {
-                if slot.attrs == ATTR_DELETED {
+                if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0 {
                     return false;
                 }
                 if slot.attrs & ATTR_WRITABLE == 0 {
@@ -1214,7 +1229,7 @@ impl JSObject {
         if let Some(ref extra) = self.extra {
             if let Some(ref accs) = extra.accessors {
                 if let Some(entry) = accs.get(&prop) {
-                    return entry.get;
+                    return Some(entry.get.unwrap_or_else(JSValue::undefined));
                 }
             }
         }
@@ -1242,6 +1257,13 @@ impl JSObject {
         enumerable: bool,
         configurable: bool,
     ) {
+        if let Some(offset) = self.find_offset(prop) {
+            if offset < self.props.len() {
+                self.props[offset].value = JSValue::undefined();
+                self.props[offset].attrs |= ATTR_ACCESSOR;
+                self.flags |= FLAG_HAS_DELETED_PROPS;
+            }
+        }
         let extra = self.ensure_extra();
         extra
             .accessors
@@ -1348,7 +1370,7 @@ impl JSObject {
         if let Some(ref extra) = self.extra {
             if let Some(ref accs) = extra.accessors {
                 if let Some(entry) = accs.get(&prop) {
-                    return entry.get;
+                    return Some(entry.get.unwrap_or_else(JSValue::undefined));
                 }
             }
         }
@@ -1370,7 +1392,7 @@ impl JSObject {
                 if let Some(ref extra) = proto.extra {
                     if let Some(ref accs) = extra.accessors {
                         if let Some(entry) = accs.get(&prop) {
-                            return entry.get;
+                            return Some(entry.get.unwrap_or_else(JSValue::undefined));
                         }
                     }
                 }
@@ -1795,7 +1817,7 @@ impl JSObject {
         }
         // Append remaining enumerable data props not yet seen
         for slot in &self.props {
-            if slot.attrs == ATTR_DELETED {
+            if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0 {
                 continue;
             }
             if !include_symbols && slot.atom.0 & 0x40000000 != 0 {
@@ -1828,7 +1850,7 @@ impl JSObject {
     pub fn non_enumerable_property_atoms(&self) -> Vec<Atom> {
         let mut result = Vec::new();
         for slot in &self.props {
-            if slot.attrs == ATTR_DELETED {
+            if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0 {
                 continue;
             }
             if slot.attrs & ATTR_ENUMERABLE == 0 {
@@ -2004,7 +2026,7 @@ impl JSObject {
                 if let Some(offset) = self.find_offset(prop) {
                     if offset < self.props.len() && self.props[offset].attrs != ATTR_DELETED {
                         self.props[offset].value = JSValue::undefined();
-                        self.props[offset].attrs = ATTR_DELETED;
+                        self.props[offset].attrs |= ATTR_ACCESSOR;
                         self.flags |= FLAG_HAS_DELETED_PROPS;
                     }
                 }
@@ -2031,12 +2053,21 @@ impl JSObject {
             } else {
                 let new_attrs =
                     attrs_from_bools(desc.writable, desc.enumerable, desc.configurable);
+                let accessor_slot = self.find_accessor_slot(prop);
                 if let Some(value) = desc.value {
                     if let Some(offset) = self.find_offset(prop) {
                         if offset < self.props.len() && self.props[offset].attrs != ATTR_DELETED {
                             self.props[offset].value = value;
                             self.props[offset].attrs = new_attrs;
                         }
+                    } else if let Some(offset) = accessor_slot {
+                        if let Some(ref mut extra) = self.extra {
+                            if let Some(ref mut accs) = extra.accessors {
+                                accs.remove(&prop);
+                            }
+                        }
+                        self.props[offset].value = value;
+                        self.props[offset].attrs = new_attrs;
                     } else {
                         self.props.push(PropSlot::new(prop, value, new_attrs));
                     }
@@ -2044,6 +2075,14 @@ impl JSObject {
                     if offset < self.props.len() && self.props[offset].attrs != ATTR_DELETED {
                         self.props[offset].attrs = new_attrs;
                     }
+                } else if let Some(offset) = accessor_slot {
+                    if let Some(ref mut extra) = self.extra {
+                        if let Some(ref mut accs) = extra.accessors {
+                            accs.remove(&prop);
+                        }
+                    }
+                    self.props[offset].value = JSValue::undefined();
+                    self.props[offset].attrs = new_attrs;
                 }
             }
             return true;
@@ -2102,6 +2141,11 @@ impl JSObject {
                     }
                 }
                 if accs.remove(&prop).is_some() {
+                    if let Some(offset) = self.find_accessor_slot(prop) {
+                        self.props[offset].value = JSValue::undefined();
+                        self.props[offset].attrs = ATTR_DELETED;
+                        self.flags |= FLAG_HAS_DELETED_PROPS;
+                    }
                     return true;
                 }
             }
@@ -2219,15 +2263,24 @@ impl JSObject {
 
     pub fn keys(&self) -> Vec<Atom> {
         let mut result = Vec::new();
+        let mut seen: std::collections::HashSet<Atom> = std::collections::HashSet::new();
         for slot in &self.props {
-            if slot.attrs != ATTR_DELETED && slot.atom.0 & 0x40000000 == 0 {
+            if slot.attrs == ATTR_DELETED {
+                continue;
+            }
+            if slot.attrs & ATTR_ACCESSOR != 0 && self.get_own_accessor_entry(slot.atom).is_none()
+            {
+                continue;
+            }
+            seen.insert(slot.atom);
+            if slot.atom.0 & 0x40000000 == 0 {
                 result.push(slot.atom);
             }
         }
         if let Some(ref extra) = self.extra {
             if let Some(ref accs) = extra.accessors {
                 for atom in accs.keys() {
-                    if atom.0 & 0x40000000 == 0 {
+                    if atom.0 & 0x40000000 == 0 && !seen.contains(atom) {
                         result.push(*atom);
                     }
                 }
@@ -2238,15 +2291,24 @@ impl JSObject {
 
     pub fn all_keys(&self) -> Vec<Atom> {
         let mut result: Vec<Atom> = Vec::new();
+        let mut seen: std::collections::HashSet<Atom> = std::collections::HashSet::new();
         for slot in &self.props {
-            if slot.attrs != ATTR_DELETED {
-                result.push(slot.atom);
+            if slot.attrs == ATTR_DELETED {
+                continue;
             }
+            if slot.attrs & ATTR_ACCESSOR != 0 && self.get_own_accessor_entry(slot.atom).is_none()
+            {
+                continue;
+            }
+            seen.insert(slot.atom);
+            result.push(slot.atom);
         }
         if let Some(ref extra) = self.extra {
             if let Some(ref accs) = extra.accessors {
                 for atom in accs.keys() {
-                    result.push(*atom);
+                    if !seen.contains(atom) {
+                        result.push(*atom);
+                    }
                 }
             }
         }
@@ -2255,10 +2317,28 @@ impl JSObject {
 
     pub fn symbol_keys(&self) -> Vec<crate::runtime::atom::Atom> {
         let mut result = Vec::new();
+        let mut seen: std::collections::HashSet<Atom> = std::collections::HashSet::new();
         for i in 0..self.props.len() {
             let slot = self.props.get(i).expect("valid index");
-            if slot.attrs != ATTR_DELETED && slot.atom.0 & 0x40000000 != 0 {
+            if slot.attrs == ATTR_DELETED {
+                continue;
+            }
+            if slot.attrs & ATTR_ACCESSOR != 0 && self.get_own_accessor_entry(slot.atom).is_none()
+            {
+                continue;
+            }
+            seen.insert(slot.atom);
+            if slot.atom.0 & 0x40000000 != 0 {
                 result.push(slot.atom);
+            }
+        }
+        if let Some(ref extra) = self.extra {
+            if let Some(ref accs) = extra.accessors {
+                for atom in accs.keys() {
+                    if atom.0 & 0x40000000 != 0 && !seen.contains(atom) {
+                        result.push(*atom);
+                    }
+                }
             }
         }
         result
@@ -2266,18 +2346,30 @@ impl JSObject {
 
     pub fn enumerable_keys(&self) -> Vec<Atom> {
         let mut result = Vec::new();
+        let mut seen: std::collections::HashSet<Atom> = std::collections::HashSet::new();
         for slot in &self.props {
-            if slot.attrs != ATTR_DELETED
-                && slot.attrs & ATTR_ENUMERABLE != 0
-                && slot.atom.0 & 0x40000000 == 0
-            {
+            if slot.attrs == ATTR_DELETED {
+                continue;
+            }
+            if slot.attrs & ATTR_ACCESSOR != 0 {
+                let Some(entry) = self.get_own_accessor_entry(slot.atom) else {
+                    continue;
+                };
+                if !entry.enumerable {
+                    continue;
+                }
+            } else if slot.attrs & ATTR_ENUMERABLE == 0 {
+                continue;
+            }
+            seen.insert(slot.atom);
+            if slot.atom.0 & 0x40000000 == 0 {
                 result.push(slot.atom);
             }
         }
         if let Some(ref extra) = self.extra {
             if let Some(ref accs) = extra.accessors {
                 for (atom, entry) in accs.iter() {
-                    if entry.enumerable && atom.0 & 0x40000000 == 0 {
+                    if entry.enumerable && atom.0 & 0x40000000 == 0 && !seen.contains(atom) {
                         result.push(*atom);
                     }
                 }
@@ -2288,7 +2380,7 @@ impl JSObject {
 
     pub fn for_each_property<F: FnMut(Atom, JSValue, u8)>(&self, mut f: F) {
         for slot in &self.props {
-            if slot.attrs == ATTR_DELETED {
+            if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0 {
                 continue;
             }
             f(slot.atom, slot.value, slot.attrs);
