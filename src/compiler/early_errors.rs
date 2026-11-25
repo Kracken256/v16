@@ -274,6 +274,14 @@ fn validate_program_with_context(
                     "SyntaxError: 'import' and 'export' may only appear in a module".to_string(),
                 );
             }
+            if let ASTNode::VariableDeclaration(vd) = stmt {
+                if vd.kind.is_using() {
+                    return Err(
+                        "SyntaxError: 'using' declarations are not allowed at the top level of a script"
+                            .to_string(),
+                    );
+                }
+            }
         }
     }
     let strict = is_strict || program.source_type == SourceType::Module;
@@ -646,7 +654,7 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
         ASTNode::ForStatement(f) => {
             match &f.init {
                 Some(ForInit::VariableDeclaration(vd)) => {
-                    validate_variable_declaration(vd, ctx)?;
+                    validate_variable_declaration(vd, ctx, true)?;
                     if vd.kind != VariableKind::Var {
                         check_lexical_head_against_body(vd, &f.body)?;
                     }
@@ -723,6 +731,12 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
                     validate_expression(t, ctx)?;
                 }
                 for st in &c.consequent {
+                    if matches!(st, ASTNode::VariableDeclaration(vd) if vd.kind.is_using()) {
+                        return Err(
+                            "SyntaxError: 'using' declarations are not allowed directly within switch case clauses"
+                                .to_string(),
+                        );
+                    }
                     validate_statement(st, ctx)?;
                 }
             }
@@ -770,11 +784,11 @@ fn validate_statement(stmt: &ASTNode, ctx: Ctx) -> Result<(), String> {
             Ok(())
         }
         ASTNode::ThrowStatement(t) => validate_expression(&t.argument, ctx),
-        ASTNode::VariableDeclaration(vd) => validate_variable_declaration(vd, ctx),
+        ASTNode::VariableDeclaration(vd) => validate_variable_declaration(vd, ctx, true),
         ASTNode::FunctionDeclaration(fd) => validate_function_declaration(fd, ctx),
         ASTNode::ClassDeclaration(cd) => validate_class_declaration(cd, ctx),
         ASTNode::ExportNamedDeclaration(ed) => match &ed.declaration {
-            Some(ExportDeclaration::Variable(vd)) => validate_variable_declaration(vd, ctx),
+            Some(ExportDeclaration::Variable(vd)) => validate_variable_declaration(vd, ctx, true),
             Some(ExportDeclaration::Function(fd)) => validate_function_declaration(fd, ctx),
             Some(ExportDeclaration::Class(cd)) => validate_class_declaration(cd, ctx),
             None => Ok(()),
@@ -820,7 +834,11 @@ fn validate_single_statement(
     validate_statement(stmt, ctx)
 }
 
-fn validate_variable_declaration(vd: &VariableDeclaration, ctx: Ctx) -> Result<(), String> {
+fn validate_variable_declaration(
+    vd: &VariableDeclaration,
+    ctx: Ctx,
+    require_initializer: bool,
+) -> Result<(), String> {
     for d in &vd.declarations {
         validate_binding_pattern(&d.id, ctx)?;
         if vd.kind != VariableKind::Var {
@@ -834,6 +852,16 @@ fn validate_variable_declaration(vd: &VariableDeclaration, ctx: Ctx) -> Result<(
                 }
             }
         }
+        if vd.kind.is_using() {
+            if !matches!(d.id, BindingPattern::Identifier(_)) {
+                return Err(
+                    "SyntaxError: 'using' declarations only allow identifier bindings".to_string(),
+                );
+            }
+            if require_initializer && d.init.is_none() {
+                return Err("SyntaxError: Missing initializer in using declaration".to_string());
+            }
+        }
         if let Some(init) = &d.init {
             validate_expression(init, ctx)?;
         }
@@ -843,7 +871,7 @@ fn validate_variable_declaration(vd: &VariableDeclaration, ctx: Ctx) -> Result<(
 
 fn validate_for_in_of_left(left: &ForInOfLeft, ctx: Ctx) -> Result<(), String> {
     match left {
-        ForInOfLeft::VariableDeclaration(vd) => validate_variable_declaration(vd, ctx),
+        ForInOfLeft::VariableDeclaration(vd) => validate_variable_declaration(vd, ctx, false),
         ForInOfLeft::AssignmentTarget(t) => validate_assignment_target(t, ctx),
     }
 }

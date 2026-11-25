@@ -481,6 +481,18 @@ pub enum VariableKind {
     Var,
     Let,
     Const,
+    Using,
+    AwaitUsing,
+}
+
+impl VariableKind {
+    pub fn is_using(self) -> bool {
+        matches!(self, VariableKind::Using | VariableKind::AwaitUsing)
+    }
+
+    pub fn is_await_using(self) -> bool {
+        matches!(self, VariableKind::AwaitUsing)
+    }
 }
 
 #[derive(Debug, Clone)]

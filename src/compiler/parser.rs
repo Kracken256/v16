@@ -15,6 +15,7 @@ pub struct Parser {
     allow_in: bool,
     in_generator: bool,
     pub in_async: bool,
+    in_static_block: bool,
 }
 
 impl Parser {
@@ -35,6 +36,7 @@ impl Parser {
             allow_in: true,
             in_generator: false,
             in_async: false,
+            in_static_block: false,
         }
     }
 
@@ -285,6 +287,12 @@ impl Parser {
             }
             Some((TokenType::Keyword, "import")) if self.peek_at("(") || self.peek_at(".") => {
                 self.parse_expression_statement()
+            }
+            Some((TokenType::Identifier, "using")) if self.starts_using_declaration() => {
+                self.parse_using_declaration(false)
+            }
+            Some((TokenType::Keyword, "await")) if self.starts_await_using_declaration() => {
+                self.parse_using_declaration(true)
             }
             _ => self.parse_expression_statement_or_labelled(),
         }
@@ -672,13 +680,16 @@ impl Parser {
         let saved = self.in_generator;
         let saved_async = self.in_async;
         let saved_allow_in = self.allow_in;
+        let saved_static_block = self.in_static_block;
         self.in_generator = generator;
         self.in_async = is_async;
+        self.in_static_block = false;
         self.allow_in = true;
         let result = self.parse_block_body();
         self.allow_in = saved_allow_in;
         self.in_generator = saved;
         self.in_async = saved_async;
+        self.in_static_block = saved_static_block;
         result
     }
 
@@ -759,7 +770,11 @@ impl Parser {
 
             if is_static && self.at_punct("{") {
                 self.expect("{")?;
-                let (body, lines) = self.parse_statement_list_with_lines()?;
+                let saved_static_block = self.in_static_block;
+                self.in_static_block = true;
+                let parsed = self.parse_statement_list_with_lines();
+                self.in_static_block = saved_static_block;
+                let (body, lines) = parsed?;
                 self.expect("}")?;
                 elements.push(ClassElement::StaticBlock(StaticBlock { body, lines }));
                 continue;
@@ -1003,6 +1018,10 @@ impl Parser {
         if self.at_punct(";") {
             self.advance();
             return self.parse_for_rest(None);
+        }
+
+        if self.for_head_starts_with_using_declaration() {
+            return self.parse_for_using_head(is_await);
         }
 
         let is_var = matches!(self.cur_value(), "var" | "let" | "const");
@@ -1295,7 +1314,7 @@ impl Parser {
         }))
     }
 
-    fn is_lexical_declaration_start(&self) -> bool {
+    fn is_lexical_declaration_start(&mut self) -> bool {
         if self.at_keyword("const") || self.at_keyword("class") {
             return true;
         }
@@ -1316,7 +1335,220 @@ impl Parser {
                         || (matches!(t.token_type, TokenType::Keyword) && t.value != "in")
                 });
         }
+        if self.starts_using_declaration() || self.starts_await_using_declaration() {
+            return true;
+        }
         false
+    }
+
+    fn token_can_be_binding_identifier(token: &Token) -> bool {
+        match token.token_type {
+            TokenType::Identifier => true,
+            TokenType::Keyword => !is_reserved_word(&token.value),
+            _ => false,
+        }
+    }
+
+    fn starts_using_declaration(&self) -> bool {
+        let Some(cur) = self.current.as_ref() else {
+            return false;
+        };
+        if cur.token_type != TokenType::Identifier || cur.value != "using" || cur.had_escape {
+            return false;
+        }
+        let Some(next) = self.peek_token.as_ref() else {
+            return false;
+        };
+        if next.line_terminator_before {
+            return false;
+        }
+        Self::token_can_be_binding_identifier(next)
+    }
+
+    fn starts_await_using_declaration(&mut self) -> bool {
+        if !self.in_async && !self.in_static_block {
+            return false;
+        }
+        let Some(cur) = self.current.as_ref() else {
+            return false;
+        };
+        if cur.token_type != TokenType::Keyword || cur.value != "await" || cur.had_escape {
+            return false;
+        }
+        let Some(using_token) = self.peek_token.as_ref() else {
+            return false;
+        };
+        if using_token.token_type != TokenType::Identifier
+            || using_token.value != "using"
+            || using_token.had_escape
+            || using_token.line_terminator_before
+        {
+            return false;
+        }
+        let Some(after) = self.lexer.peek() else {
+            return false;
+        };
+        if after.line_terminator_before {
+            return false;
+        }
+        Self::token_can_be_binding_identifier(&after)
+    }
+
+    fn for_head_starts_with_using_declaration(&mut self) -> bool {
+        let Some(cur) = self.current.as_ref() else {
+            return false;
+        };
+        if cur.token_type == TokenType::Identifier && cur.value == "using" && !cur.had_escape {
+            let Some(next) = self.peek_token.as_ref() else {
+                return false;
+            };
+            if next.line_terminator_before || !Self::token_can_be_binding_identifier(next) {
+                return false;
+            }
+            if next.token_type == TokenType::Keyword && next.value == "of" {
+                let Some(after) = self.lexer.peek() else {
+                    return false;
+                };
+                return after.token_type == TokenType::Punctuator
+                    && matches!(after.value.as_str(), "=" | "," | ";");
+            }
+            return true;
+        }
+        if cur.token_type == TokenType::Keyword && cur.value == "await" && !cur.had_escape {
+            if !self.in_async && !self.in_static_block {
+                return false;
+            }
+            let Some(using_token) = self.peek_token.as_ref() else {
+                return false;
+            };
+            if using_token.token_type != TokenType::Identifier
+                || using_token.value != "using"
+                || using_token.had_escape
+                || using_token.line_terminator_before
+            {
+                return false;
+            }
+            let Some(after) = self.lexer.peek() else {
+                return false;
+            };
+            if after.line_terminator_before {
+                return false;
+            }
+            return Self::token_can_be_binding_identifier(&after);
+        }
+        false
+    }
+
+    fn parse_binding_identifier(&mut self) -> Result<String, String> {
+        let name = self.cur_value().to_string();
+        if !self.is_identifier_name() {
+            return Err(self.error("expected identifier"));
+        }
+        if self.has_invalid_identifier_escape() {
+            return Err(self.error("Invalid escaped identifier"));
+        }
+        if is_reserved_word(&name) {
+            return Err(self.error(&format!("Unexpected reserved word '{}'", name)));
+        }
+        self.advance();
+        Ok(name)
+    }
+
+    fn parse_using_declaration(&mut self, await_using: bool) -> Result<ASTNode, String> {
+        if await_using {
+            self.advance();
+        }
+        self.advance();
+        let kind = if await_using {
+            VariableKind::AwaitUsing
+        } else {
+            VariableKind::Using
+        };
+        let mut declarations = Vec::new();
+        loop {
+            let name = self.parse_binding_identifier()?;
+            if !self.at_punct("=") {
+                return Err(self.error("Missing initializer in using declaration"));
+            }
+            self.advance();
+            let init = self.parse_assignment_expression()?;
+            declarations.push(VariableDeclarator {
+                id: BindingPattern::Identifier(name),
+                init: Some(init),
+            });
+            if self.at_punct(",") {
+                self.advance();
+                continue;
+            }
+            break;
+        }
+        self.expect_semicolon()?;
+        Ok(ASTNode::VariableDeclaration(VariableDeclaration {
+            kind,
+            declarations,
+        }))
+    }
+
+    fn parse_for_using_head(&mut self, is_await: bool) -> Result<ASTNode, String> {
+        let kind = if self.at_keyword("await") {
+            self.advance();
+            self.advance();
+            VariableKind::AwaitUsing
+        } else {
+            self.advance();
+            VariableKind::Using
+        };
+        let name = self.parse_binding_identifier()?;
+        if self.at_keyword("in") {
+            return Err(self.error("'using' declarations may not be used in for-in statements"));
+        }
+        if self.at_keyword("of") {
+            self.advance();
+            let right = self.parse_assignment_expression()?;
+            self.expect(")")?;
+            let body = self.parse_statement_body(false)?;
+            return Ok(ASTNode::ForOfStatement(ForOfStatement {
+                left: ForInOfLeft::VariableDeclaration(VariableDeclaration {
+                    kind,
+                    declarations: vec![VariableDeclarator {
+                        id: BindingPattern::Identifier(name),
+                        init: None,
+                    }],
+                }),
+                right,
+                body: Box::new(body),
+                is_await,
+            }));
+        }
+        let init = if self.at_punct("=") {
+            self.advance();
+            Some(self.parse_assignment_expression_no_in()?)
+        } else {
+            None
+        };
+        let mut declarations = vec![VariableDeclarator {
+            id: BindingPattern::Identifier(name),
+            init,
+        }];
+        while self.at_punct(",") {
+            self.advance();
+            let extra_name = self.parse_binding_identifier()?;
+            let extra_init = if self.at_punct("=") {
+                self.advance();
+                Some(self.parse_assignment_expression_no_in()?)
+            } else {
+                None
+            };
+            declarations.push(VariableDeclarator {
+                id: BindingPattern::Identifier(extra_name),
+                init: extra_init,
+            });
+        }
+        self.expect(";")?;
+        self.parse_for_rest(Some(ForInit::VariableDeclaration(VariableDeclaration {
+            kind,
+            declarations,
+        })))
     }
 
     fn is_labelled_function(node: &ASTNode) -> bool {
@@ -1835,8 +2067,10 @@ impl Parser {
 
         let saved_generator = self.in_generator;
         let saved_async = self.in_async;
+        let saved_static_block = self.in_static_block;
         self.in_generator = false;
         self.in_async = is_async;
+        self.in_static_block = false;
         let body = if self.at_punct("{") {
             ArrowBody::Block(self.parse_block_body()?)
         } else {
@@ -1844,6 +2078,7 @@ impl Parser {
         };
         self.in_generator = saved_generator;
         self.in_async = saved_async;
+        self.in_static_block = saved_static_block;
 
         Ok(Some(Expression::ArrowFunction(ArrowFunction {
             params,
