@@ -5215,6 +5215,76 @@ impl CodeGenerator {
         yield_expr: &YieldExpression,
         ctx: &mut JSContext,
     ) -> Result<u16, String> {
+        if self.in_async_generator {
+            return self.gen_yield_star_async(yield_expr, ctx);
+        }
+
+        let argument = match &yield_expr.argument {
+            Some(arg) => self.gen_expression(arg, ctx)?,
+            None => self.emit_load_undefined(),
+        };
+
+        let iter_reg = self.alloc_register();
+        self.emit(Opcode::GetIterator);
+        self.emit_u16(iter_reg);
+        self.emit_u16(argument);
+        self.free_register(argument);
+
+        let value_reg = self.alloc_register();
+        self.emit(Opcode::LoadUndefined);
+        self.emit_u16(value_reg);
+
+        let done_reg = self.alloc_register();
+        self.emit(Opcode::LoadFalse);
+        self.emit_u16(done_reg);
+
+        let returning_reg = self.alloc_register();
+        self.emit(Opcode::LoadFalse);
+        self.emit_u16(returning_reg);
+
+        let loop_start = self.code.len();
+        self.emit(Opcode::YieldStarStep);
+        self.emit_u16(iter_reg);
+        self.emit_u16(value_reg);
+        self.emit_u16(done_reg);
+        self.emit_u16(returning_reg);
+
+        self.emit(Opcode::JumpIfNot);
+        self.emit_u16(done_reg);
+        let yield_patch = self.code.len();
+        self.emit_i32(0);
+
+        self.emit(Opcode::JumpIfNot);
+        self.emit_u16(returning_reg);
+        let exit_patch = self.code.len();
+        self.emit_i32(0);
+
+        self.emit(Opcode::Return);
+        self.emit_u16(value_reg);
+
+        let yield_pos = self.code.len();
+        self.patch_jump(yield_patch, yield_pos);
+
+        self.emit(Opcode::YieldResult);
+        self.emit_u16(value_reg);
+
+        self.emit_backward_jump(loop_start);
+
+        let exit_pos = self.code.len();
+        self.patch_jump(exit_patch, exit_pos);
+
+        self.free_register(iter_reg);
+        self.free_register(done_reg);
+        self.free_register(returning_reg);
+
+        Ok(value_reg)
+    }
+
+    fn gen_yield_star_async(
+        &mut self,
+        yield_expr: &YieldExpression,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
         let iterable_reg = match &yield_expr.argument {
             Some(arg) => self.gen_expression(arg, ctx)?,
             None => {
@@ -5226,11 +5296,7 @@ impl CodeGenerator {
         };
 
         let iter_reg = self.alloc_register();
-        if self.in_async_generator {
-            self.emit(Opcode::GetAsyncIterator);
-        } else {
-            self.emit(Opcode::GetIterator);
-        }
+        self.emit(Opcode::GetAsyncIterator);
         self.emit_u16(iter_reg);
         self.emit_u16(iterable_reg);
         self.free_register(iterable_reg);
@@ -5241,11 +5307,7 @@ impl CodeGenerator {
         self.emit_u16(value_reg);
 
         let loop_start = self.code.len();
-        if self.in_async_generator {
-            self.emit(Opcode::IteratorNextSendAwait);
-        } else {
-            self.emit(Opcode::IteratorNextSend);
-        }
+        self.emit(Opcode::IteratorNextSendAwait);
         self.emit_u16(value_reg);
         self.emit_u16(done_reg);
         self.emit_u16(iter_reg);
@@ -5957,7 +6019,7 @@ impl CodeGenerator {
                 if yield_expr.delegate {
                     return self.gen_yield_star(yield_expr, ctx);
                 }
-                let val_reg = if let Some(arg) = &yield_expr.argument {
+                let arg_reg = if let Some(arg) = &yield_expr.argument {
                     self.gen_expression(arg, ctx)?
                 } else {
                     let r = self.alloc_register();
@@ -5965,15 +6027,25 @@ impl CodeGenerator {
                     self.emit_u16(r);
                     r
                 };
+                let result_reg = self.alloc_register();
+                self.emit(Opcode::Move);
+                self.emit_u16(result_reg);
+                self.emit_u16(arg_reg);
+                self.free_register(arg_reg);
                 self.emit(Opcode::Yield);
-                self.emit_u16(val_reg);
-                Ok(val_reg)
+                self.emit_u16(result_reg);
+                Ok(result_reg)
             }
             Expression::AwaitExpression(await_expr) => {
-                let val_reg = self.gen_expression(&await_expr.argument, ctx)?;
+                let arg_reg = self.gen_expression(&await_expr.argument, ctx)?;
+                let result_reg = self.alloc_register();
+                self.emit(Opcode::Move);
+                self.emit_u16(result_reg);
+                self.emit_u16(arg_reg);
+                self.free_register(arg_reg);
                 self.emit(Opcode::Await);
-                self.emit_u16(val_reg);
-                Ok(val_reg)
+                self.emit_u16(result_reg);
+                Ok(result_reg)
             }
             Expression::RegExpLiteral(re) => {
                 if let Err(e) = crate::regexp::Regex::with_flags(&re.pattern, &re.flags) {

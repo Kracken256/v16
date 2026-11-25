@@ -364,6 +364,10 @@ pub struct VM {
 
     pub last_yield_src: Option<u16>,
 
+    pub last_yield_is_result: bool,
+
+    pub generator_resume_kind: u8,
+
     pub last_uncaught: Option<JSValue>,
 
     pub pending_saved_args: Option<Vec<JSValue>>,
@@ -431,6 +435,8 @@ impl VM {
             instanceof_cache_result: false,
             regex_lit_cache: std::collections::HashMap::new(),
             last_yield_src: None,
+            last_yield_is_result: false,
+            generator_resume_kind: 0,
             last_uncaught: None,
             pending_saved_args: None,
             pending_function_ptr: None,
@@ -1973,6 +1979,175 @@ impl VM {
         }
     }
 
+    fn yield_star_step(
+        &mut self,
+        ctx: &mut JSContext,
+        iter_reg: u16,
+        value_reg: u16,
+        done_reg: u16,
+        returning_reg: u16,
+    ) -> Result<(), String> {
+        let kind = self.generator_resume_kind;
+        self.generator_resume_kind = 0;
+        self.set_reg(returning_reg, JSValue::bool(false));
+        let iter_val = self.get_reg(iter_reg);
+        let received = self.get_reg(value_reg);
+        if !iter_val.is_object_like() {
+            self.set_pending_type_error(ctx, "yield* iterator is not an object");
+            return Err("yield* iterator is not an object".to_string());
+        }
+        if kind == 0 {
+            let arr_atom = ctx.common_atoms.__iter_arr__;
+            let has_fast_path = unsafe { iter_val.as_object() }.get(arr_atom).is_some();
+            if has_fast_path {
+                match self.op_iterator_next(
+                    ctx,
+                    usize::MAX,
+                    value_reg,
+                    done_reg,
+                    iter_val,
+                    None,
+                    false,
+                    true,
+                    None,
+                ) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        self.rethrow_last_caught(ctx);
+                        return Err(e);
+                    }
+                }
+                if !self.get_reg(done_reg).is_truthy() {
+                    let v = self.get_reg(value_reg);
+                    let mut result = crate::object::object::JSObject::new();
+                    result.set(ctx.intern("value"), v);
+                    result.set(ctx.intern("done"), JSValue::bool(false));
+                    let ptr = Box::into_raw(Box::new(result)) as usize;
+                    self.set_reg(value_reg, JSValue::new_object(ptr));
+                }
+                return Ok(());
+            }
+        }
+        let target = match Self::iterator_record_parts(ctx, iter_val) {
+            Some((iterator, _, _)) => iterator,
+            None => iter_val,
+        };
+        let done_atom = ctx.intern("done");
+        let value_atom = ctx.intern("value");
+        let result: JSValue;
+        match kind {
+            1 => {
+                let throw_atom = ctx.intern("throw");
+                let throw_fn = match self.get_prop_value(ctx, target, throw_atom) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.rethrow_last_caught(ctx);
+                        return Err(e);
+                    }
+                };
+                if throw_fn.is_undefined() || throw_fn.is_null() {
+                    if let Some(exc) = self.invoke_iterator_return(ctx, target) {
+                        self.pending_throw = Some(exc);
+                        return Err("yield* iterator has no throw method".to_string());
+                    }
+                    self.set_pending_type_error(ctx, "yield* iterator has no throw method");
+                    return Err("yield* iterator has no throw method".to_string());
+                }
+                if !throw_fn.is_function() {
+                    self.set_pending_type_error(ctx, "yield* iterator throw is not a function");
+                    return Err("yield* iterator throw is not a function".to_string());
+                }
+                result = match self.call_function_with_this(ctx, throw_fn, target, &[received]) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.rethrow_last_caught(ctx);
+                        return Err(e);
+                    }
+                };
+            }
+            2 => {
+                let return_atom = ctx.intern("return");
+                let return_fn = match self.get_prop_value(ctx, target, return_atom) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.rethrow_last_caught(ctx);
+                        return Err(e);
+                    }
+                };
+                if return_fn.is_undefined() || return_fn.is_null() {
+                    self.set_reg(value_reg, received);
+                    self.set_reg(done_reg, JSValue::bool(true));
+                    self.set_reg(returning_reg, JSValue::bool(true));
+                    return Ok(());
+                }
+                if !return_fn.is_function() {
+                    self.set_pending_type_error(ctx, "yield* iterator return is not a function");
+                    return Err("yield* iterator return is not a function".to_string());
+                }
+                result = match self.call_function_with_this(ctx, return_fn, target, &[received]) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.rethrow_last_caught(ctx);
+                        return Err(e);
+                    }
+                };
+            }
+            _ => {
+                let next_atom = ctx.intern("next");
+                let next_fn = match Self::iterator_record_parts(ctx, iter_val) {
+                    Some((_, next, _)) => next,
+                    None => match self.get_prop_value(ctx, target, next_atom) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.rethrow_last_caught(ctx);
+                            return Err(e);
+                        }
+                    },
+                };
+                if !next_fn.is_function() {
+                    self.set_pending_type_error(ctx, "iterator next is not a function");
+                    return Err("iterator next is not a function".to_string());
+                }
+                result = match self.call_function_with_this(ctx, next_fn, target, &[received]) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.rethrow_last_caught(ctx);
+                        return Err(e);
+                    }
+                };
+            }
+        }
+        if !result.is_object_like() {
+            self.set_pending_type_error(ctx, "iterator result is not an object");
+            return Err("iterator result is not an object".to_string());
+        }
+        let done = match self.get_prop_value(ctx, result, done_atom) {
+            Ok(v) => v.is_truthy(),
+            Err(e) => {
+                self.rethrow_last_caught(ctx);
+                return Err(e);
+            }
+        };
+        if done {
+            let value = match self.get_prop_value(ctx, result, value_atom) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.rethrow_last_caught(ctx);
+                    return Err(e);
+                }
+            };
+            self.set_reg(value_reg, value);
+            self.set_reg(done_reg, JSValue::bool(true));
+            if kind == 2 {
+                self.set_reg(returning_reg, JSValue::bool(true));
+            }
+        } else {
+            self.set_reg(value_reg, result);
+            self.set_reg(done_reg, JSValue::bool(false));
+        }
+        Ok(())
+    }
+
     #[cold]
     fn set_pending_reference_error(&mut self, ctx: &mut JSContext, msg: &str) {
         use crate::object::object::JSObject;
@@ -2679,7 +2854,14 @@ impl VM {
                 for (i, arg) in args.iter().enumerate() {
                     snapshot[i + 1] = *arg;
                 }
-                let (result_snapshot, result_pc, result_done, result_send_reg, result_handlers) = {
+                let (
+                    result_snapshot,
+                    result_pc,
+                    result_done,
+                    result_send_reg,
+                    result_handlers,
+                    result_yield_is_result,
+                ) = {
                     let mut generator_vm = crate::runtime::vm::VM::new();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
                     let step = generator_vm.execute_generator_step(
@@ -2692,21 +2874,23 @@ impl VM {
                         args,
                         Some(ptr),
                         &[],
-                        None,
+                        0,
+                        JSValue::undefined(),
+                        false,
                     );
                     let uncaught = generator_vm.last_uncaught.take();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
                     drop(generator_vm);
                     match step {
-                        Ok((_val, new_snapshot, new_pc, done, src, handlers)) => {
-                            (new_snapshot, new_pc, done, src, handlers)
+                        Ok((_val, new_snapshot, new_pc, done, src, handlers, yield_is_result)) => {
+                            (new_snapshot, new_pc, done, src, handlers, yield_is_result)
                         }
                         Err(_) => {
                             if let Some(exc) = uncaught {
                                 self.last_caught_exception = Some(exc.clone());
                                 self.pending_throw = Some(exc);
                             }
-                            (snapshot, 0, false, None, Vec::new())
+                            (snapshot, 0, false, None, Vec::new(), false)
                         }
                     }
                 };
@@ -2730,6 +2914,7 @@ impl VM {
                     saved_args: args.to_vec(),
                     func_ptr: Some(ptr),
                     handlers: result_handlers,
+                    yield_is_result: result_yield_is_result,
                 });
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -3319,7 +3504,36 @@ impl VM {
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
                     self.last_yield_src = Some(src);
+                    self.last_yield_is_result = false;
                     return Ok(ExecutionOutcome::Yield(val));
+                }
+                Opcode::YieldResult => {
+                    let src = self.read_u16_pc();
+                    let val = self.get_reg(src);
+                    self.last_yield_src = Some(src);
+                    self.last_yield_is_result = true;
+                    return Ok(ExecutionOutcome::Yield(val));
+                }
+                Opcode::YieldStarStep => {
+                    let iter_reg = self.read_u16_pc();
+                    let value_reg = self.read_u16_pc();
+                    let done_reg = self.read_u16_pc();
+                    let returning_reg = self.read_u16_pc();
+                    match self.yield_star_step(
+                        ctx,
+                        iter_reg,
+                        value_reg,
+                        done_reg,
+                        returning_reg,
+                    ) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            if self.pending_throw.is_some() {
+                                continue;
+                            }
+                            return Err(e);
+                        }
+                    }
                 }
                 Opcode::Await => {
                     let src = self.read_u16_pc();
@@ -9425,7 +9639,14 @@ impl VM {
             snapshot[i + 1] = *arg;
         }
 
-        let (result_snapshot, result_pc, result_done, result_send_reg, result_handlers) = {
+        let (
+            result_snapshot,
+            result_pc,
+            result_done,
+            result_send_reg,
+            result_handlers,
+            result_yield_is_result,
+        ) = {
             let mut generator_vm = crate::runtime::vm::VM::new();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
             let step = generator_vm.execute_generator_step(
@@ -9438,14 +9659,16 @@ impl VM {
                 args,
                 Some(func_val.get_ptr()),
                 &[],
-                None,
+                0,
+                JSValue::undefined(),
+                false,
             );
             let uncaught = generator_vm.last_uncaught.take();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
             drop(generator_vm);
             match step {
-                Ok((_val, new_snapshot, new_pc, done, src, handlers)) => {
-                    (new_snapshot, new_pc, done, src, handlers)
+                Ok((_val, new_snapshot, new_pc, done, src, handlers, yield_is_result)) => {
+                    (new_snapshot, new_pc, done, src, handlers, yield_is_result)
                 }
                 Err(e) => {
                     if let Some(exc) = uncaught {
@@ -9456,7 +9679,7 @@ impl VM {
                     if e.contains("SyntaxError") || e.contains("Uncaught") {
                         return Err(e);
                     }
-                    (snapshot, 0, false, None, Vec::new())
+                    (snapshot, 0, false, None, Vec::new(), false)
                 }
             }
         };
@@ -9481,6 +9704,7 @@ impl VM {
             saved_args: args.to_vec(),
             func_ptr: Some(func_val.get_ptr()),
             handlers: result_handlers,
+            yield_is_result: result_yield_is_result,
         });
         let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
@@ -9498,7 +9722,9 @@ impl VM {
         saved_args: &[JSValue],
         func_ptr: Option<usize>,
         handlers: &[ExceptionHandler],
-        return_value: Option<JSValue>,
+        resume_kind: u8,
+        resume_value: JSValue,
+        yield_is_result: bool,
     ) -> Result<
         (
             JSValue,
@@ -9507,18 +9733,36 @@ impl VM {
             bool,
             Option<u16>,
             Vec<ExceptionHandler>,
+            bool,
         ),
         String,
     > {
         self.ctx_ptr = ctx;
         self.last_yield_src = None;
+        self.last_yield_is_result = false;
+        self.generator_resume_kind = 0;
         self.last_uncaught = None;
 
         self.pending_saved_args = Some(saved_args.to_vec());
         self.pending_function_ptr = func_ptr;
         self.pending_this = registers_snapshot.first().copied();
         self.pending_handlers = Some(handlers.to_vec());
-        self.pending_return_value = return_value;
+        if yield_is_result {
+            self.generator_resume_kind = resume_kind;
+            if resume_kind == 2 {
+                self.pending_return_value = None;
+            }
+        } else {
+            match resume_kind {
+                1 => {
+                    self.pending_throw = Some(resume_value);
+                }
+                2 => {
+                    self.pending_return_value = Some(resume_value);
+                }
+                _ => {}
+            }
+        }
 
         let needed = bytecode.locals_count as usize;
         if needed > self.registers.len() {
@@ -9562,6 +9806,7 @@ impl VM {
                 true,
                 self.last_yield_src,
                 handlers,
+                false,
             )),
             ExecutionOutcome::Yield(val) => Ok((
                 val,
@@ -9570,6 +9815,7 @@ impl VM {
                 false,
                 self.last_yield_src,
                 handlers,
+                self.last_yield_is_result,
             )),
         }
     }

@@ -194,6 +194,8 @@ pub enum Opcode {
     CheckThisInitialized = 230,
     GetNewTarget = 231,
     MarkDirectEval = 232,
+    YieldResult = 233,
+    YieldStarStep = 234,
 }
 
 impl Opcode {
@@ -379,6 +381,8 @@ impl Opcode {
             230 => Some(Opcode::CheckThisInitialized),
             231 => Some(Opcode::GetNewTarget),
             232 => Some(Opcode::MarkDirectEval),
+            233 => Some(Opcode::YieldResult),
+            234 => Some(Opcode::YieldStarStep),
             _ => None,
         }
     }
@@ -408,6 +412,7 @@ impl Opcode {
             | Opcode::GetSuperBase
             | Opcode::GetNewTarget
             | Opcode::Yield
+            | Opcode::YieldResult
             | Opcode::NewObject
             | Opcode::GetArguments
             | Opcode::GetCurrentFunction
@@ -535,6 +540,7 @@ impl Opcode {
             Opcode::Await => 3,
             Opcode::GetIterator => 5,
             Opcode::IteratorNext => 7,
+            Opcode::YieldStarStep => 9,
             Opcode::IteratorNextSend => 9,
             Opcode::IteratorClose => 3,
             Opcode::IteratorStep => 5,
@@ -781,6 +787,7 @@ impl Bytecode {
                 | Opcode::GetSuperBase
                 | Opcode::GetNewTarget
                 | Opcode::Yield
+                | Opcode::YieldResult
                 | Opcode::NewObject
                 | Opcode::GetArguments
                 | Opcode::GetCurrentFunction => {
@@ -1247,6 +1254,18 @@ impl Bytecode {
                     let dst_done = read_u16(3);
                     let iter = read_u16(5);
                     write!(operands, " r{}, r{}, r{}", dst_val, dst_done, iter).unwrap();
+                }
+                Opcode::YieldStarStep => {
+                    let iter = read_u16(1);
+                    let value = read_u16(3);
+                    let done = read_u16(5);
+                    let returning = read_u16(7);
+                    write!(
+                        operands,
+                        " r{}, r{}, r{}, r{}",
+                        iter, value, done, returning
+                    )
+                    .unwrap();
                 }
                 Opcode::IteratorNextSend => {
                     let dst_val = read_u16(1);

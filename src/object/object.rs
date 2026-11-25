@@ -22,6 +22,8 @@ pub struct GeneratorState {
     pub func_ptr: Option<usize>,
 
     pub handlers: Vec<crate::runtime::vm::ExceptionHandler>,
+
+    pub yield_is_result: bool,
 }
 
 pub struct AsyncState {
