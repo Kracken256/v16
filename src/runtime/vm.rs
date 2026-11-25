@@ -905,9 +905,8 @@ impl VM {
             let ptr = self.registers.as_mut_ptr().add(base);
             ptr.write(this_value);
 
-            let caller_ptr = self.cached_registers_ptr;
             for (i, r) in arg_regs.iter().enumerate() {
-                ptr.add(i + 1).write(*caller_ptr.add(*r as usize));
+                ptr.add(i + 1).write(self.get_reg(*r));
             }
             let fill_start = arg_regs.len() + 1;
             if fill_start < needed {
@@ -1298,13 +1297,13 @@ impl VM {
                     let mut args_vec = Vec::new();
                     let args: &[JSValue] = if argc as usize <= 16 {
                         for (i, r) in arg_regs.iter().enumerate() {
-                            args_buf[i] = self.registers[caller_base + *r as usize];
+                            args_buf[i] = self.get_reg(*r);
                         }
                         &args_buf[..argc as usize]
                     } else {
                         args_vec.reserve(argc as usize);
                         for r in arg_regs {
-                            args_vec.push(self.registers[caller_base + *r as usize]);
+                            args_vec.push(self.get_reg(*r));
                         }
                         &args_vec
                     };
@@ -1318,13 +1317,13 @@ impl VM {
                     let mut args_vec = Vec::new();
                     let args: &[JSValue] = if argc as usize <= 16 {
                         for (i, r) in arg_regs.iter().enumerate() {
-                            args_buf[i] = self.registers[caller_base + *r as usize];
+                            args_buf[i] = self.get_reg(*r);
                         }
                         &args_buf[..argc as usize]
                     } else {
                         args_vec.reserve(argc as usize);
                         for r in arg_regs {
-                            args_vec.push(self.registers[caller_base + *r as usize]);
+                            args_vec.push(self.get_reg(*r));
                         }
                         &args_vec
                     };
@@ -1342,16 +1341,12 @@ impl VM {
                     if let Some(cached_shape) = rb.cached_constructor_final_shape {
                         if this_val.is_object() {
                             let obj = unsafe { JSValue::object_from_ptr_mut(this_val.get_ptr()) };
-                            let cached_regs_ptr = self.cached_registers_ptr;
                             obj.fast_init_from_simple_constructor(
                                 rb.simple_constructor_props
                                     .iter()
                                     .map(|&(atom, arg_idx, _)| {
                                         let value = if (arg_idx as usize) < arg_regs.len() {
-                                            unsafe {
-                                                *cached_regs_ptr
-                                                    .add(arg_regs[arg_idx as usize] as usize)
-                                            }
+                                            self.get_reg(arg_regs[arg_idx as usize])
                                         } else {
                                             JSValue::undefined()
                                         };
@@ -1422,7 +1417,6 @@ impl VM {
                     }
                     return Ok(false);
                 }
-                let caller_base = self.cached_registers_base;
                 let mut args_buf = [JSValue::undefined(); 17];
                 let builtin_name = js_func
                     .builtin_atom
@@ -1452,11 +1446,11 @@ impl VM {
                         idx += 1;
                     }
                     if pass_this {
-                        args_buf[0] = self.registers[caller_base + obj_reg as usize];
+                        args_buf[0] = self.get_reg(obj_reg);
                         idx += 1;
                     }
                     for (i, r) in arg_regs.iter().enumerate() {
-                        args_buf[idx + i] = self.registers[caller_base + *r as usize];
+                        args_buf[idx + i] = self.get_reg(*r);
                     }
                     &args_buf[..builtin_arg_count]
                 } else {
@@ -1465,10 +1459,10 @@ impl VM {
                         args_vec.push(func_val);
                     }
                     if pass_this {
-                        args_vec.push(self.registers[caller_base + obj_reg as usize]);
+                        args_vec.push(self.get_reg(obj_reg));
                     }
                     for r in arg_regs {
-                        args_vec.push(self.registers[caller_base + *r as usize]);
+                        args_vec.push(self.get_reg(*r));
                     }
                     &args_vec
                 };
@@ -1538,7 +1532,6 @@ impl VM {
         } else if func_val.is_object() && is_call_new {
             let obj = func_val.as_object();
             if let Some(bound_fn) = obj.get(ctx.common_atoms.__boundFn) {
-                let caller_base = self.cached_registers_base;
                 let bound_args_val = obj.get(ctx.common_atoms.__boundArgs).filter(|v| v.is_object());
                 let bound_len = bound_args_val
                     .and_then(|v| v.as_object().get(ctx.common_atoms.length))
@@ -1555,7 +1548,7 @@ impl VM {
                     }
                 }
                 for r in arg_regs {
-                    actual_args.push(self.registers[caller_base + *r as usize]);
+                    actual_args.push(self.get_reg(*r));
                 }
                 let mut new_obj = crate::object::object::JSObject::new();
                 if bound_fn.is_function() {
@@ -1591,18 +1584,17 @@ impl VM {
                 Ok(false)
             }
         } else if func_val.is_object() && !is_call_new {
-            let caller_base = self.cached_registers_base;
             let mut args_buf = [JSValue::undefined(); 16];
             let mut args_vec = Vec::new();
             let call_args: &[JSValue] = if argc as usize <= 16 {
                 for (i, r) in arg_regs.iter().enumerate() {
-                    args_buf[i] = self.registers[caller_base + *r as usize];
+                    args_buf[i] = self.get_reg(*r);
                 }
                 &args_buf[..argc as usize]
             } else {
                 args_vec.reserve(argc as usize);
                 for r in arg_regs.iter() {
-                    args_vec.push(self.registers[caller_base + *r as usize]);
+                    args_vec.push(self.get_reg(*r));
                 }
                 &args_vec
             };
@@ -7940,10 +7932,9 @@ impl VM {
                             }
                             continue;
                         } else if js_func.is_builtin() {
-                            let caller_base = self.cached_registers_base;
                             let mut builtin_args = Vec::with_capacity(args.len() + 1);
                             if is_call_method {
-                                builtin_args.push(self.registers[caller_base + obj_reg as usize]);
+                                builtin_args.push(self.get_reg(obj_reg));
                             }
                             builtin_args.extend(args);
                             let result = if let Some(bf) = js_func.builtin_func {
