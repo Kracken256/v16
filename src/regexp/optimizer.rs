@@ -32,7 +32,13 @@ pub fn analyze_pattern(ast: &Ast) -> OptimizedPattern {
                 OptimizedPattern::LiteralString(literal)
             }
         }
-        Ast::Class(class) => OptimizedPattern::CharClass(class.ranges.clone()),
+        Ast::Class(class) => {
+            let mut ranges = class.ranges.clone();
+            if class.negated {
+                ranges.invert();
+            }
+            OptimizedPattern::CharClass(ranges)
+        }
         Ast::Any => OptimizedPattern::Simple(Box::new(ast.clone())),
         _ => OptimizedPattern::Complex(Box::new(ast.clone())),
     }

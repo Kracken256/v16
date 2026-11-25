@@ -191,7 +191,12 @@ impl Compiler {
 
     fn compile_class(&mut self, class: &CharClass) -> Result<(), String> {
         let range_idx = self.char_ranges.len();
-        self.char_ranges.push(class.ranges.clone());
+
+        let mut ranges = class.ranges.clone();
+        if class.negated {
+            ranges.invert();
+        }
+        self.char_ranges.push(ranges);
 
         if range_idx > u16::MAX as usize {
             return Err("Too many character classes".to_string());
