@@ -4250,10 +4250,7 @@ impl VM {
                         let result = self.add_slow(&a, &b, ctx);
                         if let Some(exc) = self.pending_throw.take() {
                             match self.dispatch_throw_value(ctx, exc) {
-                                ThrowDispatch::Caught => {
-                                    self.set_reg(dst, self.get_reg(0));
-                                    return Ok(ExecutionOutcome::Complete(self.get_reg(dst)));
-                                }
+                                ThrowDispatch::Caught => continue,
                                 ThrowDispatch::Uncaught(e) => return Err(e),
                                 ThrowDispatch::AsyncComplete(o) => match o {
                                     ExecutionOutcome::Complete(v) => {
