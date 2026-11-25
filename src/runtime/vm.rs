@@ -1776,7 +1776,9 @@ impl VM {
                     }
                     return CallerVarSet::Stored;
                 }
-                if !caller.frames[fi].var_name_map.is_null() {
+                let parameter_environment_only = caller.frames[fi].in_parameter_initializer
+                    && !caller.eval_direct_scope_contains(name_atom);
+                if !parameter_environment_only && !caller.frames[fi].var_name_map.is_null() {
                     let map = unsafe { &*caller.frames[fi].var_name_map };
                     for &(an, slot, tag) in map.iter().rev() {
                         if an == name_atom {
@@ -1873,10 +1875,13 @@ impl VM {
                     return true;
                 }
             }
-            if !caller.frames[fi].var_name_map.is_null() {
-                let map = unsafe { &*caller.frames[fi].var_name_map };
-                if map.iter().any(|&(an, _, tag)| an == name_atom && tag == 0) {
-                    return true;
+            let parameter_environment_only = caller.frames[fi].in_parameter_initializer;
+            if !parameter_environment_only || caller.eval_direct_scope_contains(name_atom) {
+                if !caller.frames[fi].var_name_map.is_null() {
+                    let map = unsafe { &*caller.frames[fi].var_name_map };
+                    if map.iter().any(|&(an, _, tag)| an == name_atom && tag == 0) {
+                        return true;
+                    }
                 }
             }
 
