@@ -206,7 +206,7 @@ fn get_promise_reactions(ctx: &mut JSContext, obj: &JSObject) -> Vec<Reaction> {
 }
 
 fn create_reaction_array(ctx: &mut JSContext, reactions: Vec<Reaction>) -> JSValue {
-    let mut arr = JSObject::new_array();
+    let mut arr = create_result_array(ctx);
     let len_atom = intern_str(ctx, "length");
     arr.set(len_atom, JSValue::new_int(reactions.len() as i64));
     for (i, reaction) in reactions.into_iter().enumerate() {
@@ -252,6 +252,14 @@ fn create_promise(ctx: &mut JSContext) -> JSObject {
     promise.set(result_atom, JSValue::undefined());
     promise.set(reactions_atom, JSValue::null());
     promise
+}
+
+fn create_result_array(ctx: &mut JSContext) -> JSObject {
+    let mut array = JSObject::new_array();
+    if let Some(proto_ptr) = ctx.get_array_prototype() {
+        array.set_prototype_raw(proto_ptr);
+    }
+    array
 }
 
 fn fulfill_promise(ctx: &mut JSContext, promise: &mut JSObject, value: JSValue) {
@@ -535,7 +543,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = get_array_length(&obj, ctx);
 
     if len == 0 {
-        let mut empty_arr = JSObject::new_array();
+        let mut empty_arr = create_result_array(ctx);
         let length_atom = intern_str(ctx, "length");
         empty_arr.set(length_atom, JSValue::new_int(0));
         let arr_ptr = Box::into_raw(Box::new(empty_arr)) as usize;
@@ -545,7 +553,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result_promise_val;
     }
 
-    let mut results_arr = JSObject::new_array();
+    let mut results_arr = create_result_array(ctx);
     let length_atom = intern_str(ctx, "length");
     results_arr.set(length_atom, JSValue::new_int(len as i64));
     let results_ptr = Box::into_raw(Box::new(results_arr)) as usize;
@@ -685,7 +693,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = get_array_length(&obj, ctx);
 
     if len == 0 {
-        let mut empty_arr = JSObject::new_array();
+        let mut empty_arr = create_result_array(ctx);
         let length_atom = intern_str(ctx, "length");
         empty_arr.set(length_atom, JSValue::new_int(0));
         let arr_ptr = Box::into_raw(Box::new(empty_arr)) as usize;
@@ -695,7 +703,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result_promise_val;
     }
 
-    let mut results_arr = JSObject::new_array();
+    let mut results_arr = create_result_array(ctx);
     let length_atom = intern_str(ctx, "length");
     results_arr.set(length_atom, JSValue::new_int(len as i64));
     let results_ptr = Box::into_raw(Box::new(results_arr)) as usize;
