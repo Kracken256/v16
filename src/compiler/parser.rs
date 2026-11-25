@@ -459,6 +459,9 @@ impl Parser {
         if !self.is_identifier_name() {
             return Err(self.error("expected identifier"));
         }
+        if self.has_invalid_identifier_escape() {
+            return Err(self.error("Invalid escaped identifier"));
+        }
         if is_reserved_word(&name) {
             return Err(self.error(&format!("Unexpected reserved word '{}'", name)));
         }
@@ -521,6 +524,9 @@ impl Parser {
         let name = match self.cur_type() {
             Some(TokenType::Identifier) | Some(TokenType::Keyword) => {
                 let n = self.cur_value().to_string();
+                if self.has_invalid_identifier_escape() {
+                    return Err(self.error("Invalid escaped identifier"));
+                }
                 if is_reserved_word(&n) {
                     return Err(self.error(&format!("Unexpected reserved word '{}'", n)));
                 }
@@ -553,6 +559,9 @@ impl Parser {
         ) && !self.at_punct("(")
         {
             let n = self.cur_value().to_string();
+            if self.has_invalid_identifier_escape() {
+                return Err(self.error("Invalid escaped identifier"));
+            }
             if is_reserved_word(&n) {
                 return Err(self.error(&format!("Unexpected reserved word '{}'", n)));
             }
@@ -1403,6 +1412,9 @@ impl Parser {
 
     fn parse_expression_statement_or_labelled(&mut self) -> Result<ASTNode, String> {
         if self.is_identifier_name() && self.peek_at(":") {
+            if self.has_invalid_identifier_escape() {
+                return Err(self.error("Invalid escaped identifier"));
+            }
             let label = self.cur_value().to_string();
             self.advance();
             self.advance();
@@ -1793,7 +1805,7 @@ impl Parser {
             return Ok(None);
         };
 
-        if !self.at_punct("=>") {
+        if !self.at_punct("=>") || self.has_line_terminator() {
             self.restore(saved_pos, saved_kind, saved_cur, saved_peek);
             return Ok(None);
         }
@@ -2649,7 +2661,10 @@ impl Parser {
 
         if self.at_punct(".") {
             self.advance();
-            if self.cur_type() == Some(TokenType::Identifier) && self.cur_value() == "target" {
+            if self.cur_type() == Some(TokenType::Identifier)
+                && self.cur_value() == "target"
+                && !self.current.as_ref().map_or(false, |t| t.had_escape)
+            {
                 self.advance();
                 return Ok(Expression::MetaProperty(MetaProperty {
                     meta: "new".to_string(),
