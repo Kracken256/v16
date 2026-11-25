@@ -944,6 +944,7 @@ impl Lexer {
 
             if self.source[self.pos] == '*' {
                 self.advance();
+                let mut terminated = false;
                 while self.pos < self.source.len() {
                     if self.source[self.pos] == '*'
                         && self.pos + 1 < self.source.len()
@@ -951,12 +952,16 @@ impl Lexer {
                     {
                         self.advance();
                         self.advance();
+                        terminated = true;
                         break;
                     }
                     if matches!(self.source[self.pos], '\n' | '\r' | '\u{2028}' | '\u{2029}') {
                         self.pending_line_terminator = true;
                     }
                     self.advance();
+                }
+                if !terminated && self.error.is_none() {
+                    self.fail("Unterminated comment");
                 }
                 return self.next_token().unwrap_or(Token {
                     token_type: TokenType::Eof,
@@ -1008,11 +1013,13 @@ impl Lexer {
 
             let mut pattern = String::new();
             let mut flags = String::new();
+            let mut terminated = false;
 
             while self.pos < self.source.len() {
                 let c = self.source[self.pos];
                 if c == '/' {
                     self.advance();
+                    terminated = true;
                     break;
                 } else if c == '\\' {
                     pattern.push(c);
@@ -1041,6 +1048,10 @@ impl Lexer {
                     pattern.push(c);
                     self.advance();
                 }
+            }
+
+            if !terminated && self.error.is_none() {
+                self.fail("Unterminated regular expression literal");
             }
 
             while self.pos < self.source.len() {
