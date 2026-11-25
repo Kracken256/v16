@@ -2582,10 +2582,10 @@ impl Parser {
             } else {
                 false
             };
-            if !self.has_line_terminator() {
+            if delegate || !self.has_line_terminator() {
                 self.relex_current_as_regexp();
             }
-            let argument = if self.has_line_terminator()
+            let argument = if (!delegate && self.has_line_terminator())
                 || !self.token_starts_assignment_expression()
             {
                 None
