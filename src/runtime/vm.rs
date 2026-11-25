@@ -9705,6 +9705,7 @@ impl VM {
                                     ThrowDispatch::AsyncComplete(o) => return Ok(o),
                                 }
                             }
+                            self.eval_direct_active = false;
                             continue;
                         }
                         if let Some(ref rb) = js_func.bytecode {
@@ -9723,6 +9724,7 @@ impl VM {
                                         }
                                     }
                                 }
+                                self.eval_direct_active = false;
                                 continue;
                             }
                             let return_pc = self.pc;
@@ -9771,6 +9773,7 @@ impl VM {
                                 frame.is_constructor = true;
                                 frame.new_target = caller_new_target;
                             }
+                            self.eval_direct_active = false;
                             continue;
                         } else if js_func.is_builtin() {
                             let mut builtin_args = Vec::with_capacity(args.len() + 1);
@@ -9778,6 +9781,9 @@ impl VM {
                                 builtin_args.push(self.get_reg(obj_reg));
                             }
                             builtin_args.extend(args);
+                            let direct_eval = self.eval_direct_call;
+                            self.eval_direct_call = false;
+                            self.eval_direct_active = direct_eval;
                             let result = if let Some(bf) = js_func.builtin_func {
                                 ctx.call_builtin_direct(bf, &builtin_args)
                             } else if let Some(ba) = js_func.builtin_atom {
@@ -9787,6 +9793,7 @@ impl VM {
                                 JSValue::undefined()
                             };
                             self.set_reg(dst, result);
+                            self.eval_direct_active = false;
                             if is_super_call {
                                 self.bind_super_call_builtin_result(dst);
                             }
