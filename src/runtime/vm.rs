@@ -2272,6 +2272,12 @@ impl VM {
         {
             ctx.pending_exception = None;
         }
+        if self
+            .pending_throw
+            .map_or(false, |pending| pending.raw_bits() == value.raw_bits())
+        {
+            self.pending_throw = None;
+        }
         let find_async_frame = |frames: &[CallFrame], frame_index: usize| {
             for i in (0..=frame_index).rev() {
                 if frames[i].is_async {
