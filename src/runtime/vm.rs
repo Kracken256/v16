@@ -2466,6 +2466,34 @@ impl VM {
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
 
+    fn value_is_constructor(ctx: &JSContext, value: JSValue) -> bool {
+        if value.is_function() {
+            let f = value.as_function();
+            if f.is_builtin() {
+                let name = f
+                    .builtin_atom
+                    .map(|ba| ctx.get_atom_str(ba).to_string())
+                    .unwrap_or_default();
+                ctx.builtin_is_constructor(&name)
+            } else {
+                !f.is_arrow()
+            }
+        } else if value.is_object() {
+            value
+                .as_object()
+                .get(ctx.common_atoms.__boundFn)
+                .map_or(false, |target| Self::value_is_constructor(ctx, target))
+        } else {
+            false
+        }
+    }
+
+    fn frame_is_derived_constructor(frame: &CallFrame) -> bool {
+        frame.function_ptr.map_or(false, |fptr| unsafe {
+            (*(fptr as *const crate::object::function::JSFunction)).is_derived_constructor
+        })
+    }
+
     fn throw_return_completion_error(
         &mut self,
         ctx: &mut JSContext,
@@ -2530,7 +2558,8 @@ impl VM {
                     Some(cell) => cell.get(),
                     None => (frame.this_value, frame.this_initialized),
                 };
-                (this_value, this_initialized, frame.super_ctor.is_function())
+                let derived = Self::frame_is_derived_constructor(frame);
+                (this_value, this_initialized, derived)
             };
             if derived {
                 if !value.is_object_like() {
@@ -3956,8 +3985,8 @@ impl VM {
                     {
                         let frame = &self.frames[self.frame_index];
                         if frame.is_constructor
-                            && !frame.super_ctor.is_function()
-                            && !ret.is_object()
+                            && !Self::frame_is_derived_constructor(frame)
+                            && !ret.is_object_like()
                         {
                             ret = frame.this_value;
                         }
@@ -8984,20 +9013,7 @@ impl VM {
                         };
                     let caller_new_target = self.frames[self.frame_index].new_target;
                     if is_super_call {
-                        let is_constructor = if func_val.is_function() {
-                            let f = func_val.as_function();
-                            if f.is_builtin() {
-                                let name = f
-                                    .builtin_atom
-                                    .map(|ba| ctx.get_atom_str(ba).to_string())
-                                    .unwrap_or_default();
-                                ctx.builtin_is_constructor(&name)
-                            } else {
-                                !f.is_arrow()
-                            }
-                        } else {
-                            false
-                        };
+                        let is_constructor = Self::value_is_constructor(ctx, func_val);
                         if !is_constructor {
                             self.set_pending_type_error(
                                 ctx,
@@ -9233,20 +9249,7 @@ impl VM {
                         };
                     let caller_new_target = self.frames[self.frame_index].new_target;
                     if is_super_call {
-                        let is_constructor = if func_val.is_function() {
-                            let f = func_val.as_function();
-                            if f.is_builtin() {
-                                let name = f
-                                    .builtin_atom
-                                    .map(|ba| ctx.get_atom_str(ba).to_string())
-                                    .unwrap_or_default();
-                                ctx.builtin_is_constructor(&name)
-                            } else {
-                                !f.is_arrow()
-                            }
-                        } else {
-                            false
-                        };
+                        let is_constructor = Self::value_is_constructor(ctx, func_val);
                         if !is_constructor {
                             self.set_pending_type_error(
                                 ctx,
