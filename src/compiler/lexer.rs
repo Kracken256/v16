@@ -1026,13 +1026,16 @@ impl Lexer {
                     self.advance();
                     while self.pos < self.source.len() {
                         let cc = self.source[self.pos];
+                        if cc == '\n' || cc == '\r' || cc == '\u{2028}' || cc == '\u{2029}' {
+                            break;
+                        }
                         pattern.push(cc);
                         self.advance();
                         if cc == ']' {
                             break;
                         }
                     }
-                } else if c == '\n' || c == '\r' {
+                } else if c == '\n' || c == '\r' || c == '\u{2028}' || c == '\u{2029}' {
                     break;
                 } else {
                     pattern.push(c);
