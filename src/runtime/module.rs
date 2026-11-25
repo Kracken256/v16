@@ -453,7 +453,7 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
     };
 
     let ast = Parser::new(&source).parse()?;
-    crate::compiler::early_errors::validate_program(&ast, true)?;
+    crate::compiler::early_errors::validate_program(&ast, true, false, false)?;
 
     let dependencies = collect_static_dependencies(&ast.body);
     {

@@ -3114,6 +3114,22 @@ impl VM {
             }
         }
 
+        let (allow_super_property, allow_super_call) = {
+            let frame = &self.frames[self.frame_index];
+            let mut allow_property = frame.super_base.is_object_like()
+                || frame.super_ctor.is_object_like();
+            let mut allow_call = false;
+            if let Some(ptr) = frame.function_ptr {
+                let func = unsafe { &*(ptr as *const crate::object::function::JSFunction) };
+                if !func.home_object.is_undefined() {
+                    allow_property = true;
+                }
+                if func.is_derived_constructor {
+                    allow_call = true;
+                }
+            }
+            (allow_property, allow_call)
+        };
         let caller_vm_ptr = self as *mut VM;
         match crate::compiler::eval_code_via_ast_with_opt_level_as_eval_with_caller(
             ctx,
@@ -3121,6 +3137,8 @@ impl VM {
             ctx.get_compiler_opt_level(),
             is_strict_caller,
             caller_vm_ptr,
+            allow_super_property,
+            allow_super_call,
         ) {
             Ok(v) => Ok(v),
             Err(e) => self.convert_eval_error_to_exc(ctx, e),

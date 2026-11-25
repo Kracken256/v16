@@ -244,8 +244,23 @@ pub fn compile_script_to_bytecode_with_opt_level(
     is_strict: bool,
     is_eval: bool,
 ) -> Result<Bytecode, String> {
+    compile_script_to_bytecode_with_opt_level_and_super(
+        ctx, source, opt_level, is_strict, is_eval, false, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compile_script_to_bytecode_with_opt_level_and_super(
+    ctx: &mut JSContext,
+    source: &str,
+    opt_level: OptLevel,
+    is_strict: bool,
+    is_eval: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+) -> Result<Bytecode, String> {
     let ast = parser::Parser::new(source).parse()?;
-    early_errors::validate_program(&ast, is_strict)?;
+    early_errors::validate_program(&ast, is_strict, allow_super_property, allow_super_call)?;
 
     let mut func_codegen = CodeGenerator::with_opt_level(opt_level);
     func_codegen.is_strict = is_strict;
@@ -307,8 +322,18 @@ pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
     opt_level: OptLevel,
     is_strict: bool,
     caller_vm: *mut crate::runtime::vm::VM,
+    allow_super_property: bool,
+    allow_super_call: bool,
 ) -> Result<JSValue, String> {
-    let rb = compile_script_to_bytecode_with_opt_level(ctx, source, opt_level, is_strict, true)?;
+    let rb = compile_script_to_bytecode_with_opt_level_and_super(
+        ctx,
+        source,
+        opt_level,
+        is_strict,
+        true,
+        allow_super_property,
+        allow_super_call,
+    )?;
     eval_bytecode_with_caller(ctx, &rb, Some(caller_vm))
 }
 

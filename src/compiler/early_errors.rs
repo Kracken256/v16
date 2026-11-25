@@ -10,6 +10,9 @@ struct Ctx {
     in_async: bool,
     in_generator: bool,
     in_static_block: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    in_function: bool,
 }
 
 impl Ctx {
@@ -19,6 +22,9 @@ impl Ctx {
             in_async: false,
             in_generator: false,
             in_static_block: false,
+            allow_super_property: false,
+            allow_super_call: false,
+            in_function: false,
         }
     }
 
@@ -37,6 +43,8 @@ fn function_ctx(
     generator: bool,
     body: &[ASTNode],
     is_class_method: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
 ) -> Ctx {
     let strict = outer.strict || is_class_method || has_use_strict_directive(body);
     Ctx {
@@ -44,6 +52,9 @@ fn function_ctx(
         in_async: is_async,
         in_generator: generator,
         in_static_block: false,
+        allow_super_property,
+        allow_super_call,
+        in_function: true,
     }
 }
 
@@ -185,13 +196,21 @@ fn check_label_identifier(name: &str, ctx: Ctx) -> Result<(), String> {
     Ok(())
 }
 
-pub fn validate_program(program: &Program, is_strict: bool) -> Result<(), String> {
+pub fn validate_program(
+    program: &Program,
+    is_strict: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+) -> Result<(), String> {
     let strict = is_strict || program.source_type == SourceType::Module;
     let ctx = Ctx {
         strict,
         in_async: program.source_type == SourceType::Module,
         in_generator: false,
         in_static_block: false,
+        allow_super_property,
+        allow_super_call,
+        in_function: allow_super_property || allow_super_call,
     };
     validate_body(&program.body, ctx)
 }
@@ -792,6 +811,9 @@ fn validate_class_declaration(cd: &ClassDeclaration, ctx: Ctx) -> Result<(), Str
         in_async: ctx.in_async,
         in_generator: ctx.in_generator,
         in_static_block: false,
+        allow_super_property: false,
+        allow_super_call: false,
+        in_function: false,
     };
     check_binding_identifier(&cd.name, strict_ctx)?;
     if let Some(sc) = &cd.super_class {
@@ -841,7 +863,38 @@ fn validate_function_body(
     outer: Ctx,
     is_class_method: bool,
 ) -> Result<(), String> {
-    let ctx = function_ctx(outer, is_async, generator, &body.body, is_class_method);
+    validate_function_body_with_super(
+        params,
+        body,
+        is_async,
+        generator,
+        outer,
+        is_class_method,
+        false,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_function_body_with_super(
+    params: &[Parameter],
+    body: &BlockStatement,
+    is_async: bool,
+    generator: bool,
+    outer: Ctx,
+    is_class_method: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+) -> Result<(), String> {
+    let ctx = function_ctx(
+        outer,
+        is_async,
+        generator,
+        &body.body,
+        is_class_method,
+        allow_super_property,
+        allow_super_call,
+    );
     let require_unique = ctx.strict || has_use_strict_directive(&body.body);
     validate_parameters_unique(params, require_unique)?;
     for p in params {
@@ -868,6 +921,11 @@ fn validate_parameter_default(expr: &Expression, ctx: Ctx) -> Result<(), String>
     if contains_super_call(expr) {
         return Err(
             "SyntaxError: 'super' call is not allowed in formal parameter defaults".to_string(),
+        );
+    }
+    if contains_super_property(expr) {
+        return Err(
+            "SyntaxError: 'super' property is not allowed in formal parameter defaults".to_string(),
         );
     }
     if ctx.in_generator && contains_yield(expr) {
@@ -1014,7 +1072,16 @@ fn validate_class_body(
                     }
                     _ => {}
                 }
-                validate_function_body(&m.params, &m.body, m.is_async, m.generator, outer, true)?;
+                validate_function_body_with_super(
+                    &m.params,
+                    &m.body,
+                    m.is_async,
+                    m.generator,
+                    outer,
+                    true,
+                    true,
+                    m.kind == MethodKind::Constructor && has_super && !m.is_static,
+                )?;
             }
             ClassElement::StaticBlock(sb) => {
                 if sb.body.iter().any(|s| stmt_contains(s, Scan::Arguments)) {
@@ -1033,6 +1100,9 @@ fn validate_class_body(
                     in_async: true,
                     in_generator: true,
                     in_static_block: true,
+                    allow_super_property: true,
+                    allow_super_call: false,
+                    in_function: true,
                 };
                 validate_body(&sb.body, ctx)?;
             }
@@ -1067,6 +1137,9 @@ fn validate_class_body(
                         in_async: false,
                         in_generator: false,
                         in_static_block: false,
+                        allow_super_property: true,
+                        allow_super_call: false,
+                        in_function: true,
                     };
                     if contains_arguments(value) {
                         return Err(
@@ -1112,9 +1185,18 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
         Expression::Identifier(id) => check_identifier_reference(&id.name, ctx),
         Expression::PrivateIdentifier(_)
         | Expression::This
-        | Expression::Super
-        | Expression::RegExpLiteral(_)
-        | Expression::MetaProperty(_) => Ok(()),
+        | Expression::RegExpLiteral(_) => Ok(()),
+        Expression::Super => {
+            Err("SyntaxError: 'super' keyword unexpected here".to_string())
+        }
+        Expression::MetaProperty(mp) => {
+            if mp.meta == "new" && mp.property == "target" && !ctx.in_function {
+                return Err(
+                    "SyntaxError: new.target expression is not allowed here".to_string()
+                );
+            }
+            Ok(())
+        }
         Expression::Literal(literal) => {
             if ctx.strict {
                 match literal {
@@ -1174,6 +1256,17 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                                             .to_string(),
                                     );
                                 }
+                                validate_function_body_with_super(
+                                    &f.params,
+                                    &f.body,
+                                    f.is_async,
+                                    f.generator,
+                                    ctx,
+                                    false,
+                                    true,
+                                    false,
+                                )?;
+                                continue;
                             }
                         }
                         validate_expression(value, ctx)?;
@@ -1185,7 +1278,15 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
         }
         Expression::FunctionExpression(f) => {
             if let Some(name) = &f.name {
-                let inner = function_ctx(ctx, f.is_async, f.generator, &f.body.body, false);
+                let inner = function_ctx(
+                    ctx,
+                    f.is_async,
+                    f.generator,
+                    &f.body.body,
+                    false,
+                    false,
+                    false,
+                );
                 check_binding_identifier(name, inner)?;
             }
             validate_function_body(&f.params, &f.body, f.is_async, f.generator, ctx, false)
@@ -1196,6 +1297,9 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                 in_async: ctx.in_async,
                 in_generator: ctx.in_generator,
                 in_static_block: false,
+                allow_super_property: false,
+                allow_super_call: false,
+                in_function: false,
             };
             if let Some(sc) = &c.super_class {
                 validate_expression(sc, strict_ctx)?;
@@ -1287,28 +1391,48 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             Ok(())
         }
         Expression::MemberExpression(m) => {
-            if matches!(*m.object, Expression::Super)
-                && matches!(m.property, MemberProperty::PrivateIdentifier(_))
-            {
-                return Err(
-                    "SyntaxError: private names may not be accessed through super".to_string()
-                );
+            if matches!(*m.object, Expression::Super) {
+                if matches!(m.property, MemberProperty::PrivateIdentifier(_)) {
+                    return Err(
+                        "SyntaxError: private names may not be accessed through super".to_string()
+                    );
+                }
+                if !ctx.allow_super_property {
+                    return Err(
+                        "SyntaxError: 'super' keyword unexpected here".to_string()
+                    );
+                }
+            } else {
+                validate_expression(&m.object, ctx)?;
             }
-            validate_expression(&m.object, ctx)?;
             if let MemberProperty::Computed(p) = &m.property {
                 validate_expression(p, ctx)?;
             }
             Ok(())
         }
         Expression::OptionalMemberExpression(m) => {
-            validate_expression(&m.object, ctx)?;
+            if matches!(*m.object, Expression::Super) {
+                if !ctx.allow_super_property {
+                    return Err(
+                        "SyntaxError: 'super' keyword unexpected here".to_string()
+                    );
+                }
+            } else {
+                validate_expression(&m.object, ctx)?;
+            }
             if let MemberProperty::Computed(p) = &m.property {
                 validate_expression(p, ctx)?;
             }
             Ok(())
         }
         Expression::CallExpression(c) => {
-            if !is_import_call(expr) {
+            if matches!(&*c.callee, Expression::Super) {
+                if !ctx.allow_super_call {
+                    return Err(
+                        "SyntaxError: 'super' call is not allowed here".to_string()
+                    );
+                }
+            } else if !is_import_call(expr) {
                 validate_expression(&c.callee, ctx)?;
             }
             for a in &c.arguments {
@@ -1317,7 +1441,15 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             Ok(())
         }
         Expression::OptionalCallExpression(c) => {
-            validate_expression(&c.callee, ctx)?;
+            if matches!(&*c.callee, Expression::Super) {
+                if !ctx.allow_super_call {
+                    return Err(
+                        "SyntaxError: 'super' call is not allowed here".to_string()
+                    );
+                }
+            } else {
+                validate_expression(&c.callee, ctx)?;
+            }
             for a in &c.arguments {
                 validate_argument(a, ctx)?;
             }
@@ -1325,6 +1457,11 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
         }
         Expression::ChainExpression(inner) => validate_expression(inner, ctx),
         Expression::NewExpression(n) => {
+            if matches!(&*n.callee, Expression::Super) {
+                return Err(
+                    "SyntaxError: 'super' keyword unexpected here".to_string()
+                );
+            }
             validate_expression(&n.callee, ctx)?;
             for a in &n.arguments {
                 validate_argument(a, ctx)?;
@@ -1332,11 +1469,34 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             Ok(())
         }
         Expression::ArrowFunction(arrow) => {
+            if ctx.in_generator
+                && arrow
+                    .params
+                    .iter()
+                    .any(|p| parameter_contains(p, Scan::Yield))
+            {
+                return Err(
+                    "SyntaxError: yield expression is not allowed in arrow parameters".to_string(),
+                );
+            }
+            if (ctx.in_async || arrow.is_async)
+                && arrow
+                    .params
+                    .iter()
+                    .any(|p| parameter_contains(p, Scan::Await))
+            {
+                return Err(
+                    "SyntaxError: await expression is not allowed in arrow parameters".to_string(),
+                );
+            }
             let inner = Ctx {
                 strict: ctx.strict,
                 in_async: arrow.is_async,
                 in_generator: false,
                 in_static_block: false,
+                allow_super_property: ctx.allow_super_property,
+                allow_super_call: ctx.allow_super_call,
+                in_function: ctx.in_function,
             };
             validate_parameters_unique(&arrow.params, true)?;
             for p in &arrow.params {
@@ -1455,7 +1615,15 @@ fn validate_assignment_target(t: &AssignmentTarget, ctx: Ctx) -> Result<(), Stri
                     "SyntaxError: Invalid assignment target: optional chain".to_string(),
                 );
             }
-            validate_expression(&m.object, ctx)?;
+            if matches!(*m.object, Expression::Super) {
+                if !ctx.allow_super_property {
+                    return Err(
+                        "SyntaxError: 'super' keyword unexpected here".to_string(),
+                    );
+                }
+            } else {
+                validate_expression(&m.object, ctx)?;
+            }
             if let MemberProperty::Computed(p) = &m.property {
                 validate_expression(p, ctx)?;
             }
@@ -1501,6 +1669,7 @@ fn validate_assignment_target(t: &AssignmentTarget, ctx: Ctx) -> Result<(), Stri
 enum Scan {
     Arguments,
     SuperCall,
+    Super,
     Yield,
     Await,
 }
@@ -1511,6 +1680,10 @@ fn contains_arguments(expr: &Expression) -> bool {
 
 fn contains_super_call(expr: &Expression) -> bool {
     expr_contains(expr, Scan::SuperCall)
+}
+
+fn contains_super_property(expr: &Expression) -> bool {
+    expr_contains(expr, Scan::Super)
 }
 
 fn contains_yield(expr: &Expression) -> bool {
@@ -1527,9 +1700,17 @@ fn arg_contains(arg: &Argument, mode: Scan) -> bool {
     }
 }
 
+fn parameter_contains(param: &Parameter, mode: Scan) -> bool {
+    match param {
+        Parameter::Identifier(_) | Parameter::Pattern(_) | Parameter::RestElement(_) => false,
+        Parameter::AssignmentPattern(ap) => expr_contains(&ap.right, mode),
+    }
+}
+
 fn expr_contains(expr: &Expression, mode: Scan) -> bool {
     match expr {
         Expression::Identifier(id) => mode == Scan::Arguments && id.name == "arguments",
+        Expression::Super => mode == Scan::Super,
         Expression::FunctionExpression(_) => false,
         Expression::ClassExpression(c) => {
             c.super_class.as_ref().is_some_and(|s| expr_contains(s, mode))
