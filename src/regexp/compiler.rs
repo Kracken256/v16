@@ -10,6 +10,8 @@ pub struct Compiler {
     ignore_case: bool,
 
     char_ranges: Vec<super::charclass::CharRange>,
+
+    named_groups: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,7 +40,12 @@ impl Program {
 }
 
 pub fn compile(ast: &Ast, flags: u16) -> Result<Program, String> {
+    let mut named_groups = Vec::new();
+    let mut counter = 1usize;
+    collect_named_groups(ast, &mut counter, &mut named_groups);
+
     let mut compiler = Compiler::new(flags);
+    compiler.named_groups = named_groups;
 
     compiler.write_header_placeholder();
 
@@ -67,6 +74,7 @@ impl Compiler {
             capture_count: 1,
             ignore_case: (flags & FLAG_IGNORE_CASE) != 0,
             char_ranges: Vec::new(),
+            named_groups: Vec::new(),
         }
     }
 
@@ -144,7 +152,15 @@ impl Compiler {
             Ast::Quant(inner, q) => self.compile_quant(inner, q),
             Ast::Capture(inner, _name) => self.compile_capture(inner),
             Ast::BackRef(idx) => self.compile_backref(*idx),
-            Ast::NamedBackRef(name) => Err(format!("Named backref not yet implemented: {}", name)),
+            Ast::NamedBackRef(name) => {
+                let idx = self
+                    .named_groups
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| format!("Unknown named backref: {}", name))?;
+                self.compile_backref(idx)
+            }
             Ast::Lookahead(inner) => self.compile_lookahead(inner, false),
             Ast::NegativeLookahead(inner) => self.compile_lookahead(inner, true),
         }
@@ -547,5 +563,28 @@ mod tests {
         let ast = parse("a*", 0).unwrap();
         let prog = compile(&ast, 0).unwrap();
         assert!(prog.bytecode.len() > HEADER_LEN);
+    }
+}
+
+fn collect_named_groups(ast: &Ast, counter: &mut usize, out: &mut Vec<(String, usize)>) {
+    match ast {
+        Ast::Capture(inner, name) => {
+            let idx = *counter;
+            *counter += 1;
+            if let Some(n) = name {
+                out.push((n.clone(), idx));
+            }
+            collect_named_groups(inner, counter, out);
+        }
+        Ast::Concat(nodes) | Ast::Alt(nodes) => {
+            for node in nodes {
+                collect_named_groups(node, counter, out);
+            }
+        }
+        Ast::Quant(inner, _) => collect_named_groups(inner, counter, out),
+        Ast::Lookahead(inner) | Ast::NegativeLookahead(inner) => {
+            collect_named_groups(inner, counter, out)
+        }
+        _ => {}
     }
 }

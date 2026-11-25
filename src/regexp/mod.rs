@@ -98,21 +98,34 @@ pub struct RegexFlags {
     pub unicode: bool,
 
     pub sticky: bool,
+
+    pub has_indices: bool,
+
+    pub unicode_sets: bool,
 }
 
 impl RegexFlags {
     pub fn from_str(s: &str) -> Result<Self, String> {
         let mut flags = Self::default();
         for c in s.chars() {
-            match c {
-                'g' => flags.global = true,
-                'i' => flags.ignore_case = true,
-                'm' => flags.multi_line = true,
-                's' => flags.dot_all = true,
-                'u' => flags.unicode = true,
-                'y' => flags.sticky = true,
+            let slot = match c {
+                'g' => &mut flags.global,
+                'i' => &mut flags.ignore_case,
+                'm' => &mut flags.multi_line,
+                's' => &mut flags.dot_all,
+                'u' => &mut flags.unicode,
+                'y' => &mut flags.sticky,
+                'd' => &mut flags.has_indices,
+                'v' => &mut flags.unicode_sets,
                 _ => return Err(format!("Invalid flag: {}", c)),
+            };
+            if *slot {
+                return Err(format!("Duplicate flag: {}", c));
             }
+            *slot = true;
+        }
+        if flags.unicode && flags.unicode_sets {
+            return Err("Invalid flag: 'u' and 'v' are mutually exclusive".to_string());
         }
         Ok(flags)
     }
@@ -137,6 +150,12 @@ impl RegexFlags {
         if self.sticky {
             f |= opcode::FLAG_STICKY;
         }
+        if self.has_indices {
+            f |= opcode::FLAG_INDICES;
+        }
+        if self.unicode_sets {
+            f |= opcode::FLAG_UNICODE_SETS;
+        }
         f
     }
 }
@@ -160,6 +179,12 @@ impl fmt::Display for RegexFlags {
         }
         if self.sticky {
             write!(f, "y")?;
+        }
+        if self.has_indices {
+            write!(f, "d")?;
+        }
+        if self.unicode_sets {
+            write!(f, "v")?;
         }
         Ok(())
     }
@@ -242,21 +267,27 @@ impl Regex {
 
     pub fn new_with_flags(pattern: &str, flags: RegexFlags) -> Result<Self, RegexError> {
         let flag_bits = flags.to_u16();
+        let ast = parser::parse(pattern, flag_bits).map_err(RegexError::Parse)?;
+
+        if pattern_has_context_assertions(pattern) {
+            let program = compiler::compile(&ast, flag_bits).map_err(RegexError::Compile)?;
+            return Ok(Self {
+                fast_engine: None,
+                program: Some(program),
+                pattern: pattern.to_string(),
+                flags,
+            });
+        }
 
         match fast_engine::FastRegex::new(pattern, flag_bits) {
-            Ok(fast) => {
-                return Ok(Self {
-                    fast_engine: Some(fast),
-                    program: None,
-                    pattern: pattern.to_string(),
-                    flags,
-                });
-            }
+            Ok(fast) => Ok(Self {
+                fast_engine: Some(fast),
+                program: None,
+                pattern: pattern.to_string(),
+                flags,
+            }),
             Err(_) => {
-                let ast = parser::parse(pattern, flag_bits).map_err(RegexError::Parse)?;
-
                 let program = compiler::compile(&ast, flag_bits).map_err(RegexError::Compile)?;
-
                 Ok(Self {
                     fast_engine: None,
                     program: Some(program),
@@ -302,13 +333,8 @@ impl Regex {
         }
 
         if let Some(ref fast) = self.fast_engine {
-            if let Some(m) = fast.find(&input[start..]) {
-                let shifted = Match {
-                    start: m.start + start,
-                    end: m.end + start,
-                    captures: m.captures,
-                };
-                return self.match_result_from_engine(input, shifted);
+            if let Some(m) = fast.find_at(input, start) {
+                return self.match_result_from_engine(input, m);
             }
         }
 
@@ -457,6 +483,28 @@ impl Regex {
         let is_ascii = is_ascii_fast(input);
         self.match_result_from_engine_fast(input, m, is_ascii)
     }
+}
+
+fn pattern_has_context_assertions(pattern: &str) -> bool {
+    let mut in_class = false;
+    let mut escaped = false;
+    for c in pattern.chars() {
+        if escaped {
+            escaped = false;
+            if c == 'b' || c == 'B' {
+                return true;
+            }
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '^' | '$' if !in_class => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 #[inline(always)]

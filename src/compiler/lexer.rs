@@ -1025,7 +1025,18 @@ impl Lexer {
                     pattern.push(c);
                     self.advance();
                     if self.pos < self.source.len() {
-                        pattern.push(self.source[self.pos]);
+                        let escaped = self.source[self.pos];
+                        if escaped == '\n'
+                            || escaped == '\r'
+                            || escaped == '\u{2028}'
+                            || escaped == '\u{2029}'
+                        {
+                            if self.error.is_none() {
+                                self.fail("Unterminated regular expression literal");
+                            }
+                            break;
+                        }
+                        pattern.push(escaped);
                         self.advance();
                     }
                 } else if c == '[' {

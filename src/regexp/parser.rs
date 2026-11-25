@@ -56,6 +56,11 @@ fn parse_term(state: &mut ParseState) -> Result<Ast, String> {
     let atom = parse_atom(state)?;
 
     if let Some(q) = parse_quantifier(state)? {
+        if state.is_unicode
+            && matches!(atom, Ast::Lookahead(_) | Ast::NegativeLookahead(_))
+        {
+            return Err("Quantifiable assertion is not allowed in unicode mode".to_string());
+        }
         Ok(Ast::Quant(Box::new(atom), q))
     } else {
         Ok(atom)
@@ -214,7 +219,11 @@ fn parse_escape(state: &mut ParseState) -> Result<Ast, String> {
         }
         '1'..='9' => {
             let start = state.pos - 1;
-            let num = state.parse_number().unwrap_or(0);
+            let mut num = c.to_digit(10).unwrap();
+            while let Some(d) = state.peek().and_then(|ch| ch.to_digit(10)) {
+                num = num.wrapping_mul(10).wrapping_add(d);
+                state.next();
+            }
 
             if num > 0 && num < state.capture_count as u32 {
                 Ok(Ast::BackRef(num as usize))
@@ -227,7 +236,23 @@ fn parse_escape(state: &mut ParseState) -> Result<Ast, String> {
         }
         'p' | 'P' if state.is_unicode => parse_unicode_property(state, c == 'P'),
         'k' => parse_named_backref(state),
-        c => Ok(Ast::Char(c)),
+        'c' => {
+            if state.is_unicode {
+                return Err("Invalid escape: \\c".to_string());
+            }
+            let next = state.next().ok_or_else(|| "Unexpected end after \\c".to_string())?;
+            if next.is_ascii_alphabetic() {
+                Ok(Ast::Char(((next as u32) % 32) as u8 as char))
+            } else {
+                Ok(Ast::Char('c'))
+            }
+        }
+        c => {
+            if state.is_unicode && !is_unicode_identity_escape(c) {
+                return Err(format!("Invalid identity escape: \\{}", c));
+            }
+            Ok(Ast::Char(c))
+        }
     }
 }
 
@@ -261,6 +286,9 @@ fn parse_group(state: &mut ParseState) -> Result<Ast, String> {
                 let name = parse_group_name(state)?;
                 state.expect('>')?;
 
+                if state.named_groups.contains(&name) {
+                    return Err(format!("Duplicate capture group name: {}", name));
+                }
                 state.capture_count += 1;
                 state.named_groups.push(name.clone());
 
@@ -330,6 +358,14 @@ fn parse_char_class(state: &mut ParseState) -> Result<Ast, String> {
                     ranges.add_char(c);
                     prev_char = Some(c);
                 } else {
+                    if state.is_unicode
+                        && state.peek() == Some('-')
+                        && state.peek_at(1) != Some(']')
+                    {
+                        return Err(
+                            "Invalid class range: multi-character escape".to_string()
+                        );
+                    }
                     prev_char = None;
                 }
             }
@@ -385,7 +421,23 @@ fn parse_class_escape(state: &mut ParseState) -> Result<Option<char>, String> {
         }
 
         'd' | 'D' | 's' | 'S' | 'w' | 'W' => Ok(None),
-        c => Ok(Some(c)),
+        'c' => {
+            if state.is_unicode {
+                return Err("Invalid class escape: \\c".to_string());
+            }
+            let next = state.next().ok_or_else(|| "Unexpected end after \\c".to_string())?;
+            if next.is_ascii_alphabetic() {
+                Ok(Some(((next as u32) % 32) as u8 as char))
+            } else {
+                Ok(Some('c'))
+            }
+        }
+        c => {
+            if state.is_unicode && !is_unicode_identity_escape(c) {
+                return Err(format!("Invalid identity escape: \\{}", c));
+            }
+            Ok(Some(c))
+        }
     }
 }
 
@@ -507,15 +559,24 @@ fn parse_named_backref(state: &mut ParseState) -> Result<Ast, String> {
 
 fn parse_group_name(state: &mut ParseState) -> Result<String, String> {
     let mut name = String::new();
+    let mut first = true;
 
     loop {
         match state.peek() {
             Some('>') | Some(')') => break,
-            Some(c) if c.is_alphanumeric() || c == '_' => {
+            Some(c) => {
+                let valid = if first {
+                    crate::compiler::lexer::Lexer::is_identifier_start(c)
+                } else {
+                    crate::compiler::lexer::Lexer::is_identifier_part(c)
+                };
+                if !valid {
+                    return Err(format!("Invalid character in group name: {}", c));
+                }
                 state.next();
                 name.push(c);
+                first = false;
             }
-            Some(c) => return Err(format!("Invalid character in group name: {}", c)),
             None => return Err("Unexpected end in group name".to_string()),
         }
     }
@@ -525,6 +586,13 @@ fn parse_group_name(state: &mut ParseState) -> Result<String, String> {
     } else {
         Ok(name)
     }
+}
+
+fn is_unicode_identity_escape(c: char) -> bool {
+    matches!(
+        c,
+        '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '/'
+    )
 }
 
 fn is_special_char(c: char) -> bool {

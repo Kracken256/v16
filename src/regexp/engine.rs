@@ -754,6 +754,54 @@ impl<'a> ExecContext<'a> {
                     continue;
                 }
 
+                OpCode::CheckBackref | OpCode::CheckBackrefI => {
+                    let idx = self.bytecode[pc + 1] as usize;
+                    let ignore_case = opcode == OpCode::CheckBackrefI;
+                    let pos = regs.r[REG_POS];
+                    let capture = captures.get(idx).copied().unwrap_or((None, None));
+                    let mut ok = true;
+                    let mut len = 0usize;
+                    if let (Some(start), Some(end)) = capture {
+                        if end >= start {
+                            len = end - start;
+                            if pos + len > self.char_len {
+                                ok = false;
+                            } else {
+                                for i in 0..len {
+                                    let a = self.get_char_fast(start + i);
+                                    let b = self.get_char_fast(pos + i);
+                                    match (a, b) {
+                                        (Some(x), Some(y)) => {
+                                            let (cx, cy) = if ignore_case {
+                                                (
+                                                    canonicalize(x as u32, self.is_unicode),
+                                                    canonicalize(y as u32, self.is_unicode),
+                                                )
+                                            } else {
+                                                (x as u32, y as u32)
+                                            };
+                                            if cx != cy {
+                                                ok = false;
+                                                break;
+                                            }
+                                        }
+                                        _ => {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if ok {
+                        regs.r[REG_POS] = pos + len;
+                        pc += 2;
+                        continue;
+                    }
+                    return self.fail_or_backtrack(regs, pc, captures);
+                }
+
                 OpCode::Invalid => {
                     panic!("Invalid opcode at pc={}", pc);
                 }

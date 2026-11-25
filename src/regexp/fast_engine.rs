@@ -145,6 +145,31 @@ impl FastRegex {
         })
     }
 
+    pub fn find_at(&self, input: &str, start: usize) -> Option<Match> {
+        match self.mode {
+            ExecMode::OptimizedNFA | ExecMode::FullNFA => {
+                if let Some(ref program) = self.program {
+                    return nfa_execute(program, input, start);
+                }
+            }
+            _ => {}
+        }
+        let byte_start = if input.is_ascii() {
+            start.min(input.len())
+        } else {
+            input
+                .char_indices()
+                .nth(start)
+                .map(|(i, _)| i)
+                .unwrap_or(input.len())
+        };
+        self.find(&input[byte_start..]).map(|m| Match {
+            start: m.start + start,
+            end: m.end + start,
+            captures: m.captures,
+        })
+    }
+
     pub fn find(&self, input: &str) -> Option<Match> {
         match self.mode {
             ExecMode::LiteralFast => self.dfa.as_ref().and_then(|dfa| dfa.find(input)),

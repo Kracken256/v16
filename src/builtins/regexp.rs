@@ -466,11 +466,13 @@ fn match_regex_precompiled(
     text: &str,
     start: usize,
 ) -> Option<(usize, usize)> {
-    let search_from = start.min(text.len());
-    if let Some(m) = re.find(&text[search_from..]) {
-        return Some((search_from + m.start(), m.end() - m.start()));
+    let mut byte_start = start.min(text.len());
+    while byte_start < text.len() && !text.is_char_boundary(byte_start) {
+        byte_start += 1;
     }
-    None
+    let char_start = text[..byte_start].chars().count();
+    let m = re.find_at(text, char_start)?;
+    Some((m.start(), m.end() - m.start()))
 }
 
 fn match_pattern_with_len(

@@ -2331,24 +2331,19 @@ fn string_search(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             String::new()
         };
 
-        let ignore_case = flags.contains('i');
-        let s_lower = if ignore_case {
-            s.to_lowercase()
+        let compiled = if let Some(re) = regexp_obj.get_compiled_regex() {
+            Some(re.clone())
         } else {
-            String::new()
+            let mut compiled_flags = crate::regexp::RegexFlags::default();
+            compiled_flags.ignore_case = flags.contains('i');
+            compiled_flags.unicode = flags.contains('u');
+            compiled_flags.multi_line = flags.contains('m');
+            compiled_flags.dot_all = flags.contains('s');
+            compiled_flags.unicode_sets = flags.contains('v');
+            crate::regexp::Regex::new_with_flags(&pattern, compiled_flags).ok()
         };
-        let p_lower = if ignore_case {
-            pattern.to_lowercase()
-        } else {
-            String::new()
-        };
-
-        let found = if ignore_case {
-            s_lower.find(&p_lower)
-        } else {
-            s.find(&pattern)
-        };
-        JSValue::new_int(found.map(|i| i as i64).unwrap_or(-1))
+        let found = compiled.as_ref().and_then(|re| re.find(&s));
+        JSValue::new_int(found.map(|m| m.start() as i64).unwrap_or(-1))
     } else if args[1].is_string() {
         let search = ctx.get_atom_str(args[1].get_atom()).to_string();
         JSValue::new_int(s.find(&search).map(|i| i as i64).unwrap_or(-1))
@@ -2392,42 +2387,40 @@ fn string_match(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         };
 
         let is_global = flags.contains('g');
-        let ignore_case = flags.contains('i');
-        let s_lower = if ignore_case {
-            s.to_lowercase()
+        let compiled = if let Some(re) = regexp_obj.get_compiled_regex() {
+            Some(re.clone())
         } else {
-            String::new()
-        };
-        let p_lower = if ignore_case {
-            pattern.to_lowercase()
-        } else {
-            String::new()
+            let mut compiled_flags = crate::regexp::RegexFlags::default();
+            compiled_flags.ignore_case = flags.contains('i');
+            compiled_flags.unicode = flags.contains('u');
+            compiled_flags.multi_line = flags.contains('m');
+            compiled_flags.dot_all = flags.contains('s');
+            compiled_flags.unicode_sets = flags.contains('v');
+            crate::regexp::Regex::new_with_flags(&pattern, compiled_flags).ok()
         };
 
         if is_global {
             let mut results: Vec<String> = Vec::new();
-            let mut search_from = 0;
-            loop {
-                let found = if ignore_case {
-                    s_lower[search_from..]
-                        .find(&p_lower)
-                        .map(|i| i + search_from)
-                } else {
-                    s[search_from..].find(&pattern).map(|i| i + search_from)
-                };
-                if let Some(pos) = found {
-                    let end = (pos + pattern.len()).min(s.len());
-                    results.push(s[pos..end].to_string());
-                    search_from = end;
-                    if pattern.is_empty() {
-                        if search_from < s.len() {
-                            search_from += 1;
+            let mut search_from = 0usize;
+            while search_from <= s.len() {
+                let found = compiled
+                    .as_ref()
+                    .and_then(|re| re.find(&s[search_from..]));
+                match found {
+                    Some(m) => {
+                        let start = search_from + m.start();
+                        let end = search_from + m.end();
+                        results.push(s[start..end].to_string());
+                        if end == start {
+                            if end >= s.len() {
+                                break;
+                            }
+                            search_from = end + s[end..].chars().next().map_or(1, |c| c.len_utf8());
                         } else {
-                            break;
+                            search_from = end;
                         }
                     }
-                } else {
-                    break;
+                    None => break,
                 }
             }
             if results.is_empty() {
@@ -2446,20 +2439,17 @@ fn string_match(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let ptr = Box::into_raw(Box::new(arr)) as usize;
             JSValue::new_object(ptr)
         } else {
-            let found = if ignore_case {
-                s_lower.find(&p_lower)
-            } else {
-                s.find(&pattern)
-            };
-            if let Some(pos) = found {
-                let end = (pos + pattern.len()).min(s.len());
-                let match_str = &s[pos..end];
+            let found = compiled.as_ref().and_then(|re| re.find(&s));
+            if let Some(m) = found {
+                let start = m.start();
+                let end = m.end();
+                let match_str = &s[start..end];
                 let mut result = JSObject::new_array();
-    if let Some(p) = ctx.get_array_prototype() {
-        result.set_prototype_raw(p);
-    }
+                if let Some(p) = ctx.get_array_prototype() {
+                    result.set_prototype_raw(p);
+                }
                 result.set(ctx.intern("0"), JSValue::new_string(ctx.intern(match_str)));
-                result.set(ctx.common_atoms.index, JSValue::new_int(pos as i64));
+                result.set(ctx.common_atoms.index, JSValue::new_int(start as i64));
                 result.set(ctx.common_atoms.input, JSValue::new_string(ctx.intern(&s)));
                 result.set(ctx.common_atoms.length, JSValue::new_int(1));
                 let ptr = Box::into_raw(Box::new(result)) as usize;
