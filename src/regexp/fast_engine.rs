@@ -45,19 +45,30 @@ pub struct FastRegex {
 
 impl FastRegex {
     pub fn new(pattern: &str, flags: u16) -> Result<Self, String> {
-        if let Some(fast_class) = FastClassMatcher::from_pattern(pattern) {
-            return Ok(Self {
-                mode: ExecMode::FastClass,
-                fast_class: Some(fast_class),
-                dfa: None,
-                program: None,
-            });
-        }
+        if flags & super::opcode::FLAG_IGNORE_CASE == 0 {
+            if let Some(fast_class) = FastClassMatcher::from_pattern(pattern) {
+                return Ok(Self {
+                    mode: ExecMode::FastClass,
+                    fast_class: Some(fast_class),
+                    dfa: None,
+                    program: None,
+                });
+            }
 
-        if is_pure_literal(pattern) {
+            if is_pure_literal(pattern) {
+                if let Some(dfa) = SimpleDFA::new(pattern) {
+                    return Ok(Self {
+                        mode: ExecMode::LiteralFast,
+                        fast_class: None,
+                        dfa: Some(dfa),
+                        program: None,
+                    });
+                }
+            }
+
             if let Some(dfa) = SimpleDFA::new(pattern) {
                 return Ok(Self {
-                    mode: ExecMode::LiteralFast,
+                    mode: ExecMode::ClassDFA,
                     fast_class: None,
                     dfa: Some(dfa),
                     program: None,
@@ -65,20 +76,12 @@ impl FastRegex {
             }
         }
 
-        if let Some(dfa) = SimpleDFA::new(pattern) {
-            return Ok(Self {
-                mode: ExecMode::ClassDFA,
-                fast_class: None,
-                dfa: Some(dfa),
-                program: None,
-            });
-        }
-
         let ast = parse(pattern, flags)?;
 
         let optimized = analyze_pattern(&ast);
 
-        match optimized {
+        if flags & super::opcode::FLAG_IGNORE_CASE == 0 {
+        return match optimized {
             OptimizedPattern::LiteralChar(c) => {
                 let mut literal_str = String::new();
                 literal_str.push(c);
@@ -131,6 +134,15 @@ impl FastRegex {
                 })
             }
         }
+        }
+
+        let program = compile(&ast, flags)?;
+        Ok(Self {
+            mode: ExecMode::FullNFA,
+            fast_class: None,
+            dfa: None,
+            program: Some(program),
+        })
     }
 
     pub fn find(&self, input: &str) -> Option<Match> {

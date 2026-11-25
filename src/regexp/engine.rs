@@ -883,20 +883,12 @@ impl<'a> ExecContext<'a> {
 }
 
 #[inline(always)]
-fn canonicalize(c: u32, is_unicode: bool) -> u32 {
+fn canonicalize(c: u32, _is_unicode: bool) -> u32 {
     if c < 128 {
-        if is_unicode {
-            if c >= b'A' as u32 && c <= b'Z' as u32 {
-                c + 32
-            } else {
-                c
-            }
+        if c >= b'A' as u32 && c <= b'Z' as u32 {
+            c + 32
         } else {
-            if c >= b'a' as u32 && c <= b'z' as u32 {
-                c - 32
-            } else {
-                c
-            }
+            c
         }
     } else {
         c
