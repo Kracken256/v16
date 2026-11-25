@@ -296,123 +296,84 @@ fn generator_symbol_iterator(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     args.get(0).copied().unwrap_or(JSValue::undefined())
 }
 
-fn async_generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.get(0).copied().unwrap_or(JSValue::undefined());
+fn make_type_error(ctx: &mut JSContext, message: &str) -> JSValue {
+    let mut err = JSObject::new();
+    err.set(
+        ctx.intern("name"),
+        JSValue::new_string(ctx.intern("TypeError")),
+    );
+    err.set(
+        ctx.intern("message"),
+        JSValue::new_string(ctx.intern(message)),
+    );
+    if let Some(proto) = ctx.get_type_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
 
+fn async_generator_enqueue(
+    ctx: &mut JSContext,
+    this: JSValue,
+    kind: u8,
+    value: JSValue,
+) -> JSValue {
     if !this.is_object() {
-        return ctx.call_builtin("promise_reject", &[JSValue::undefined()]);
+        let err = make_type_error(ctx, "this is not an async generator");
+        return ctx.call_builtin("promise_reject", &[err]);
     }
-
     let gen_obj = this.as_object_mut();
-
-    if !gen_obj.is_generator() {
-        let result = create_iterator_result(ctx, JSValue::undefined(), true);
-        return ctx.call_builtin("promise_resolve", &[result]);
+    if gen_obj.get_async_generator_state().is_none() {
+        let err = make_type_error(ctx, "this is not an async generator");
+        return ctx.call_builtin("promise_reject", &[err]);
     }
-
-    let is_done = gen_obj
-        .get_generator_state()
-        .map(|s| s.done)
-        .unwrap_or(true);
-
-    if is_done {
-        let result = create_iterator_result(ctx, JSValue::undefined(), true);
-        return ctx.call_builtin("promise_resolve", &[result]);
+    let promise = crate::builtins::promise::new_pending_promise(ctx);
+    gen_obj
+        .get_async_generator_state_mut()
+        .unwrap()
+        .queue
+        .push(crate::object::object::AsyncGeneratorRequest {
+            kind,
+            value,
+            promise,
+        });
+    let roots = &mut ctx.runtime_mut().gc_heap_mut().extra_roots;
+    if !roots.iter().any(|v| v.raw_bits() == this.raw_bits()) {
+        roots.push(this);
     }
+    crate::runtime::vm::drive_async_generator_queue(ctx, this);
+    promise
+}
 
-    let send_value = args.get(1).copied().unwrap_or(JSValue::undefined());
-
-    match run_generator_step(ctx, gen_obj, GENERATOR_RESUME_NEXT, send_value) {
-        Ok((value, _new_pc, done, yield_is_result)) => {
-            if done {
-                let iter_result = create_iterator_result(ctx, value, true);
-                return ctx.call_builtin("promise_resolve", &[iter_result]);
-            }
-            if yield_is_result {
-                let iter_result = value;
-                return ctx.call_builtin("promise_resolve", &[iter_result]);
-            }
-            if crate::builtins::promise::is_promise(&value) {
-                let ptr = value.get_ptr();
-                let promise_obj = unsafe { &*(ptr as *mut JSObject) };
-                let state_atom = ctx.common_atoms.__promise_state__;
-                let result_atom = ctx.common_atoms.__promise_result__;
-                let state = promise_obj
-                    .get(state_atom)
-                    .unwrap_or(JSValue::new_int(0))
-                    .get_int();
-                let result = promise_obj.get(result_atom).unwrap_or(JSValue::undefined());
-                match state {
-                    1 => {
-                        let iter_result = create_iterator_result(ctx, result, false);
-                        ctx.call_builtin("promise_resolve", &[iter_result])
-                    }
-                    2 => {
-                        if let Some(state) = gen_obj.get_generator_state_mut() {
-                            state.done = true;
-                        }
-                        ctx.call_builtin("promise_reject", &[result])
-                    }
-                    _ => {
-                        let iter_result = create_iterator_result(ctx, value, false);
-                        ctx.call_builtin("promise_resolve", &[iter_result])
-                    }
-                }
-            } else {
-                let iter_result = create_iterator_result(ctx, value, false);
-                ctx.call_builtin("promise_resolve", &[iter_result])
-            }
-        }
-        Err((e, exc)) => {
-            if let Some(state) = gen_obj.get_generator_state_mut() {
-                state.done = true;
-            }
-            let err_val = match exc {
-                Some(v) => v,
-                None => JSValue::new_string(ctx.intern(&e)),
-            };
-            ctx.call_builtin("promise_reject", &[err_val])
-        }
-    }
+fn async_generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = args.first().copied().unwrap_or_else(JSValue::undefined);
+    let value = args.get(1).copied().unwrap_or_else(JSValue::undefined);
+    async_generator_enqueue(ctx, this, 0, value)
 }
 
 fn async_generator_return(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.get(0).copied().unwrap_or(JSValue::undefined());
-
-    if !this.is_object() {
-        return ctx.call_builtin("promise_resolve", &[JSValue::undefined()]);
-    }
-
-    let gen_obj = this.as_object_mut();
-
-    if let Some(state) = gen_obj.get_generator_state_mut() {
-        state.done = true;
-    }
-
-    let value = args.get(1).copied().unwrap_or(JSValue::undefined());
-    let result = create_iterator_result(ctx, value, true);
-    ctx.call_builtin("promise_resolve", &[result])
+    let this = args.first().copied().unwrap_or_else(JSValue::undefined);
+    let value = args.get(1).copied().unwrap_or_else(JSValue::undefined);
+    async_generator_enqueue(ctx, this, 2, value)
 }
 
 fn async_generator_throw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.get(0).copied().unwrap_or(JSValue::undefined());
-
-    if this.is_object() {
-        let gen_obj = this.as_object_mut();
-        if let Some(state) = gen_obj.get_generator_state_mut() {
-            state.done = true;
-        }
-    }
-
-    let value = args.get(1).copied().unwrap_or(JSValue::undefined());
-    ctx.call_builtin("promise_reject", &[value])
+    let this = args.first().copied().unwrap_or_else(JSValue::undefined);
+    let value = args.get(1).copied().unwrap_or_else(JSValue::undefined);
+    async_generator_enqueue(ctx, this, 1, value)
 }
 
 fn create_iterator_result(ctx: &mut JSContext, value: JSValue, done: bool) -> JSValue {
     let mut result = JSObject::new();
     result.set(ctx.intern("value"), value);
     result.set(ctx.intern("done"), JSValue::bool(done));
+    if let Some(proto_ptr) = ctx.get_object_prototype() {
+        result.prototype = Some(proto_ptr);
+    }
 
     let ptr = Box::into_raw(Box::new(result)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }

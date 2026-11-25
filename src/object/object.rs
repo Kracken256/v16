@@ -44,6 +44,30 @@ pub struct AsyncState {
     pub handlers: Vec<crate::runtime::vm::ExceptionHandler>,
 
     pub pending_throw: Option<JSValue>,
+
+    pub resume_kind: u8,
+
+    pub resume_value: JSValue,
+
+    pub yield_is_result: bool,
+
+    pub pending_yield: bool,
+}
+
+pub struct AsyncGeneratorRequest {
+    pub kind: u8,
+
+    pub value: JSValue,
+
+    pub promise: JSValue,
+}
+
+pub struct AsyncGeneratorState {
+    pub queue: Vec<AsyncGeneratorRequest>,
+
+    pub running: bool,
+
+    pub current_promise: JSValue,
 }
 use std::ptr::NonNull;
 
@@ -667,6 +691,8 @@ pub struct ObjectExtra {
 
     pub generator_state: Option<Box<GeneratorState>>,
 
+    pub async_generator_state: Option<Box<AsyncGeneratorState>>,
+
     pub async_state: Option<Box<AsyncState>>,
 
     pub mapped_args_frame_index: usize,
@@ -724,6 +750,7 @@ impl JSObject {
                 array_buffer_data: None,
                 typed_array_kind: None,
                 generator_state: None,
+                async_generator_state: None,
                 async_state: None,
                 mapped_args_frame_index: 0,
                 mapped_args_param_count: 0,
@@ -1079,6 +1106,28 @@ impl JSObject {
     }
 
     #[inline]
+    pub fn get_async_generator_state(&self) -> Option<&AsyncGeneratorState> {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.async_generator_state.as_deref())
+    }
+
+    pub fn get_async_generator_state_mut(&mut self) -> Option<&mut AsyncGeneratorState> {
+        self.extra
+            .as_mut()
+            .and_then(|e| e.async_generator_state.as_deref_mut())
+    }
+
+    pub fn set_async_generator_state(&mut self, state: AsyncGeneratorState) {
+        self.ensure_extra().async_generator_state = Some(Box::new(state));
+    }
+
+    pub fn take_async_generator_state(&mut self) -> Option<Box<AsyncGeneratorState>> {
+        self.extra
+            .as_mut()
+            .and_then(|e| e.async_generator_state.take())
+    }
+
     pub fn get_async_state(&self) -> Option<&AsyncState> {
         self.extra.as_ref().and_then(|e| e.async_state.as_deref())
     }

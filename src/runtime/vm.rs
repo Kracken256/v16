@@ -138,6 +138,8 @@ pub enum PromiseSettlement {
 pub enum AsyncStepResult {
     Complete(JSValue, Vec<JSValue>, usize, Vec<ExceptionHandler>),
     Suspended(JSValue, u16, Vec<JSValue>, usize, Vec<ExceptionHandler>),
+    Yielded(JSValue, bool, Option<u16>, Vec<JSValue>, usize, Vec<ExceptionHandler>),
+    YieldSuspended(JSValue, Option<u16>, bool, Vec<JSValue>, usize, Vec<ExceptionHandler>),
     Threw(JSValue),
     Fatal(String),
 }
@@ -202,6 +204,10 @@ pub fn start_async_call(
         func_ptr: Some(func_ptr),
         handlers: Vec::new(),
         pending_throw: None,
+        resume_kind: 0,
+        resume_value: JSValue::undefined(),
+        yield_is_result: false,
+        pending_yield: false,
     });
     let holder_ptr = Box::into_raw(Box::new(holder)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(holder_ptr);
@@ -225,18 +231,22 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
     }
     let holder_ptr = holder_val.get_ptr();
     let holder = unsafe { &mut *(holder_ptr as *mut crate::object::object::JSObject) };
+    let is_generator = holder.get_async_generator_state().is_some();
     let mut state = match holder.take_async_state() {
         Some(s) => s,
         None => return,
     };
     if state.done {
         holder.set_async_state(*state);
+        if is_generator {
+            drive_async_generator_queue(ctx, holder_val);
+        }
         return;
     }
 
     let mut step_vm = VM::new();
     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
-    let outcome = step_vm.execute_async_step(ctx, &state);
+    let outcome = step_vm.execute_async_step(ctx, &state, is_generator);
     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
 
     let promise_atom = ctx.intern("__v16_promise__");
@@ -251,8 +261,29 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
             state.handlers = handlers;
             state.done = true;
             holder.set(awaiting_atom, JSValue::null());
+            if is_generator {
+                settle_async_generator_current(ctx, holder_val, value, true, false);
+                holder.set_async_state(*state);
+                drive_async_generator_queue(ctx, holder_val);
+                return;
+            }
             crate::builtins::promise::settle_async_result(ctx, promise, value, false);
             finished = true;
+        }
+        Ok(AsyncStepResult::Yielded(value, is_result, src, snapshot, pc, handlers)) => {
+            state.snapshot = snapshot;
+            state.pc = pc;
+            state.handlers = handlers;
+            state.send_reg = src;
+            state.yield_is_result = is_result;
+            state.resume_kind = 0;
+            state.resume_value = JSValue::undefined();
+            state.pending_throw = None;
+            holder.set(awaiting_atom, JSValue::null());
+            holder.set_async_state(*state);
+            settle_async_generator_current(ctx, holder_val, value, false, false);
+            drive_async_generator_queue(ctx, holder_val);
+            return;
         }
         Ok(AsyncStepResult::Suspended(p, src, snapshot, pc, handlers)) => {
             state.snapshot = snapshot;
@@ -264,9 +295,27 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, false);
             crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, true);
         }
+        Ok(AsyncStepResult::YieldSuspended(p, src, is_result, snapshot, pc, handlers)) => {
+            state.snapshot = snapshot;
+            state.pc = pc;
+            state.handlers = handlers;
+            state.send_reg = src;
+            state.yield_is_result = is_result;
+            state.pending_throw = None;
+            state.pending_yield = true;
+            holder.set(awaiting_atom, p);
+            crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, false);
+            crate::builtins::promise::schedule_async_resume(ctx, p, holder_val, true);
+        }
         Ok(AsyncStepResult::Threw(value)) => {
             state.done = true;
             holder.set(awaiting_atom, JSValue::null());
+            if is_generator {
+                settle_async_generator_current(ctx, holder_val, value, true, true);
+                holder.set_async_state(*state);
+                drive_async_generator_queue(ctx, holder_val);
+                return;
+            }
             crate::builtins::promise::settle_async_result(ctx, promise, value, true);
             finished = true;
         }
@@ -274,6 +323,12 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
             state.done = true;
             holder.set(awaiting_atom, JSValue::null());
             let err = make_async_error(ctx, &msg);
+            if is_generator {
+                settle_async_generator_current(ctx, holder_val, err, true, true);
+                holder.set_async_state(*state);
+                drive_async_generator_queue(ctx, holder_val);
+                return;
+            }
             crate::builtins::promise::settle_async_result(ctx, promise, err, true);
             finished = true;
         }
@@ -284,6 +339,112 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
         let roots = &mut ctx.runtime_mut().gc_heap_mut().extra_roots;
         let holder_bits = holder_val.raw_bits();
         roots.retain(|v| v.raw_bits() != holder_bits);
+    }
+}
+
+fn generator_iterator_result(ctx: &mut JSContext, value: JSValue, done: bool) -> JSValue {
+    let mut result = crate::object::object::JSObject::new();
+    result.set(ctx.intern("value"), value);
+    result.set(ctx.intern("done"), JSValue::bool(done));
+    if let Some(proto_ptr) = ctx.get_object_prototype() {
+        result.prototype = Some(proto_ptr);
+    }
+    let ptr = Box::into_raw(Box::new(result)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
+fn take_async_generator_current(
+    ctx: &mut JSContext,
+    gen_val: JSValue,
+) -> Option<JSValue> {
+    let generator_obj = unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+    let state = generator_obj.get_async_generator_state_mut()?;
+    state.running = false;
+    let promise = state.current_promise;
+    state.current_promise = JSValue::undefined();
+    let _ = ctx;
+    Some(promise)
+}
+
+fn settle_async_generator_current(
+    ctx: &mut JSContext,
+    gen_val: JSValue,
+    value: JSValue,
+    done: bool,
+    is_reject: bool,
+) {
+    let promise = match take_async_generator_current(ctx, gen_val) {
+        Some(p) => p,
+        None => return,
+    };
+    if is_reject {
+        crate::builtins::promise::settle_async_result(ctx, promise, value, true);
+    } else {
+        let result = generator_iterator_result(ctx, value, done);
+        crate::builtins::promise::settle_async_result(ctx, promise, result, false);
+    }
+}
+
+pub fn drive_async_generator_queue(ctx: &mut JSContext, gen_val: JSValue) {
+    if !gen_val.is_object() {
+        return;
+    }
+    let generator_obj = unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+    loop {
+        let (kind, value, request_promise) = {
+            let state = match generator_obj.get_async_generator_state_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            if state.running || state.queue.is_empty() {
+                return;
+            }
+            let request = state.queue.remove(0);
+            state.running = true;
+            state.current_promise = request.promise;
+            (request.kind, request.value, request.promise)
+        };
+        let is_done = generator_obj
+            .get_async_state()
+            .map(|state| state.done)
+            .unwrap_or(true);
+        if is_done {
+            if kind == 1 {
+                crate::builtins::promise::settle_async_result(ctx, request_promise, value, true);
+            } else {
+                let result_value = if kind == 2 { value } else { JSValue::undefined() };
+                let result = generator_iterator_result(ctx, result_value, true);
+                crate::builtins::promise::settle_async_result(ctx, request_promise, result, false);
+            }
+            if let Some(state) = generator_obj.get_async_generator_state_mut() {
+                state.running = false;
+                state.current_promise = JSValue::undefined();
+            }
+            continue;
+        }
+        {
+            let state = match generator_obj.get_async_state_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            state.resume_kind = kind;
+            state.resume_value = value;
+            state.yield_is_result = false;
+            state.pending_throw = None;
+            if kind == 0 {
+                state.resume_kind = 0;
+                state.resume_value = JSValue::undefined();
+                if let Some(reg) = state.send_reg {
+                    let idx = reg as usize;
+                    if idx < state.snapshot.len() {
+                        state.snapshot[idx] = value;
+                    }
+                }
+            }
+        }
+        drive_async_state(ctx, gen_val);
+        return;
     }
 }
 
@@ -303,6 +464,20 @@ pub fn resume_async_state(
     };
     if state.done {
         holder.set_async_state(*state);
+        return;
+    }
+    if state.pending_yield {
+        state.pending_yield = false;
+        if is_reject {
+            state.pending_throw = Some(argument);
+            holder.set_async_state(*state);
+            drive_async_state(ctx, holder_val);
+        } else {
+            state.pending_throw = None;
+            holder.set_async_state(*state);
+            settle_async_generator_current(ctx, holder_val, argument, false, false);
+            drive_async_generator_queue(ctx, holder_val);
+        }
         return;
     }
     if let Some(reg) = state.send_reg {
@@ -3688,18 +3863,41 @@ impl VM {
                 if let Some(proto_ptr) = Self::generator_prototype_for(ctx, js_func) {
                     gen_obj.prototype = Some(proto_ptr);
                 }
-                gen_obj.set_generator_state(crate::object::object::GeneratorState {
-                    bytecode: Box::new(rb.clone()),
-                    snapshot: result_snapshot,
-                    pc: result_pc,
-                    done: result_done,
-                    send_reg: result_send_reg,
-                    argc: args.len() as u32,
-                    saved_args: args.to_vec(),
-                    func_ptr: Some(ptr),
-                    handlers: result_handlers,
-                    yield_is_result: result_yield_is_result,
-                });
+                if js_func.is_async() {
+                    gen_obj.set_async_state(crate::object::object::AsyncState {
+                        bytecode: Box::new(rb.clone()),
+                        snapshot: result_snapshot,
+                        pc: result_pc,
+                        done: result_done,
+                        send_reg: result_send_reg,
+                        saved_args: args.to_vec(),
+                        func_ptr: Some(ptr),
+                        handlers: result_handlers,
+                        pending_throw: None,
+                        resume_kind: 0,
+                        resume_value: JSValue::undefined(),
+                        yield_is_result: result_yield_is_result,
+                        pending_yield: false,
+                    });
+                    gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
+                        queue: Vec::new(),
+                        running: false,
+                        current_promise: JSValue::undefined(),
+                    });
+                } else {
+                    gen_obj.set_generator_state(crate::object::object::GeneratorState {
+                        bytecode: Box::new(rb.clone()),
+                        snapshot: result_snapshot,
+                        pc: result_pc,
+                        done: result_done,
+                        send_reg: result_send_reg,
+                        argc: args.len() as u32,
+                        saved_args: args.to_vec(),
+                        func_ptr: Some(ptr),
+                        handlers: result_handlers,
+                        yield_is_result: result_yield_is_result,
+                    });
+                }
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
                 return Ok(JSValue::new_object(gen_ptr));
@@ -10942,10 +11140,14 @@ impl VM {
         &mut self,
         ctx: &mut JSContext,
         state: &crate::object::object::AsyncState,
+        is_generator: bool,
     ) -> Result<AsyncStepResult, String> {
         self.ctx_ptr = ctx;
         self.async_step = true;
         self.await_suspend = None;
+        self.last_yield_src = None;
+        self.last_yield_is_result = false;
+        self.generator_resume_kind = 0;
         self.last_uncaught = None;
         self.pending_saved_args = Some(state.saved_args.clone());
         self.pending_function_ptr = state.func_ptr;
@@ -10964,6 +11166,22 @@ impl VM {
         for i in state.snapshot.len()..needed {
             if i < self.registers.len() {
                 self.registers[i] = JSValue::undefined();
+            }
+        }
+        if state.yield_is_result {
+            self.generator_resume_kind = state.resume_kind;
+            if state.resume_kind == 2 {
+                self.pending_return_value = None;
+            }
+        } else {
+            match state.resume_kind {
+                1 => {
+                    self.pending_throw = Some(state.resume_value);
+                }
+                2 => {
+                    self.pending_return_value = Some(state.resume_value);
+                }
+                _ => {}
             }
         }
         if let Some(exc) = state.pending_throw.clone() {
@@ -10989,12 +11207,34 @@ impl VM {
                 Some((promise, src)) => {
                     Ok(AsyncStepResult::Suspended(promise, src, snapshot, pc, handlers))
                 }
-                None => Ok(AsyncStepResult::Complete(
-                    JSValue::undefined(),
-                    snapshot,
-                    pc,
-                    handlers,
-                )),
+                None => {
+                    if is_generator {
+                        let value = self
+                            .last_yield_src
+                            .and_then(|src| snapshot.get(src as usize).copied())
+                            .unwrap_or_else(JSValue::undefined);
+                        let promise = if crate::builtins::promise::is_promise(&value) {
+                            value
+                        } else {
+                            ctx.call_builtin("promise_resolve", &[value])
+                        };
+                        Ok(AsyncStepResult::YieldSuspended(
+                            promise,
+                            self.last_yield_src,
+                            self.last_yield_is_result,
+                            snapshot,
+                            pc,
+                            handlers,
+                        ))
+                    } else {
+                        Ok(AsyncStepResult::Complete(
+                            JSValue::undefined(),
+                            snapshot,
+                            pc,
+                            handlers,
+                        ))
+                    }
+                }
             },
             Err(e) => {
                 let uncaught = self
@@ -11085,18 +11325,41 @@ impl VM {
         if let Some(proto_ptr) = Self::generator_prototype_for(ctx, js_func) {
             gen_obj.prototype = Some(proto_ptr);
         }
-        gen_obj.set_generator_state(crate::object::object::GeneratorState {
-            bytecode: Box::new(rb.clone()),
-            snapshot: result_snapshot,
-            pc: result_pc,
-            done: result_done,
-            send_reg: result_send_reg,
-            argc: args.len() as u32,
-            saved_args: args.to_vec(),
-            func_ptr: Some(func_val.get_ptr()),
-            handlers: result_handlers,
-            yield_is_result: result_yield_is_result,
-        });
+        if js_func.is_async() {
+            gen_obj.set_async_state(crate::object::object::AsyncState {
+                bytecode: Box::new(rb.clone()),
+                snapshot: result_snapshot,
+                pc: result_pc,
+                done: result_done,
+                send_reg: result_send_reg,
+                saved_args: args.to_vec(),
+                func_ptr: Some(func_val.get_ptr()),
+                handlers: result_handlers,
+                pending_throw: None,
+                resume_kind: 0,
+                resume_value: JSValue::undefined(),
+                yield_is_result: result_yield_is_result,
+                pending_yield: false,
+            });
+            gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
+                queue: Vec::new(),
+                running: false,
+                current_promise: JSValue::undefined(),
+            });
+        } else {
+            gen_obj.set_generator_state(crate::object::object::GeneratorState {
+                bytecode: Box::new(rb.clone()),
+                snapshot: result_snapshot,
+                pc: result_pc,
+                done: result_done,
+                send_reg: result_send_reg,
+                argc: args.len() as u32,
+                saved_args: args.to_vec(),
+                func_ptr: Some(func_val.get_ptr()),
+                handlers: result_handlers,
+                yield_is_result: result_yield_is_result,
+            });
+        }
         let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
         Ok(Some(JSValue::new_object(gen_ptr)))
