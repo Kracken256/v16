@@ -208,6 +208,7 @@ pub enum Opcode {
     LoadCaughtException = 244,
     SetFunctionName = 245,
     ToNumeric = 246,
+    AsyncYieldStarStep = 247,
 }
 
 impl Opcode {
@@ -407,6 +408,7 @@ impl Opcode {
             244 => Some(Opcode::LoadCaughtException),
             245 => Some(Opcode::SetFunctionName),
             246 => Some(Opcode::ToNumeric),
+            247 => Some(Opcode::AsyncYieldStarStep),
             _ => None,
         }
     }
@@ -578,6 +580,7 @@ impl Opcode {
             Opcode::GetIterator => 5,
             Opcode::IteratorNext => 7,
             Opcode::YieldStarStep => 9,
+            Opcode::AsyncYieldStarStep => 13,
             Opcode::IteratorNextSend => 9,
             Opcode::IteratorClose => 3,
             Opcode::IteratorStep => 5,
@@ -1369,6 +1372,20 @@ impl Bytecode {
                         operands,
                         " r{}, r{}, r{}, r{}",
                         iter, value, done, returning
+                    )
+                    .unwrap();
+                }
+                Opcode::AsyncYieldStarStep => {
+                    let iter = read_u16(1);
+                    let value = read_u16(3);
+                    let done = read_u16(5);
+                    let returning = read_u16(7);
+                    let state = read_u16(9);
+                    let awaited = read_u16(11);
+                    write!(
+                        operands,
+                        " r{}, r{}, r{}, r{}, r{}, r{}",
+                        iter, value, done, returning, state, awaited
                     )
                     .unwrap();
                 }

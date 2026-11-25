@@ -68,6 +68,12 @@ pub struct AsyncGeneratorState {
     pub running: bool,
 
     pub current_promise: JSValue,
+
+    pub started: bool,
+
+    pub awaiting_return: bool,
+
+    pub pending_return_action: u8,
 }
 use std::ptr::NonNull;
 

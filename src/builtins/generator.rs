@@ -314,55 +314,102 @@ fn make_type_error(ctx: &mut JSContext, message: &str) -> JSValue {
     JSValue::new_object(ptr)
 }
 
+fn async_generator_validate(ctx: &mut JSContext, this: JSValue) -> Option<JSValue> {
+    if this.is_object() {
+        if this.as_object().get_async_generator_state().is_some() {
+            return None;
+        }
+    }
+    Some(make_type_error(ctx, "value is not an async generator"))
+}
+
+fn async_generator_is_done(this: JSValue) -> bool {
+    if !this.is_object() {
+        return true;
+    }
+    this.as_object()
+        .get_async_state()
+        .map(|state| state.done)
+        .unwrap_or(true)
+}
+
+fn async_generator_is_started(this: JSValue) -> bool {
+    if !this.is_object() {
+        return false;
+    }
+    this.as_object()
+        .get_async_generator_state()
+        .map(|state| state.started)
+        .unwrap_or(false)
+}
+
 fn async_generator_enqueue(
     ctx: &mut JSContext,
     this: JSValue,
     kind: u8,
     value: JSValue,
 ) -> JSValue {
-    if !this.is_object() {
-        let err = make_type_error(ctx, "this is not an async generator");
-        return ctx.call_builtin("promise_reject", &[err]);
-    }
-    let gen_obj = this.as_object_mut();
-    if gen_obj.get_async_generator_state().is_none() {
-        let err = make_type_error(ctx, "this is not an async generator");
-        return ctx.call_builtin("promise_reject", &[err]);
-    }
     let promise = crate::builtins::promise::new_pending_promise(ctx);
-    gen_obj
-        .get_async_generator_state_mut()
-        .unwrap()
-        .queue
-        .push(crate::object::object::AsyncGeneratorRequest {
-            kind,
-            value,
-            promise,
-        });
+    if let Some(state) = this.as_object_mut().get_async_generator_state_mut() {
+        state
+            .queue
+            .push(crate::object::object::AsyncGeneratorRequest {
+                kind,
+                value,
+                promise,
+            });
+    }
     let roots = &mut ctx.runtime_mut().gc_heap_mut().extra_roots;
     if !roots.iter().any(|v| v.raw_bits() == this.raw_bits()) {
         roots.push(this);
     }
-    crate::runtime::vm::drive_async_generator_queue(ctx, this);
     promise
 }
 
 fn async_generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = args.first().copied().unwrap_or_else(JSValue::undefined);
     let value = args.get(1).copied().unwrap_or_else(JSValue::undefined);
-    async_generator_enqueue(ctx, this, 0, value)
+    if let Some(err) = async_generator_validate(ctx, this) {
+        return ctx.call_builtin("promise_reject", &[err]);
+    }
+    if async_generator_is_done(this) {
+        let result = create_iterator_result(ctx, JSValue::undefined(), true);
+        return ctx.call_builtin("promise_resolve", &[result]);
+    }
+    let promise = async_generator_enqueue(ctx, this, 0, value);
+    crate::runtime::vm::drive_async_generator_queue(ctx, this);
+    promise
 }
 
 fn async_generator_return(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = args.first().copied().unwrap_or_else(JSValue::undefined);
     let value = args.get(1).copied().unwrap_or_else(JSValue::undefined);
-    async_generator_enqueue(ctx, this, 2, value)
+    if let Some(err) = async_generator_validate(ctx, this) {
+        return ctx.call_builtin("promise_reject", &[err]);
+    }
+    let promise = async_generator_enqueue(ctx, this, 2, value);
+    crate::runtime::vm::drive_async_generator_queue(ctx, this);
+    promise
 }
 
 fn async_generator_throw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = args.first().copied().unwrap_or_else(JSValue::undefined);
     let value = args.get(1).copied().unwrap_or_else(JSValue::undefined);
-    async_generator_enqueue(ctx, this, 1, value)
+    if let Some(err) = async_generator_validate(ctx, this) {
+        return ctx.call_builtin("promise_reject", &[err]);
+    }
+    if !async_generator_is_started(this) {
+        if let Some(state) = this.as_object_mut().get_async_state_mut() {
+            state.done = true;
+        }
+        return ctx.call_builtin("promise_reject", &[value]);
+    }
+    if async_generator_is_done(this) {
+        return ctx.call_builtin("promise_reject", &[value]);
+    }
+    let promise = async_generator_enqueue(ctx, this, 1, value);
+    crate::runtime::vm::drive_async_generator_queue(ctx, this);
+    promise
 }
 
 fn create_iterator_result(ctx: &mut JSContext, value: JSValue, done: bool) -> JSValue {

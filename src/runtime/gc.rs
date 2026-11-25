@@ -607,6 +607,15 @@ impl GcHeap {
                 if let Some(exc) = &state.pending_throw {
                     self.mark_value(exc);
                 }
+                self.mark_value(&state.resume_value);
+            }
+
+            if let Some(state) = obj.get_async_generator_state() {
+                self.mark_value(&state.current_promise);
+                for request in &state.queue {
+                    self.mark_value(&request.value);
+                    self.mark_value(&request.promise);
+                }
             }
         }
     }

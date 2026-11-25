@@ -3251,7 +3251,12 @@ impl CodeGenerator {
                     return Err("SyntaxError: Illegal return statement".to_string());
                 }
                 let return_reg = if let Some(expr) = &stmt.argument {
-                    self.gen_expression(expr, ctx)?
+                    let reg = self.gen_expression(expr, ctx)?;
+                    if self.in_async_generator {
+                        self.emit(Opcode::Await);
+                        self.emit_u16(reg);
+                    }
+                    reg
                 } else {
                     self.emit(Opcode::LoadUndefined);
                     self.emit_u16(0);
@@ -4370,6 +4375,10 @@ impl CodeGenerator {
                 }
                 if let Some(ref arg) = ret.argument {
                     let reg = self.gen_expression(arg, ctx)?;
+                    if self.in_async_generator {
+                        self.emit(Opcode::Await);
+                        self.emit_u16(reg);
+                    }
                     self.emit(Opcode::Return);
                     self.emit_u16(reg);
                 } else {
@@ -5924,32 +5933,64 @@ impl CodeGenerator {
         self.free_register(iterable_reg);
 
         let value_reg = self.alloc_register();
-        let done_reg = self.alloc_register();
         self.emit(Opcode::LoadUndefined);
         self.emit_u16(value_reg);
 
-        let loop_start = self.code.len();
-        self.emit(Opcode::IteratorNextSendAwait);
-        self.emit_u16(value_reg);
+        let done_reg = self.alloc_register();
+        self.emit(Opcode::LoadFalse);
         self.emit_u16(done_reg);
+
+        let returning_reg = self.alloc_register();
+        self.emit(Opcode::LoadFalse);
+        self.emit_u16(returning_reg);
+
+        let state_reg = self.alloc_register();
+        self.emit(Opcode::LoadInt);
+        self.emit_u16(state_reg);
+        self.emit_i32(0);
+
+        let await_reg = self.alloc_register();
+        self.emit(Opcode::LoadUndefined);
+        self.emit_u16(await_reg);
+
+        let loop_start = self.code.len();
+        self.emit(Opcode::AsyncYieldStarStep);
         self.emit_u16(iter_reg);
         self.emit_u16(value_reg);
+        self.emit_u16(done_reg);
+        self.emit_u16(returning_reg);
+        self.emit_u16(state_reg);
+        self.emit_u16(await_reg);
 
         self.emit(Opcode::JumpIf);
         self.emit_u16(done_reg);
         let exit_patch = self.code.len();
         self.emit_i32(0);
 
-        self.emit(Opcode::Yield);
+        self.emit(Opcode::YieldResult);
         self.emit_u16(value_reg);
 
         self.emit_backward_jump(loop_start);
 
+        let exit_pos = self.code.len();
+        self.patch_jump(exit_patch, exit_pos);
+
+        self.emit(Opcode::JumpIfNot);
+        self.emit_u16(returning_reg);
+        let end_patch = self.code.len();
+        self.emit_i32(0);
+
+        self.emit(Opcode::Return);
+        self.emit_u16(value_reg);
+
         let end_pos = self.code.len();
-        self.patch_jump(exit_patch, end_pos);
+        self.patch_jump(end_patch, end_pos);
 
         self.free_register(iter_reg);
         self.free_register(done_reg);
+        self.free_register(returning_reg);
+        self.free_register(state_reg);
+        self.free_register(await_reg);
 
         Ok(value_reg)
     }
