@@ -2560,6 +2560,52 @@ impl CodeGenerator {
 
         self.push_scope();
         self.pre_scan_let_const(&body.body)?;
+
+        if !self.is_arrow && !self.is_script_level && self.lookup_var("arguments").is_none() {
+            let mut arguments_parent: FxHashMap<String, ParentVar> = FxHashMap::default();
+            arguments_parent.insert(
+                "arguments".to_string(),
+                ParentVar {
+                    local_idx: 0,
+                    kind: VariableKind::Var,
+                    initialized: true,
+                    is_inherited: false,
+                    closed: false,
+                    is_function_name: false,
+                    is_block_decl: false,
+                },
+            );
+            let mut arguments_locals: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut arguments_mentions: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for stmt in &body.body {
+                Self::collect_inherited_upvalues_stmt(
+                    stmt,
+                    &mut arguments_locals,
+                    &arguments_parent,
+                    &mut arguments_mentions,
+                );
+            }
+            if arguments_mentions.contains("arguments") {
+                let slot = self.alloc_register();
+                self.reserved_slots.insert(slot);
+                self.all_var_names.push(("arguments".to_string(), slot, 0));
+                self.scope_stack.last_mut().unwrap().insert(
+                    "arguments".to_string(),
+                    VarEntry {
+                        slot,
+                        kind: VariableKind::Var,
+                        initialized: true,
+                        is_function_name: false,
+                    },
+                );
+                self.function_uses_arguments = true;
+                self.emit(Opcode::GetArguments);
+                self.emit_u16(slot);
+            }
+        }
+
         self.emit_tdz_for_block(&body.body)?;
 
         {
