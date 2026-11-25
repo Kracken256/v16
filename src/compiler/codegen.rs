@@ -10344,8 +10344,13 @@ impl CodeGenerator {
         let class_slot = self
             .lookup_var_slot(class_name)
             .unwrap_or_else(|| self.declare_var(class_name, VariableKind::Let));
+        let inner_slot = self.alloc_register();
         let class_name_atom =
-            self.gen_class_body(class_slot, class_name, &class.super_class, &class.body, ctx)?;
+            self.gen_class_body(inner_slot, class_name, &class.super_class, &class.body, ctx)?;
+        self.emit(Opcode::Move);
+        self.emit_u16(class_slot);
+        self.emit_u16(inner_slot);
+        self.free_register(inner_slot);
         if self.is_global_scope() && !self.is_eval {
             let class_idx = self.add_constant(JSValue::new_string(class_name_atom));
             self.emit(Opcode::SetGlobal);
@@ -10368,6 +10373,19 @@ impl CodeGenerator {
         let is_null_heritage = super_class
             .as_ref()
             .map_or(false, |e| matches!(**e, Expression::Literal(Literal::Null)));
+        if !class_name.is_empty() {
+            self.push_scope();
+            self.scope_stack.last_mut().unwrap().insert(
+                class_name.to_string(),
+                VarEntry {
+                    slot: class_slot,
+                    kind: VariableKind::Const,
+                    initialized: false,
+                },
+            );
+            self.emit(Opcode::LoadTdz);
+            self.emit_u16(class_slot);
+        }
         let super_val_reg = match super_class {
             Some(expr) => Some(self.gen_expression(expr, ctx)?),
             None => None,
@@ -10491,7 +10509,7 @@ impl CodeGenerator {
                 class_name.to_string(),
                 ParentVar {
                     local_idx: class_slot,
-                    kind: VariableKind::Let,
+                    kind: VariableKind::Const,
                     initialized: true,
                     is_inherited: false,
                     closed: false,
@@ -11017,6 +11035,9 @@ impl CodeGenerator {
         }
 
         self.pop_scope();
+        if !class_name.is_empty() {
+            self.pop_scope();
+        }
 
         Ok(class_name_atom)
     }
