@@ -69,6 +69,7 @@ struct ParentVar {
     is_inherited: bool,
     closed: bool,
     is_function_name: bool,
+    is_block_decl: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -957,7 +958,9 @@ impl CodeGenerator {
             for (name, entry) in scope.iter() {
                 if entry.kind != VariableKind::Var {
                     if let Some(pv) = self.parent_vars.get_mut(name) {
-                        pv.closed = true;
+                        if pv.is_block_decl && pv.local_idx == entry.slot {
+                            pv.closed = true;
+                        }
                     }
                 }
             }
@@ -1001,17 +1004,24 @@ impl CodeGenerator {
                 // Add to parent_vars for nested scopes so closures created
                 // after the scope exits can detect them as inaccessible.
                 if self.depth > 1 {
-                    self.parent_vars.insert(
-                        name.to_string(),
-                        ParentVar {
-                            local_idx: slot,
-                            kind,
-                            initialized: false,
-                            is_inherited: false,
-                            closed: false,
-                            is_function_name: false,
-                        },
-                    );
+                    let overwrite = match self.parent_vars.get(name) {
+                        Some(pv) => pv.is_block_decl,
+                        None => true,
+                    };
+                    if overwrite {
+                        self.parent_vars.insert(
+                            name.to_string(),
+                            ParentVar {
+                                local_idx: slot,
+                                kind,
+                                initialized: false,
+                                is_inherited: false,
+                                closed: false,
+                                is_function_name: false,
+                                is_block_decl: true,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -2851,6 +2861,7 @@ impl CodeGenerator {
                     }
                 }
                 ASTNode::ForStatement(stmt) => {
+                    self.push_scope();
                     if let Some(init) = &stmt.init {
                         if let ForInit::VariableDeclaration(vd) = init {
                             if vd.kind != VariableKind::Var {
@@ -2860,7 +2871,6 @@ impl CodeGenerator {
                             }
                         }
                     }
-                    self.push_scope();
                     if let ASTNode::BlockStatement(block) = stmt.body.as_ref() {
                         self.pre_scan_let_const(&block.body)?;
                     } else {
@@ -10835,6 +10845,7 @@ impl CodeGenerator {
                         is_inherited: false,
                         closed: false,
                         is_function_name: entry.is_function_name,
+                        is_block_decl: false,
                     },
                 );
             }
@@ -10850,6 +10861,7 @@ impl CodeGenerator {
                         is_inherited: true,
                         closed: false,
                         is_function_name: false,
+                        is_block_decl: false,
                     },
                 );
             }
@@ -10866,6 +10878,7 @@ impl CodeGenerator {
                             is_inherited: false,
                             closed: false,
                             is_function_name: false,
+                            is_block_decl: false,
                         },
                     );
                 }
@@ -11090,6 +11103,7 @@ impl CodeGenerator {
                         is_inherited: false,
                         closed: false,
                         is_function_name: entry.is_function_name,
+                        is_block_decl: false,
                     },
                 );
             }
@@ -11106,6 +11120,7 @@ impl CodeGenerator {
                         is_inherited: true,
                         closed: false,
                         is_function_name: false,
+                        is_block_decl: false,
                     },
                 );
             }
@@ -11121,6 +11136,7 @@ impl CodeGenerator {
                     is_inherited: false,
                     closed: false,
                     is_function_name: false,
+                    is_block_decl: false,
                 },
             );
         }
