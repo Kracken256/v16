@@ -5191,12 +5191,19 @@ impl VM {
                             }
                         } else if js_obj.is_mapped_arguments() {
                             let fi = js_obj.mapped_args_frame_index();
+                            let param_count = js_obj.mapped_args_param_count();
                             let idx = key_val.get_int();
                             if idx >= 0 && fi < self.frames.len() {
                                 let idx_u = idx as usize;
-                                let saved = &self.frames[fi].saved_args;
-                                if idx_u < saved.len() {
-                                    self.set_reg(dst, saved[idx_u]);
+                                if idx_u < param_count as usize {
+                                    let base = self.frames[fi].registers_base;
+                                    let register_index = base + 1 + param_count as usize + idx_u;
+                                    if register_index < self.registers.len() {
+                                        self.set_reg(dst, self.registers[register_index]);
+                                        continue;
+                                    }
+                                } else if let Some(val) = js_obj.get_indexed(idx_u) {
+                                    self.set_reg(dst, val);
                                     continue;
                                 }
                             }
@@ -5744,7 +5751,7 @@ impl VM {
                                     let idx_u = idx as usize;
                                     if (idx as u32) < param_count {
                                         let base = self.frames[fi].registers_base;
-                                        let reg_idx = base + 1 + idx_u;
+                                        let reg_idx = base + 1 + param_count as usize + idx_u;
                                         if reg_idx < self.registers.len() {
                                             self.set_reg(dst, self.registers[reg_idx]);
                                             continue;
@@ -5857,7 +5864,7 @@ impl VM {
                                 if idx >= 0 && (idx as u32) < param_count && fi < self.frames.len()
                                 {
                                     let base = self.frames[fi].registers_base;
-                                    let reg_idx = base + 1 + idx as usize;
+                                    let reg_idx = base + 1 + param_count as usize + idx as usize;
                                     if reg_idx < self.registers.len() {
                                         self.registers[reg_idx] = value;
                                     }
