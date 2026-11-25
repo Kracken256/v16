@@ -205,15 +205,16 @@ impl<'a> ExecContext<'a> {
 
     fn check_bytecode_has_end_anchor(&self) -> bool {
         let code = self.bytecode;
-        let len = code.len();
+        let mut i = 0usize;
 
-        if len < 2 {
-            return false;
-        }
-
-        for &op in code.iter().rev().take(50) {
+        while i < code.len() {
+            let op = code[i];
             if op == OpCode::CheckLineEnd as u8 {
                 return true;
+            }
+            match OpCode::from_u8(op) {
+                Some(opcode) => i += opcode.size(),
+                None => break,
             }
         }
 
