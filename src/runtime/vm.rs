@@ -2082,6 +2082,30 @@ impl VM {
                     None
                 }
             });
+            let name = name.or_else(|| {
+                obj.get(ctx.common_atoms.constructor).and_then(|ctor| {
+                    if ctor.is_function() {
+                        let func = ctor.as_function();
+                        let name = ctx.get_atom_str(func.name);
+                        if name.is_empty() {
+                            None
+                        } else {
+                            Some(name.to_string())
+                        }
+                    } else if ctor.is_object() {
+                        let ctor_obj = ctor.as_object();
+                        ctor_obj.get(ctx.common_atoms.name).and_then(|v| {
+                            if v.is_string() {
+                                Some(ctx.get_atom_str(v.get_atom()).to_string())
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                })
+            });
             let message = obj.get(ctx.common_atoms.message).and_then(|v| {
                 if v.is_string() {
                     Some(ctx.get_atom_str(v.get_atom()).to_string())
@@ -2091,9 +2115,6 @@ impl VM {
             });
             match (name, message) {
                 (Some(n), Some(m)) => {
-                    if m.is_empty() {
-                        return n;
-                    }
                     return format!("{}: {}", n, m);
                 }
                 (Some(n), _) => return n,
