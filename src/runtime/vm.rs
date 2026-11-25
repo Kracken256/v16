@@ -3923,20 +3923,33 @@ impl VM {
                     let dst = self.read_u16_pc();
                     let a_reg = self.read_u16_pc();
                     let a = self.get_reg(a_reg);
-                    let result = if a.is_int() {
+                    let a = match self.to_numeric(&a, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    };
+                    let result = if a.is_bigint() {
+                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
+                        Self::create_bigint(-a_int)
+                    } else if a.is_int() {
                         let v = a.get_int();
                         if v == 0 {
                             JSValue::new_float_raw(-0.0f64)
                         } else {
                             JSValue::new_int(-v)
                         }
-                    } else if a.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        Self::create_bigint(-a_int)
                     } else if a.is_float() {
                         JSValue::new_float_raw(-a.get_float())
                     } else {
-                        JSValue::new_float_raw(f64::NAN)
+                        JSValue::new_float_raw(-Self::js_to_number(&a, ctx))
                     };
                     self.set_reg(dst, result);
                 }
@@ -3944,7 +3957,31 @@ impl VM {
                     let dst = self.read_u16_pc();
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
+                    let val = match self.to_numeric(&val, ctx) {
+                        Some(v) => v,
+                        None => {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    };
 
+                    if val.is_bigint() {
+                        self.set_pending_type_error(ctx, "Cannot convert a BigInt value to a number");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
                     if val.is_int() || val.is_float() {
                         self.set_reg(dst, val);
                     } else {
