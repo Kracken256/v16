@@ -3428,18 +3428,11 @@ impl CodeGenerator {
         decl: &ExportAllDeclaration,
         ctx: &mut JSContext,
     ) -> Result<(), String> {
-        let mut arguments = vec![Argument::Expression(Expression::Literal(Literal::String(
+        let arguments = vec![Argument::Expression(Expression::Literal(Literal::String(
             decl.source.clone(),
             false,
             false,
         )))];
-        if let Some(exported) = &decl.exported {
-            arguments.push(Argument::Expression(Expression::Literal(Literal::String(
-                exported.clone(),
-                false,
-                false,
-            ))));
-        }
         let expr = Expression::CallExpression(CallExpression {
             callee: Box::new(Expression::Identifier(Identifier {
                 name: "__v16_import__".to_string(),
