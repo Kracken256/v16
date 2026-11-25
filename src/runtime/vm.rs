@@ -1107,6 +1107,8 @@ impl VM {
         let caller = &mut self.frames[self.frame_index];
         let mut pending_elements = None;
         let mut rebind_error = false;
+        let mut propagate_cell = None;
+        let mut propagate_value = JSValue::undefined();
         if is_super_call {
             if caller.this_initialized {
                 rebind_error = true;
@@ -1120,6 +1122,8 @@ impl VM {
                 }
                 if let Some(cell) = caller.this_cell.clone() {
                     cell.set((caller.this_value, true));
+                    propagate_value = caller.this_value;
+                    propagate_cell = Some(cell);
                 }
                 if let Some(fptr) = Self::private_elements_owner_fn(caller) {
                     pending_elements = Some((caller.this_value, fptr));
@@ -1130,6 +1134,9 @@ impl VM {
             if let Some(cell) = sync_map.get(&dst_reg) {
                 cell.set(return_value);
             }
+        }
+        if let Some(cell) = propagate_cell {
+            self.propagate_super_this_to_enclosing_frames(&cell, propagate_value);
         }
         if rebind_error {
             self.pending_super_rebind_error = true;
@@ -1531,6 +1538,7 @@ impl VM {
                     uses_arguments,
                 );
                 if js_func.is_arrow() {
+                    self.frames[self.frame_index].this_cell = js_func.arrow_this_cell.clone();
                     self.frames[self.frame_index].super_ctor = js_func.arrow_super;
                     self.frames[self.frame_index].super_base = js_func.arrow_super_base;
                     if let Some(cell) = &js_func.arrow_this_cell {
@@ -2114,6 +2122,27 @@ impl VM {
         Ok(())
     }
 
+    fn propagate_super_this_to_enclosing_frames(
+        &mut self,
+        cell: &std::rc::Rc<std::cell::Cell<(JSValue, bool)>>,
+        this_value: JSValue,
+    ) {
+        for idx in (0..self.frame_index).rev() {
+            let matches = self.frames[idx]
+                .this_cell
+                .as_ref()
+                .map_or(false, |frame_cell| std::rc::Rc::ptr_eq(frame_cell, cell));
+            if matches {
+                self.frames[idx].this_initialized = true;
+                self.frames[idx].this_value = this_value;
+                let base = self.frames[idx].registers_base;
+                if base < self.registers.len() {
+                    self.registers[base] = this_value;
+                }
+            }
+        }
+    }
+
     fn bind_super_call_result(&mut self, dst: u16) {
         if self.frames[self.frame_index].this_initialized {
             self.pending_super_rebind_error = true;
@@ -2126,8 +2155,10 @@ impl VM {
             self.set_reg(0, result);
         }
         if let Some(cell) = self.frames[self.frame_index].this_cell.clone() {
-            let frame = &self.frames[self.frame_index];
-            cell.set((frame.this_value, frame.this_initialized));
+            let this_value = self.frames[self.frame_index].this_value;
+            let this_initialized = self.frames[self.frame_index].this_initialized;
+            cell.set((this_value, this_initialized));
+            self.propagate_super_this_to_enclosing_frames(&cell, this_value);
         }
         if let Some(fptr) = Self::private_elements_owner_fn(&self.frames[self.frame_index]) {
             let this_val = self.frames[self.frame_index].this_value;
@@ -2154,8 +2185,10 @@ impl VM {
             self.set_reg(0, result);
         }
         if let Some(cell) = self.frames[self.frame_index].this_cell.clone() {
-            let frame = &self.frames[self.frame_index];
-            cell.set((frame.this_value, frame.this_initialized));
+            let this_value = self.frames[self.frame_index].this_value;
+            let this_initialized = self.frames[self.frame_index].this_initialized;
+            cell.set((this_value, this_initialized));
+            self.propagate_super_this_to_enclosing_frames(&cell, this_value);
         }
         if let Some(fptr) = Self::private_elements_owner_fn(&self.frames[self.frame_index]) {
             let this_val = self.frames[self.frame_index].this_value;
@@ -9237,6 +9270,7 @@ impl VM {
                                 js_func.uses_arguments(),
                             );
                             if js_func.is_arrow() {
+                                self.frames[self.frame_index].this_cell = js_func.arrow_this_cell.clone();
                                 self.frames[self.frame_index].super_ctor = js_func.arrow_super;
                                 self.frames[self.frame_index].super_base = js_func.arrow_super_base;
                                 if let Some(cell) = &js_func.arrow_this_cell {
