@@ -825,6 +825,13 @@ impl Parser {
                 continue;
             }
 
+            if self.cur_value() == "accessor"
+                && matches!(self.cur_type(), Some(TokenType::Identifier))
+                && self.peek_starts_class_element_name()
+            {
+                self.advance();
+            }
+
             let mut is_async = false;
             if self.at_keyword("async")
                 && !self.peek_at(";")
