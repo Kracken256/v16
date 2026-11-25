@@ -50,6 +50,7 @@ pub struct CallFrame {
     pub this_initialized: bool,
     pub is_super_call: bool,
     pub is_constructor: bool,
+    pub this_cell: Option<std::rc::Rc<std::cell::Cell<(JSValue, bool)>>>,
     pub is_async: bool,
     pub uses_arguments: bool,
     pub current_pc: usize,
@@ -90,6 +91,7 @@ impl CallFrame {
             this_initialized: true,
             is_super_call: false,
             is_constructor: false,
+            this_cell: None,
             is_async: false,
             uses_arguments: false,
             current_pc: 0,
@@ -358,6 +360,8 @@ pub struct VM {
 
     pending_instance_elements: Option<(JSValue, usize)>,
 
+    pending_super_rebind_error: bool,
+
     cached_has_instance_atom: crate::runtime::atom::Atom,
 
     instanceof_cache_ctor: usize,
@@ -435,6 +439,7 @@ impl VM {
             eval_binding_frames: 0,
             eval_direct_flags: 0,
             pending_instance_elements: None,
+            pending_super_rebind_error: false,
             cached_has_instance_atom: crate::runtime::atom::Atom(0),
             instanceof_cache_ctor: 0,
             instanceof_cache_proto: 0,
@@ -848,6 +853,7 @@ impl VM {
         frame.super_ctor = JSValue::undefined();
         frame.new_target = JSValue::undefined();
         frame.this_initialized = true;
+        frame.this_cell = None;
         frame.is_super_call = false;
         frame.is_constructor = is_constructor;
         frame.is_async = is_async;
@@ -990,6 +996,7 @@ impl VM {
         frame.super_ctor = JSValue::undefined();
         frame.new_target = JSValue::undefined();
         frame.this_initialized = true;
+        frame.this_cell = None;
         frame.is_super_call = false;
         frame.is_constructor = is_constructor;
         frame.is_async = is_async;
@@ -1099,22 +1106,33 @@ impl VM {
 
         let caller = &mut self.frames[self.frame_index];
         let mut pending_elements = None;
+        let mut rebind_error = false;
         if is_super_call {
-            caller.this_initialized = true;
-            if return_value.is_object_like() {
-                caller.this_value = return_value;
-                unsafe {
-                    *regs_ptr = return_value;
+            if caller.this_initialized {
+                rebind_error = true;
+            } else {
+                caller.this_initialized = true;
+                if return_value.is_object_like() {
+                    caller.this_value = return_value;
+                    unsafe {
+                        *regs_ptr = return_value;
+                    }
                 }
-            }
-            if let Some(fptr) = Self::private_elements_owner_fn(caller) {
-                pending_elements = Some((caller.this_value, fptr));
+                if let Some(cell) = caller.this_cell.clone() {
+                    cell.set((caller.this_value, true));
+                }
+                if let Some(fptr) = Self::private_elements_owner_fn(caller) {
+                    pending_elements = Some((caller.this_value, fptr));
+                }
             }
         }
         if let Some(ref sync_map) = caller.upvalue_sync_map {
             if let Some(cell) = sync_map.get(&dst_reg) {
                 cell.set(return_value);
             }
+        }
+        if rebind_error {
+            self.pending_super_rebind_error = true;
         }
         if let Some((this_val, fptr)) = pending_elements {
             self.mark_instance_elements_pending(this_val, fptr);
@@ -1515,7 +1533,14 @@ impl VM {
                 if js_func.is_arrow() {
                     self.frames[self.frame_index].super_ctor = js_func.arrow_super;
                     self.frames[self.frame_index].super_base = js_func.arrow_super_base;
-                    self.frames[self.frame_index].this_initialized = js_func.arrow_this_initialized;
+                    if let Some(cell) = &js_func.arrow_this_cell {
+                        let (tv, init) = cell.get();
+                        self.frames[self.frame_index].this_value = tv;
+                        self.frames[self.frame_index].this_initialized = init;
+                    } else {
+                        self.frames[self.frame_index].this_initialized =
+                            js_func.arrow_this_initialized;
+                    }
                 } else {
                     let super_key = ctx.common_atoms.__super__;
                     if let Some(super_val) = js_func.base.get(super_key) {
@@ -2090,11 +2115,19 @@ impl VM {
     }
 
     fn bind_super_call_result(&mut self, dst: u16) {
+        if self.frames[self.frame_index].this_initialized {
+            self.pending_super_rebind_error = true;
+            return;
+        }
         let result = self.get_reg(dst);
         self.frames[self.frame_index].this_initialized = true;
         if result.is_object_like() {
             self.frames[self.frame_index].this_value = result;
             self.set_reg(0, result);
+        }
+        if let Some(cell) = self.frames[self.frame_index].this_cell.clone() {
+            let frame = &self.frames[self.frame_index];
+            cell.set((frame.this_value, frame.this_initialized));
         }
         if let Some(fptr) = Self::private_elements_owner_fn(&self.frames[self.frame_index]) {
             let this_val = self.frames[self.frame_index].this_value;
@@ -2103,6 +2136,10 @@ impl VM {
     }
 
     fn bind_super_call_builtin_result(&mut self, dst: u16) {
+        if self.frames[self.frame_index].this_initialized {
+            self.pending_super_rebind_error = true;
+            return;
+        }
         let result = self.get_reg(dst);
         let this_val = self.frames[self.frame_index].this_value;
         self.frames[self.frame_index].this_initialized = true;
@@ -2115,6 +2152,10 @@ impl VM {
             }
             self.frames[self.frame_index].this_value = result;
             self.set_reg(0, result);
+        }
+        if let Some(cell) = self.frames[self.frame_index].this_cell.clone() {
+            let frame = &self.frames[self.frame_index];
+            cell.set((frame.this_value, frame.this_initialized));
         }
         if let Some(fptr) = Self::private_elements_owner_fn(&self.frames[self.frame_index]) {
             let this_val = self.frames[self.frame_index].this_value;
@@ -3308,6 +3349,7 @@ impl VM {
         frame.super_base = JSValue::undefined();
         frame.new_target = JSValue::undefined();
         frame.this_initialized = true;
+        frame.this_cell = None;
         frame.is_super_call = false;
         if let Some(caller_ptr) = caller_vm_ptr {
             let caller = unsafe { &*(caller_ptr as *const VM) };
@@ -3753,6 +3795,17 @@ impl VM {
                             ThrowDispatch::Uncaught(e) => return Err(e),
                             ThrowDispatch::AsyncComplete(o) => return Ok(o),
                         }
+                    }
+                }
+            }
+            if self.pending_super_rebind_error {
+                self.pending_super_rebind_error = false;
+                self.set_pending_reference_error(ctx, "Super constructor already called");
+                if let Some(exc) = self.pending_throw.take() {
+                    match self.dispatch_throw_value(ctx, exc) {
+                        ThrowDispatch::Caught => {}
+                        ThrowDispatch::Uncaught(e) => return Err(e),
+                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
                     }
                 }
             }
@@ -8886,20 +8939,6 @@ impl VM {
                         JSValue::new_object(ptr)
                     } else {
                         if is_super_call {
-                            if self.frames[self.frame_index].this_initialized {
-                                self.set_pending_reference_error(
-                                    ctx,
-                                    "Super constructor already called",
-                                );
-                                if let Some(exc) = self.pending_throw.take() {
-                                    match self.dispatch_throw_value(ctx, exc) {
-                                        ThrowDispatch::Caught => continue,
-                                        ThrowDispatch::Uncaught(e) => return Err(e),
-                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                    }
-                                }
-                                continue;
-                            }
                             self.frames[self.frame_index].this_value
                         } else {
                             JSValue::undefined()
@@ -9140,20 +9179,6 @@ impl VM {
                         JSValue::new_object(ptr)
                     } else {
                         if is_super_call {
-                            if self.frames[self.frame_index].this_initialized {
-                                self.set_pending_reference_error(
-                                    ctx,
-                                    "Super constructor already called",
-                                );
-                                if let Some(exc) = self.pending_throw.take() {
-                                    match self.dispatch_throw_value(ctx, exc) {
-                                        ThrowDispatch::Caught => continue,
-                                        ThrowDispatch::Uncaught(e) => return Err(e),
-                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                    }
-                                }
-                                continue;
-                            }
                             self.frames[self.frame_index].this_value
                         } else {
                             JSValue::undefined()
@@ -9197,8 +9222,14 @@ impl VM {
                             if js_func.is_arrow() {
                                 self.frames[self.frame_index].super_ctor = js_func.arrow_super;
                                 self.frames[self.frame_index].super_base = js_func.arrow_super_base;
-                                self.frames[self.frame_index].this_initialized =
-                                    js_func.arrow_this_initialized;
+                                if let Some(cell) = &js_func.arrow_this_cell {
+                                    let (tv, init) = cell.get();
+                                    self.frames[self.frame_index].this_value = tv;
+                                    self.frames[self.frame_index].this_initialized = init;
+                                } else {
+                                    self.frames[self.frame_index].this_initialized =
+                                        js_func.arrow_this_initialized;
+                                }
                             } else {
                                 let super_key = ctx.common_atoms.__super__;
                                 if let Some(super_val) = js_func.base.get(super_key) {
@@ -9538,7 +9569,14 @@ impl VM {
                                 0
                             };
                         }
-                        let parent = &self.frames[self.frame_index];
+                        let parent = &mut self.frames[self.frame_index];
+                        if parent.this_cell.is_none() {
+                            parent.this_cell = Some(std::rc::Rc::new(std::cell::Cell::new((
+                                parent.this_value,
+                                parent.this_initialized,
+                            ))));
+                        }
+                        func.arrow_this_cell = parent.this_cell.clone();
                         func.arrow_this = parent.this_value;
                         func.arrow_this_initialized = parent.this_initialized;
                         func.arrow_super = parent.super_ctor;
