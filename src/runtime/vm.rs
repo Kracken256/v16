@@ -354,6 +354,8 @@ pub struct VM {
 
     eval_binding_frames: u32,
 
+    eval_direct_flags: u8,
+
     cached_has_instance_atom: crate::runtime::atom::Atom,
 
     instanceof_cache_ctor: usize,
@@ -429,6 +431,7 @@ impl VM {
             allocation_count: 0,
             caller_vm: None,
             eval_binding_frames: 0,
+            eval_direct_flags: 0,
             cached_has_instance_atom: crate::runtime::atom::Atom(0),
             instanceof_cache_ctor: 0,
             instanceof_cache_proto: 0,
@@ -3173,6 +3176,7 @@ impl VM {
             }
         }
 
+        let in_field_initializer = self.eval_direct_flags & 1 != 0;
         let (allow_super_property, allow_super_call) = {
             let frame = &self.frames[self.frame_index];
             let mut allow_property = frame.super_base.is_object_like()
@@ -3187,6 +3191,9 @@ impl VM {
                     allow_call = true;
                 }
             }
+            if in_field_initializer {
+                allow_call = false;
+            }
             (allow_property, allow_call)
         };
         let caller_vm_ptr = self as *mut VM;
@@ -3198,6 +3205,7 @@ impl VM {
             caller_vm_ptr,
             allow_super_property,
             allow_super_call,
+            in_field_initializer,
         ) {
             Ok(v) => Ok(v),
             Err(e) => self.convert_eval_error_to_exc(ctx, e),
@@ -7557,6 +7565,7 @@ impl VM {
                     self.set_reg(dst, self.frames[self.frame_index].new_target);
                 }
                 Opcode::MarkDirectEval => {
+                    self.eval_direct_flags = self.read_u8();
                     self.eval_direct_call = true;
                 }
                 Opcode::CheckThisInitialized => {

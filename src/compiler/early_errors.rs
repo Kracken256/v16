@@ -13,6 +13,7 @@ struct Ctx {
     allow_super_property: bool,
     allow_super_call: bool,
     in_function: bool,
+    in_field_initializer: bool,
 }
 
 impl Ctx {
@@ -25,6 +26,7 @@ impl Ctx {
             allow_super_property: false,
             allow_super_call: false,
             in_function: false,
+            in_field_initializer: false,
         }
     }
 
@@ -55,6 +57,7 @@ fn function_ctx(
         allow_super_property,
         allow_super_call,
         in_function: true,
+        in_field_initializer: false,
     }
 }
 
@@ -170,6 +173,11 @@ fn check_identifier_reference(name: &str, ctx: Ctx) -> Result<(), String> {
             name
         ));
     }
+    if ctx.in_field_initializer && name == "arguments" {
+        return Err(
+            "SyntaxError: 'arguments' is not allowed in class field initializers".to_string(),
+        );
+    }
     Ok(())
 }
 
@@ -218,6 +226,41 @@ pub fn validate_program_with_source_type(
     allow_super_call: bool,
     is_module: bool,
 ) -> Result<(), String> {
+    validate_program_with_context(
+        program,
+        is_strict,
+        allow_super_property,
+        allow_super_call,
+        is_module,
+        false,
+    )
+}
+
+pub fn validate_program_with_field_initializer(
+    program: &Program,
+    is_strict: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    in_field_initializer: bool,
+) -> Result<(), String> {
+    validate_program_with_context(
+        program,
+        is_strict,
+        allow_super_property,
+        allow_super_call,
+        program.source_type == SourceType::Module,
+        in_field_initializer,
+    )
+}
+
+fn validate_program_with_context(
+    program: &Program,
+    is_strict: bool,
+    allow_super_property: bool,
+    allow_super_call: bool,
+    is_module: bool,
+    in_field_initializer: bool,
+) -> Result<(), String> {
     if !is_module {
         for stmt in &program.body {
             if matches!(
@@ -241,7 +284,8 @@ pub fn validate_program_with_source_type(
         in_static_block: false,
         allow_super_property,
         allow_super_call,
-        in_function: allow_super_property || allow_super_call,
+        in_function: allow_super_property || allow_super_call || in_field_initializer,
+        in_field_initializer,
     };
     validate_body(&program.body, ctx)
 }
@@ -851,6 +895,7 @@ fn validate_class_declaration(cd: &ClassDeclaration, ctx: Ctx) -> Result<(), Str
         allow_super_property: false,
         allow_super_call: false,
         in_function: false,
+        in_field_initializer: false,
     };
     check_binding_identifier(&cd.name, strict_ctx)?;
     if let Some(sc) = &cd.super_class {
@@ -1178,6 +1223,7 @@ fn validate_class_body(
                     allow_super_property: true,
                     allow_super_call: false,
                     in_function: true,
+                    in_field_initializer: true,
                 };
                 validate_body(&sb.body, ctx)?;
             }
@@ -1215,6 +1261,7 @@ fn validate_class_body(
                         allow_super_property: true,
                         allow_super_call: false,
                         in_function: true,
+                        in_field_initializer: true,
                     };
                     if contains_arguments(value) {
                         return Err(
@@ -1388,6 +1435,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                 allow_super_property: false,
                 allow_super_call: false,
                 in_function: false,
+                in_field_initializer: false,
             };
             if let Some(sc) = &c.super_class {
                 validate_expression(sc, strict_ctx)?;
@@ -1598,6 +1646,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                 allow_super_property: ctx.allow_super_property,
                 allow_super_call: ctx.allow_super_call,
                 in_function: ctx.in_function,
+                in_field_initializer: ctx.in_field_initializer,
             };
             let inner = Ctx {
                 strict: ctx.strict,
@@ -1607,6 +1656,7 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
                 allow_super_property: ctx.allow_super_property,
                 allow_super_call: ctx.allow_super_call,
                 in_function: ctx.in_function,
+                in_field_initializer: ctx.in_field_initializer,
             };
             validate_parameters_unique(&arrow.params, true)?;
             for p in &arrow.params {

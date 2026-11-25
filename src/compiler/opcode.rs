@@ -402,6 +402,7 @@ impl Opcode {
         match op {
             Opcode::Nop | Opcode::End | Opcode::Catch | Opcode::Finally | Opcode::EndFinally => 1,
             Opcode::ParamInitMark => 2,
+            Opcode::MarkDirectEval => 2,
             Opcode::ResetPerIterVar => 3,
             Opcode::Return => 3,
             Opcode::LoadTrue
@@ -423,7 +424,7 @@ impl Opcode {
             | Opcode::GetArguments
             | Opcode::GetCurrentFunction
             | Opcode::CheckObjectCoercible => 3,
-            Opcode::CheckThisInitialized | Opcode::MarkDirectEval => 1,
+            Opcode::CheckThisInitialized => 1,
             Opcode::Neg | Opcode::BitNot | Opcode::Not | Opcode::TypeOf | Opcode::Move => 5,
             Opcode::SetHomeObject => 5,
             Opcode::GetSuperProp => 9,

@@ -243,6 +243,8 @@ pub struct CodeGenerator {
     in_derived_constructor: bool,
     in_static_method: bool,
     in_async_generator: bool,
+    pub(crate) in_field_initializer: bool,
+    pending_field_init_range: Option<(usize, usize)>,
     pending_labels: Vec<String>,
     all_var_names: Vec<(String, u16)>,
     with_scopes: Vec<WithScope>,
@@ -311,6 +313,8 @@ impl CodeGenerator {
             in_derived_constructor: false,
             in_static_method: false,
             in_async_generator: false,
+            in_field_initializer: false,
+            pending_field_init_range: None,
             pending_labels: Vec::new(),
             all_var_names: Vec::new(),
             with_scopes: Vec::new(),
@@ -2431,6 +2435,9 @@ impl CodeGenerator {
         }
 
         for (i, stmt) in body.body.iter().enumerate() {
+            if let Some((start, end)) = self.pending_field_init_range {
+                self.in_field_initializer = i >= start && i < end;
+            }
             if let Some(&line) = body.lines.get(i) {
                 self.emit_line(line);
             }
@@ -6477,7 +6484,11 @@ impl CodeGenerator {
             Expression::MetaProperty(meta) => {
                 if meta.meta == "new" && meta.property == "target" {
                     let r = self.alloc_register();
-                    self.emit(Opcode::GetNewTarget);
+                    if self.in_field_initializer {
+                        self.emit(Opcode::LoadUndefined);
+                    } else {
+                        self.emit(Opcode::GetNewTarget);
+                    }
                     self.emit_u16(r);
                     return Ok(r);
                 }
@@ -9698,6 +9709,7 @@ impl CodeGenerator {
             }
             if is_direct_eval {
                 self.emit(Opcode::MarkDirectEval);
+                self.emit_u8(if self.in_field_initializer { 1 } else { 0 });
             }
             if let Some(obj_reg) = obj {
                 self.emit(Opcode::CallMethodSpread);
@@ -9731,6 +9743,7 @@ impl CodeGenerator {
             }
             if is_direct_eval {
                 self.emit(Opcode::MarkDirectEval);
+                self.emit_u8(if self.in_field_initializer { 1 } else { 0 });
             }
             if let Some(obj_reg) = obj {
                 self.emit(Opcode::CallMethod);
@@ -10200,6 +10213,7 @@ impl CodeGenerator {
         let mut nested_codegen = self.nested_codegen();
         nested_codegen.is_arrow = is_arrow;
         nested_codegen.in_derived_constructor = is_arrow && self.in_derived_constructor;
+        nested_codegen.in_field_initializer = is_arrow && self.in_field_initializer;
         let has_prototype = is_generator || (!is_arrow && !is_method && !is_async);
         let function_kind = (if has_prototype { 1 } else { 0 }) | if is_arrow { 4 } else { 0 };
         let mut parent_vars: FxHashMap<String, ParentVar> = FxHashMap::default();
@@ -10493,6 +10507,7 @@ impl CodeGenerator {
             );
         }
 
+        let field_init_count = field_init_stmts.len();
         let (ctor_bytecode, ctor_upvalues) = if let Some(ClassElement::Method(m)) = ctor_method {
             let mut body = m.body.clone();
             let insert_pos = 0;
@@ -10503,6 +10518,9 @@ impl CodeGenerator {
             let mut nested = self.nested_codegen();
             nested.is_strict = true;
             nested.in_derived_constructor = has_super;
+            if field_init_count > 0 {
+                nested.pending_field_init_range = Some((0, field_init_count));
+            }
             nested.compile_function_with_parent(
                 &m.params,
                 &body,
@@ -10527,11 +10545,16 @@ impl CodeGenerator {
                 default_body.push(super_call);
                 default_lines.push(0);
             }
+            let field_init_start = default_body.len();
             default_body.extend(field_init_stmts);
             default_lines.extend(vec![0; instance_fields.len()]);
             let mut nested = self.nested_codegen();
             nested.is_strict = true;
             nested.in_derived_constructor = has_super;
+            if field_init_count > 0 {
+                nested.pending_field_init_range =
+                    Some((field_init_start, field_init_start + field_init_count));
+            }
             nested.compile_function_with_parent(
                 &[],
                 &BlockStatement {
@@ -10649,6 +10672,7 @@ impl CodeGenerator {
             if let ClassElement::StaticBlock(block) = element {
                 let mut nested = self.nested_codegen();
                 nested.is_strict = true;
+                nested.in_field_initializer = true;
                 let (block_bc, block_upvalues) = nested.compile_function_with_parent(
                     &[],
                     &BlockStatement {
