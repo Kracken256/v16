@@ -843,7 +843,7 @@ fn string_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 let desc = ctx.get_atom_str(desc_atom);
                 JSValue::new_string(ctx.intern(&format!("Symbol({})", desc)))
             }
-        } else if val.is_object() {
+        } else if val.is_object_like() {
             let s = crate::builtins::global::to_property_key_string(ctx, val);
             if ctx.pending_exception.is_some() {
                 return JSValue::undefined();
