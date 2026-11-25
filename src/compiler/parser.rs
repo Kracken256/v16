@@ -2646,6 +2646,15 @@ impl Parser {
                     return Err(self.error(
                         "Optional chain cannot be followed by a template literal",
                     ));
+                } else if self.cur_type() == Some(TokenType::PrivateIdentifier) {
+                    let name = self.cur_value().to_string();
+                    self.advance();
+                    expr = Expression::OptionalMemberExpression(OptionalMemberExpression {
+                        object: Box::new(expr),
+                        property: MemberProperty::PrivateIdentifier(name),
+                        computed: false,
+                        optional: true,
+                    });
                 } else {
                     if !matches!(
                         self.cur_type(),
