@@ -213,6 +213,7 @@ pub fn start_async_call(
         pending_finally_jump: None,
         pending_finally_depth: 0,
         pending_close_state: None,
+        upvalue_cells: Vec::new(),
     });
     let holder_ptr = Box::into_raw(Box::new(holder)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(holder_ptr);
@@ -253,6 +254,7 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
     let outcome = step_vm.execute_async_step(ctx, &state, is_generator);
     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
+    state.upvalue_cells = step_vm.capture_upvalue_cells();
     let pending_finally_return = step_vm.pending_finally_return;
     let pending_finally_rethrow = step_vm.pending_finally_rethrow;
     let pending_finally_jump = step_vm.pending_finally_jump;
@@ -794,6 +796,8 @@ pub struct VM {
 
     pub pending_close_state: Option<u16>,
 
+    pub pending_upvalue_cells: Option<Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -862,6 +866,7 @@ impl VM {
             async_step: false,
             await_suspend: None,
             pending_close_state: None,
+            pending_upvalue_cells: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -1107,6 +1112,28 @@ impl VM {
     }
 
     #[inline(always)]
+    fn sync_frame_upvalues_to_registers(&mut self) {
+        if let Some(map) = self.frames[0].upvalue_sync_map.as_ref() {
+            for (&idx, cell) in map.iter() {
+                if (idx as usize) < self.registers.len() {
+                    self.registers[idx as usize] = cell.get();
+                }
+            }
+        }
+    }
+
+    fn capture_upvalue_cells(&self) -> Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)> {
+        self.frames[0]
+            .upvalue_sync_map
+            .as_ref()
+            .map(|map| {
+                map.iter()
+                    .map(|(&idx, cell)| (idx, cell.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn refresh_cache(&mut self) {
         let frame = &self.frames[self.frame_index];
         self.cached_code_ptr = frame.bytecode_ptr;
@@ -4909,6 +4936,7 @@ impl VM {
                     result_send_reg,
                     result_handlers,
                     result_yield_is_result,
+                    result_upvalue_cells,
                 ) = {
                     let mut generator_vm = crate::runtime::vm::VM::new();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
@@ -4925,20 +4953,36 @@ impl VM {
                         0,
                         JSValue::undefined(),
                         false,
+                        &[],
                     );
                     let uncaught = generator_vm.last_uncaught.take();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
                     drop(generator_vm);
                     match step {
-                        Ok((_val, new_snapshot, new_pc, done, src, handlers, yield_is_result)) => {
-                            (new_snapshot, new_pc, done, src, handlers, yield_is_result)
-                        }
+                        Ok((
+                            _val,
+                            new_snapshot,
+                            new_pc,
+                            done,
+                            src,
+                            handlers,
+                            yield_is_result,
+                            upvalue_cells,
+                        )) => (
+                            new_snapshot,
+                            new_pc,
+                            done,
+                            src,
+                            handlers,
+                            yield_is_result,
+                            upvalue_cells,
+                        ),
                         Err(_) => {
                             if let Some(exc) = uncaught {
                                 self.last_caught_exception = Some(exc.clone());
                                 self.pending_throw = Some(exc);
                             }
-                            (snapshot, 0, false, None, Vec::new(), false)
+                            (snapshot, 0, false, None, Vec::new(), false, Vec::new())
                         }
                     }
                 };
@@ -4967,6 +5011,7 @@ impl VM {
                         pending_finally_jump: None,
                         pending_finally_depth: 0,
                         pending_close_state: None,
+                        upvalue_cells: result_upvalue_cells.clone(),
                     });
                     gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                         queue: Vec::new(),
@@ -4988,6 +5033,7 @@ impl VM {
                         func_ptr: Some(ptr),
                         handlers: result_handlers,
                         yield_is_result: result_yield_is_result,
+                        upvalue_cells: result_upvalue_cells,
                     });
                 }
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -5527,6 +5573,23 @@ impl VM {
             }
             frame.upvalue_sync_map = None;
             frame.upvalue_sync_bitset = 0;
+            if let Some(cells) = self.pending_upvalue_cells.take() {
+                if !cells.is_empty() {
+                    let mut bitset = 0u64;
+                    let mut map = crate::util::FxHashMap::default();
+                    for (idx, cell) in cells {
+                        if idx < 64 {
+                            bitset |= 1u64 << idx;
+                        }
+                        if (idx as usize) < needed {
+                            self.registers[idx as usize] = cell.get();
+                        }
+                        map.insert(idx, cell);
+                    }
+                    frame.upvalue_sync_map = Some(Box::new(map));
+                    frame.upvalue_sync_bitset = bitset;
+                }
+            }
             frame.uses_arguments = false;
             frame.var_name_map = std::rc::Rc::as_ptr(&bytecode.var_name_to_slot);
             frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
@@ -12402,12 +12465,14 @@ impl VM {
         }
 
         let saved_vm_ptr = ctx.get_register_vm_ptr();
+        self.pending_upvalue_cells = Some(state.upvalue_cells.clone());
         ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
         let result = self.execute_inner(ctx, &state.bytecode, true, state.pc, true);
         ctx.set_register_vm_ptr(saved_vm_ptr);
         self.async_step = false;
         let stale_exc = ctx.pending_exception.take();
 
+        self.sync_frame_upvalues_to_registers();
         let snapshot = self.registers.clone();
         let pc = self.pc;
         let handlers = self.exception_handlers.clone();
@@ -12511,6 +12576,7 @@ impl VM {
             result_send_reg,
             result_handlers,
             result_yield_is_result,
+            result_upvalue_cells,
         ) = {
             let mut generator_vm = crate::runtime::vm::VM::new();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
@@ -12527,14 +12593,30 @@ impl VM {
                 0,
                 JSValue::undefined(),
                 false,
+                &[],
             );
             let uncaught = generator_vm.last_uncaught.take();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
             drop(generator_vm);
             match step {
-                Ok((_val, new_snapshot, new_pc, done, src, handlers, yield_is_result)) => {
-                    (new_snapshot, new_pc, done, src, handlers, yield_is_result)
-                }
+                Ok((
+                    _val,
+                    new_snapshot,
+                    new_pc,
+                    done,
+                    src,
+                    handlers,
+                    yield_is_result,
+                    upvalue_cells,
+                )) => (
+                    new_snapshot,
+                    new_pc,
+                    done,
+                    src,
+                    handlers,
+                    yield_is_result,
+                    upvalue_cells,
+                ),
                 Err(e) => {
                     if let Some(exc) = uncaught {
                         self.last_caught_exception = Some(exc.clone());
@@ -12544,7 +12626,7 @@ impl VM {
                     if e.contains("SyntaxError") || e.contains("Uncaught") {
                         return Err(e);
                     }
-                    (snapshot, 0, false, None, Vec::new(), false)
+                    (snapshot, 0, false, None, Vec::new(), false, Vec::new())
                 }
             }
         };
@@ -12574,6 +12656,7 @@ impl VM {
                 pending_finally_jump: None,
                 pending_finally_depth: 0,
                 pending_close_state: None,
+                upvalue_cells: result_upvalue_cells.clone(),
             });
             gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                 queue: Vec::new(),
@@ -12595,6 +12678,7 @@ impl VM {
                 func_ptr: Some(func_val.get_ptr()),
                 handlers: result_handlers,
                 yield_is_result: result_yield_is_result,
+                upvalue_cells: result_upvalue_cells,
             });
         }
         let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -12616,6 +12700,7 @@ impl VM {
         resume_kind: u8,
         resume_value: JSValue,
         yield_is_result: bool,
+        upvalue_cells: &[(u16, std::rc::Rc<std::cell::Cell<JSValue>>)],
     ) -> Result<
         (
             JSValue,
@@ -12625,6 +12710,7 @@ impl VM {
             Option<u16>,
             Vec<ExceptionHandler>,
             bool,
+            Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>,
         ),
         String,
     > {
@@ -12678,6 +12764,7 @@ impl VM {
         }
 
         let saved_vm_ptr = ctx.get_register_vm_ptr();
+        self.pending_upvalue_cells = Some(upvalue_cells.to_vec());
         ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
         let result = match self.execute_inner(ctx, bytecode, true, start_pc, true) {
             Ok(r) => r,
@@ -12688,6 +12775,8 @@ impl VM {
             }
         };
         ctx.set_register_vm_ptr(saved_vm_ptr);
+        self.sync_frame_upvalues_to_registers();
+        let upvalue_cells = self.capture_upvalue_cells();
         let handlers = self.exception_handlers.clone();
         match result {
             ExecutionOutcome::Complete(val) => Ok((
@@ -12698,6 +12787,7 @@ impl VM {
                 self.last_yield_src,
                 handlers,
                 false,
+                upvalue_cells,
             )),
             ExecutionOutcome::Yield(val) => Ok((
                 val,
@@ -12707,6 +12797,7 @@ impl VM {
                 self.last_yield_src,
                 handlers,
                 self.last_yield_is_result,
+                upvalue_cells,
             )),
         }
     }

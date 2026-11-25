@@ -24,6 +24,8 @@ pub struct GeneratorState {
     pub handlers: Vec<crate::runtime::vm::ExceptionHandler>,
 
     pub yield_is_result: bool,
+
+    pub upvalue_cells: Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>,
 }
 
 pub struct AsyncState {
@@ -62,6 +64,8 @@ pub struct AsyncState {
     pub pending_finally_depth: usize,
 
     pub pending_close_state: Option<u16>,
+
+    pub upvalue_cells: Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>,
 }
 
 pub struct AsyncGeneratorRequest {
