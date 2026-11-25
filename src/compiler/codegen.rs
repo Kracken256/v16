@@ -984,9 +984,14 @@ impl CodeGenerator {
         if !self.is_global_scope() {
             return false;
         }
-        self.scope_stack
-            .first()
-            .map_or(false, |s| s.contains_key(name))
+        let mut position = None;
+        for (i, scope) in self.scope_stack.iter().enumerate().rev() {
+            if scope.contains_key(name) {
+                position = Some(i);
+                break;
+            }
+        }
+        position == Some(0)
     }
 
     fn lookup_var(&self, name: &str) -> Option<&VarEntry> {
