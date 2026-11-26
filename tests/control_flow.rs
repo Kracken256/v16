@@ -6,7 +6,7 @@ fn test_if_statement() {
     let mut ctx = runtime.new_context();
 
     assert!(eval(&mut ctx, "if(true)1").is_ok());
-    assert!(eval(&mut ctx, "if (true) 1 else 2").is_ok());
+    assert!(eval(&mut ctx, "if (true) 1; else 2").is_ok());
 }
 
 #[test]
