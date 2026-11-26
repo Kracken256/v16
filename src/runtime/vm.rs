@@ -12261,6 +12261,16 @@ impl VM {
                                 JSValue::undefined()
                             };
                             ctx.set_call_with_new(prev_call_with_new);
+                            if let Some(exc) = ctx.pending_exception.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => {
+                                        self.eval_direct_active = false;
+                                        continue;
+                                    }
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
                             if (is_call_new || is_super_call) && !result.is_object_like() {
                                 self.complete_builtin_construction(ctx, dst, this_val, result);
                             } else {
