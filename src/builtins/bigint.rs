@@ -61,46 +61,47 @@ fn to_primitive_number(ctx: &mut JSContext, value: JSValue) -> Option<JSValue> {
     if !value.is_object_like() {
         return Some(value);
     }
-    let vm_ptr = ctx.get_register_vm_ptr()?;
-    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-    let to_prim_sym =
-        crate::builtins::symbol::get_or_create_well_known_symbol(ctx, "Symbol.toPrimitive");
-    let to_prim_key = crate::runtime::atom::Atom(0x40000000 | to_prim_sym.get_symbol_id());
-    let to_primitive = value.as_object().get(to_prim_key);
-    if let Some(method) = to_primitive {
-        if !method.is_function() {
-            throw_type_error(ctx, "Cannot convert object to primitive value");
-            return None;
-        }
-        let hint = JSValue::new_string(ctx.intern("number"));
-        match vm.call_function_with_this(ctx, method, value, &[hint]) {
-            Ok(result) => {
-                if result.is_object_like() {
-                    throw_type_error(ctx, "Cannot convert object to primitive value");
-                    return None;
-                }
-                return Some(result);
+    ctx.with_vm(|vm, ctx| {
+        let to_prim_sym =
+            crate::builtins::symbol::get_or_create_well_known_symbol(ctx, "Symbol.toPrimitive");
+        let to_prim_key = crate::runtime::atom::Atom(0x40000000 | to_prim_sym.get_symbol_id());
+        let to_primitive = value.as_object().get(to_prim_key);
+        if let Some(method) = to_primitive {
+            if !method.is_function() {
+                throw_type_error(ctx, "Cannot convert object to primitive value");
+                return None;
             }
-            Err(_) => return None,
-        }
-    }
-    for atom in [ctx.common_atoms.value_of, ctx.common_atoms.to_string] {
-        let method = value.as_object().get(atom);
-        if let Some(f) = method {
-            if f.is_function() {
-                match vm.call_function_with_this(ctx, f, value, &[]) {
-                    Ok(result) => {
-                        if !result.is_object_like() {
-                            return Some(result);
-                        }
+            let hint = JSValue::new_string(ctx.intern("number"));
+            match vm.call_function_with_this(ctx, method, value, &[hint]) {
+                Ok(result) => {
+                    if result.is_object_like() {
+                        throw_type_error(ctx, "Cannot convert object to primitive value");
+                        return None;
                     }
-                    Err(_) => return None,
+                    return Some(result);
+                }
+                Err(_) => return None,
+            }
+        }
+        for atom in [ctx.common_atoms.value_of, ctx.common_atoms.to_string] {
+            let method = value.as_object().get(atom);
+            if let Some(f) = method {
+                if f.is_function() {
+                    match vm.call_function_with_this(ctx, f, value, &[]) {
+                        Ok(result) => {
+                            if !result.is_object_like() {
+                                return Some(result);
+                            }
+                        }
+                        Err(_) => return None,
+                    }
                 }
             }
         }
-    }
-    throw_type_error(ctx, "Cannot convert object to primitive value");
-    None
+        throw_type_error(ctx, "Cannot convert object to primitive value");
+        None
+    })
+    .flatten()
 }
 
 fn string_to_bigint(ctx: &mut JSContext, text: &str) -> Option<BigInt> {
