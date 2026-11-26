@@ -3087,11 +3087,7 @@ impl CodeGenerator {
                 Some(std::sync::Arc::new(line_table))
             },
             ic_table: crate::compiler::InlineCacheTable::new(),
-            shared_ic_table_ptr: std::ptr::null_mut(),
-            shared_code_ptr: std::ptr::null(),
-            shared_code_len: 0,
-            shared_const_ptr: std::ptr::null(),
-            shared_const_len: 0,
+            shared_nested_bytecode: None,
             uses_arguments: self.function_uses_arguments,
             has_simple_parameters: is_simple_params,
             is_strict: self.is_strict,

@@ -12784,11 +12784,7 @@ impl VM {
                         param_count,
                         line_number_table: line_number_table_opt,
                         ic_table: crate::compiler::InlineCacheTable::new(),
-                        shared_ic_table_ptr: std::ptr::null_mut(),
-                        shared_code_ptr: std::ptr::null(),
-                        shared_code_len: 0,
-                        shared_const_ptr: std::ptr::null(),
-                        shared_const_len: 0,
+                        shared_nested_bytecode: None,
                         uses_arguments,
                         has_simple_parameters,
                         is_strict,
@@ -12801,19 +12797,8 @@ impl VM {
                     });
 
                     let effective_nb = nb_for_ic.or_else(|| cached.clone());
-                    if let Some(ref nb_arc) = effective_nb {
-                        if let Some(bc) = func.bytecode.as_mut() {
-                            bc.shared_ic_table_ptr = nb_arc.ic_table.get();
-
-                            if bc.code.is_empty() {
-                                bc.shared_code_ptr = nb_arc.code.as_ptr();
-                                bc.shared_code_len = nb_arc.code.len();
-                            }
-                            if bc.constants.is_empty() {
-                                bc.shared_const_ptr = nb_arc.constants.as_ptr();
-                                bc.shared_const_len = nb_arc.constants.len();
-                            }
-                        }
+                    if let Some(bc) = func.bytecode.as_mut() {
+                        bc.shared_nested_bytecode = effective_nb.clone();
                     }
                     func.shared_nb_for_ic = effective_nb;
 
@@ -18273,7 +18258,7 @@ mod tests {
             param_count: 0,
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
-            shared_ic_table_ptr: std::ptr::null_mut(),
+            shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,
             is_strict: false,
@@ -18283,10 +18268,6 @@ mod tests {
             simple_constructor_props: Vec::new(),
             cached_constructor_final_shape: None,
             cached_constructor_atoms: Vec::new(),
-            shared_code_ptr: std::ptr::null(),
-            shared_code_len: 0,
-            shared_const_ptr: std::ptr::null(),
-            shared_const_len: 0,
         }
     }
 

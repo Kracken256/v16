@@ -623,12 +623,7 @@ pub struct Bytecode {
     pub line_number_table: Option<std::sync::Arc<crate::compiler::location::LineNumberTable>>,
     pub ic_table: crate::compiler::InlineCacheTable,
 
-    pub shared_ic_table_ptr: *mut crate::compiler::InlineCacheTable,
-
-    pub shared_code_ptr: *const u8,
-    pub shared_code_len: usize,
-    pub shared_const_ptr: *const crate::value::JSValue,
-    pub shared_const_len: usize,
+    pub shared_nested_bytecode: Option<std::sync::Arc<NestedBytecode>>,
     pub uses_arguments: bool,
     pub has_simple_parameters: bool,
     pub is_strict: bool,
@@ -690,11 +685,7 @@ impl Bytecode {
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
-            shared_ic_table_ptr: std::ptr::null_mut(),
-            shared_code_ptr: std::ptr::null(),
-            shared_code_len: 0,
-            shared_const_ptr: std::ptr::null(),
-            shared_const_len: 0,
+            shared_nested_bytecode: None,
             nested_bytecodes: Vec::new(),
             is_simple_constructor: false,
             simple_constructor_props: Vec::new(),
@@ -705,48 +696,51 @@ impl Bytecode {
 
     #[inline(always)]
     pub fn effective_ic_table_ptr(&self) -> *mut crate::compiler::InlineCacheTable {
-        if !self.shared_ic_table_ptr.is_null() {
-            self.shared_ic_table_ptr
-        } else {
-            &self.ic_table as *const crate::compiler::InlineCacheTable
-                as *mut crate::compiler::InlineCacheTable
+        match &self.shared_nested_bytecode {
+            Some(nested) => nested.ic_table.get(),
+            None => &self.ic_table as *const crate::compiler::InlineCacheTable
+                as *mut crate::compiler::InlineCacheTable,
         }
     }
 
     #[inline(always)]
     pub fn effective_code_ptr(&self) -> *const u8 {
-        if !self.shared_code_ptr.is_null() {
-            self.shared_code_ptr
-        } else {
-            self.code.as_ptr()
+        if self.code.is_empty()
+            && let Some(nested) = &self.shared_nested_bytecode
+        {
+            return nested.code.as_ptr();
         }
+        self.code.as_ptr()
     }
 
     #[inline(always)]
     pub fn effective_code_len(&self) -> usize {
-        if !self.shared_code_ptr.is_null() {
-            self.shared_code_len
-        } else {
-            self.code.len()
+        if self.code.is_empty()
+            && let Some(nested) = &self.shared_nested_bytecode
+        {
+            return nested.code.len();
         }
+        self.code.len()
     }
 
     #[inline(always)]
     pub fn effective_const_ptr(&self) -> *const crate::value::JSValue {
-        if !self.shared_const_ptr.is_null() {
-            self.shared_const_ptr
-        } else {
-            self.constants.as_ptr()
+        if self.constants.is_empty()
+            && let Some(nested) = &self.shared_nested_bytecode
+        {
+            return nested.constants.as_ptr();
         }
+        self.constants.as_ptr()
     }
 
     #[inline(always)]
     pub fn effective_const_len(&self) -> usize {
-        if !self.shared_const_ptr.is_null() {
-            self.shared_const_len
-        } else {
-            self.constants.len()
+        if self.constants.is_empty()
+            && let Some(nested) = &self.shared_nested_bytecode
+        {
+            return nested.constants.len();
         }
+        self.constants.len()
     }
 
     pub fn disassemble(&self) -> String {
@@ -1613,11 +1607,7 @@ impl Bytecode {
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
-            shared_ic_table_ptr: std::ptr::null_mut(),
-            shared_code_ptr: std::ptr::null(),
-            shared_code_len: 0,
-            shared_const_ptr: std::ptr::null(),
-            shared_const_len: 0,
+            shared_nested_bytecode: None,
             nested_bytecodes: Vec::new(),
             is_simple_constructor: false,
             simple_constructor_props: Vec::new(),
@@ -1701,7 +1691,7 @@ mod tests {
             param_count: 0,
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
-            shared_ic_table_ptr: std::ptr::null_mut(),
+            shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,
             is_strict: false,
@@ -1711,10 +1701,6 @@ mod tests {
             simple_constructor_props: Vec::new(),
             cached_constructor_final_shape: None,
             cached_constructor_atoms: Vec::new(),
-            shared_code_ptr: std::ptr::null(),
-            shared_code_len: 0,
-            shared_const_ptr: std::ptr::null(),
-            shared_const_len: 0,
         };
 
         let output = bytecode.disassemble();
@@ -1765,7 +1751,7 @@ mod tests {
             param_count: 0,
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
-            shared_ic_table_ptr: std::ptr::null_mut(),
+            shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,
             is_strict: false,
@@ -1775,10 +1761,6 @@ mod tests {
             simple_constructor_props: Vec::new(),
             cached_constructor_final_shape: None,
             cached_constructor_atoms: Vec::new(),
-            shared_code_ptr: std::ptr::null(),
-            shared_code_len: 0,
-            shared_const_ptr: std::ptr::null(),
-            shared_const_len: 0,
         };
 
         let output = bytecode.disassemble();
@@ -1823,7 +1805,7 @@ mod tests {
             param_count: 0,
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
-            shared_ic_table_ptr: std::ptr::null_mut(),
+            shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,
             is_strict: false,
@@ -1833,10 +1815,6 @@ mod tests {
             simple_constructor_props: Vec::new(),
             cached_constructor_final_shape: None,
             cached_constructor_atoms: Vec::new(),
-            shared_code_ptr: std::ptr::null(),
-            shared_code_len: 0,
-            shared_const_ptr: std::ptr::null(),
-            shared_const_len: 0,
         };
 
         let output = bytecode.disassemble();
