@@ -32,7 +32,7 @@ pub fn global_parseint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     } else if input_val.is_undefined() {
         "undefined".to_string()
     } else if input_val.is_object() {
-        let obj = input_val.as_object();
+        let obj = input_val.try_as_object().expect("object value");
         let mut prim: Option<Option<String>> = None;
         let mut threw_error = false;
         if let Some(to_str) = obj.get(ctx.intern("toString")) {
@@ -133,7 +133,7 @@ pub fn global_parseint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 }
             }
         } else if ra.is_object() {
-            let obj = ra.as_object();
+            let obj = ra.try_as_object().expect("object value");
             let mut radix_num = None;
             if let Some(val_of) = obj.get(ctx.intern("valueOf")) {
                 if val_of.is_function() {
@@ -282,7 +282,7 @@ pub fn global_parsefloat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let s = if input.is_string() {
         ctx.get_atom_str(input.get_atom()).to_string()
     } else if input.is_object() {
-        let obj = input.as_object();
+        let obj = input.try_as_object().expect("object value");
         let mut result_str: Option<String> = None;
         let mut threw_error = false;
         if let Some(to_str) = obj.get(ctx.intern("toString")) {

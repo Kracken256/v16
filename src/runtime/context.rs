@@ -483,7 +483,7 @@ impl JSContext {
         if !value.is_object() {
             return false;
         }
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         let Some(array) = obj.as_dense_array() else {
             return false;
         };
@@ -501,7 +501,7 @@ impl JSContext {
         if !value.is_object() {
             return None;
         }
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         let Some(array) = obj.as_dense_array() else {
             return None;
         };
@@ -554,7 +554,7 @@ impl JSContext {
             return;
         }
         let mut function_ptrs: Vec<*mut crate::object::function::JSFunction> = Vec::new();
-        global.as_object().for_each_property(|_, value, _| {
+        global.try_as_object().expect("object value").for_each_property(|_, value, _| {
             if value.is_function() {
                 function_ptrs.push(value.get_ptr().cast());
             }
@@ -1370,11 +1370,11 @@ mod tests {
         let parse_int = ctx.intern("parseInt");
         let func = ctx
             .global()
-            .as_object()
+            .try_as_object().expect("object value")
             .get(parse_int)
             .expect("parseInt should be installed on the global object");
         assert!(func.is_function());
-        assert_eq!(func.as_function().realm_context, ctx_ptr);
-        assert!(func.as_function().realm_global.is_object_like());
+        assert_eq!(func.try_as_function().expect("function value").realm_context, ctx_ptr);
+        assert!(func.try_as_function().expect("function value").realm_global.is_object_like());
     }
 }

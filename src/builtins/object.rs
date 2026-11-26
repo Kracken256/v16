@@ -114,12 +114,12 @@ fn get_symbol_to_string_tag_atom(ctx: &mut JSContext) -> Option<Atom> {
     if !global.is_object() {
         return None;
     }
-    let global_obj = global.as_object();
+    let global_obj = global.try_as_object().expect("object value");
     let symbol_ctor = global_obj.get(symbol_atom)?;
     if !is_object_like(&symbol_ctor) {
         return None;
     }
-    let key = symbol_ctor.as_object().get(to_string_tag_atom)?;
+    let key = symbol_ctor.try_as_object().expect("object value").get(to_string_tag_atom)?;
     if key.is_symbol() {
         Some(key.get_atom())
     } else {
@@ -569,7 +569,7 @@ fn object_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     let keys = obj.enumerable_keys();
     let mut result = JSObject::new_array();
     if let Some(proto_ptr) = ctx.get_array_prototype() {
@@ -608,7 +608,7 @@ fn object_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     let keys = obj.enumerable_keys();
     let mut values: Vec<JSValue> = Vec::with_capacity(keys.len());
     for key in keys {
@@ -650,7 +650,7 @@ fn object_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     let keys = obj.enumerable_keys();
     let mut entries: Vec<(Atom, JSValue)> = Vec::with_capacity(keys.len());
     for key in keys {
@@ -721,7 +721,7 @@ fn object_assign(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             continue;
         };
         let keys: Vec<Atom> = from
-            .as_object()
+            .try_as_object().expect("object value")
             .own_properties_including_symbols()
             .into_iter()
             .map(|(atom, _)| atom)
@@ -742,7 +742,7 @@ fn object_has_property(obj_val: &JSValue, prop: Atom) -> bool {
     if !obj_val.is_object_like() {
         return false;
     }
-    let mut current = Some(obj_val.as_object());
+    let mut current = Some(obj_val.try_as_object().expect("object value"));
     let mut depth = 0;
     while let Some(obj) = current {
         if obj.get_own(prop).is_some() {
@@ -761,7 +761,7 @@ pub fn object_get_property(ctx: &mut JSContext, obj_val: &JSValue, prop: Atom) -
     if !obj_val.is_object_like() {
         return JSValue::undefined();
     }
-    let mut current = Some(obj_val.as_object());
+    let mut current = Some(obj_val.try_as_object().expect("object value"));
     let mut depth = 0;
     while let Some(obj) = current {
         if let Some(entry) = obj.get_own_accessor_entry(prop) {
@@ -965,7 +965,7 @@ fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
     if args.len() > 1 && args[1].is_object_like() {
-        let props_list: Vec<(Atom, JSValue)> = args[1].as_object().own_properties();
+        let props_list: Vec<(Atom, JSValue)> = args[1].try_as_object().expect("object value").own_properties();
         for (atom, _) in props_list {
             let desc_val = object_get_property(ctx, &args[1], atom);
             if ctx.pending_exception.is_some() {
@@ -1000,7 +1000,7 @@ fn object_get_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     } else {
         object_to_object(ctx, obj_val)
     };
-    let obj_ref = obj.as_object();
+    let obj_ref = obj.try_as_object().expect("object value");
     if let Some(proto_ptr) = obj_ref.prototype {
         return JSValue::new_object(proto_ptr);
     }
@@ -1055,7 +1055,7 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             ctx.pending_exception = Some(JSValue::new_object(eptr));
             return JSValue::undefined();
         }
-        let mut current = args[1].as_object().prototype_object();
+        let mut current = args[1].try_as_object().expect("object value").prototype_object();
         let mut depth = 0u32;
         while let Some(proto) = current {
             if proto as *const JSObject as *mut JSObject == obj as *mut JSObject || depth > 1000 {
@@ -1106,7 +1106,7 @@ fn object_has_own_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     match key_atom {
         Some(atom) => JSValue::bool(
-            this_obj.as_object().has_own(atom) || ctx.array_index_has_own(&this_obj, atom),
+            this_obj.try_as_object().expect("object value").has_own(atom) || ctx.array_index_has_own(&this_obj, atom),
         ),
         None => JSValue::bool(false),
     }
@@ -1131,7 +1131,7 @@ fn object_to_string(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_string(_ctx.intern("[object Null]"));
     }
     if is_object_like(this) {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         let mut tag = "Object";
         if this.is_function() {
             tag = "Function";
@@ -1201,9 +1201,9 @@ fn object_is_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         crate::builtins::global::throw_type_error(ctx, "isPrototypeOf called on incompatible receiver");
         return JSValue::undefined();
     }
-    let this_obj = this.as_object();
+    let this_obj = this.try_as_object().expect("object value");
     let target = this_obj as *const JSObject;
-    let mut current = v.as_object();
+    let mut current = v.try_as_object().expect("object value");
     loop {
         if std::ptr::eq(current, target) {
             return JSValue::bool(true);
@@ -1226,7 +1226,7 @@ fn object_property_is_enumerable(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
     let Some(atom) = to_property_atom(ctx, &args[1]) else {
         return JSValue::bool(false);
     };
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if let Some(desc) = ctx
         .array_index_own_descriptor(this, atom)
         .or_else(|| obj.get_own_descriptor(atom))
@@ -1253,7 +1253,7 @@ fn lookup_accessor(ctx: &mut JSContext, args: &[JSValue], want_getter: bool) -> 
     let Some(atom) = to_property_atom(ctx, &args[1]) else {
         return JSValue::undefined();
     };
-    let mut current = Some(this.as_object());
+    let mut current = Some(this.try_as_object().expect("object value"));
     while let Some(obj) = current {
         if let Some(entry) = obj.get_own_accessor_entry(atom) {
             let v = if want_getter { entry.get } else { entry.set };
@@ -1372,18 +1372,18 @@ fn object_from_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let iterable = args[0];
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = iterable.as_object();
+        let arr = iterable.try_as_object().expect("object value");
         arr.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
     };
     for i in 0..len {
         let key = ctx.int_atom_mut(i);
         let entry = {
-            let arr = iterable.as_object();
+            let arr = iterable.try_as_object().expect("object value");
             arr.get(key)
         };
         if let Some(entry_val) = entry {
             if entry_val.is_object() {
-                let entry_obj = entry_val.as_object();
+                let entry_obj = entry_val.try_as_object().expect("object value");
                 let key0_atom = ctx.intern("0");
                 let key1_atom = ctx.intern("1");
                 if let (Some(k), Some(v)) = (entry_obj.get(key0_atom), entry_obj.get(key1_atom)) {
@@ -1418,7 +1418,7 @@ fn object_has_own(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let Some(atom) = to_property_atom(ctx, prop) else {
         return JSValue::bool(false);
     };
-    JSValue::bool(obj.as_object().has_own(atom) || ctx.array_index_has_own(&obj, atom))
+    JSValue::bool(obj.try_as_object().expect("object value").has_own(atom) || ctx.array_index_has_own(&obj, atom))
 }
 
 fn object_is(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1476,7 +1476,7 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
         return JSValue::new_object(ptr);
     }
 
-    let obj = obj_val.as_object();
+    let obj = obj_val.try_as_object().expect("object value");
 
     let symbols = obj.symbol_keys();
 
@@ -1515,7 +1515,7 @@ fn object_is_extensible(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !is_object_like(&args[0]) {
         return JSValue::bool(false);
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     JSValue::bool(obj.extensible())
 }
 
@@ -1538,7 +1538,7 @@ fn object_is_sealed(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !is_object_like(&args[0]) {
         return JSValue::bool(true);
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.extensible() {
         return JSValue::bool(false);
     }
@@ -1573,7 +1573,7 @@ fn object_is_frozen(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !is_object_like(&args[0]) {
         return JSValue::bool(true);
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.extensible() || !obj.sealed() || !obj.frozen() {
         return JSValue::bool(false);
     }
@@ -1797,7 +1797,7 @@ fn object_define_properties(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return obj.clone();
     }
 
-    let props_list: Vec<(Atom, JSValue)> = props.as_object().own_properties();
+    let props_list: Vec<(Atom, JSValue)> = props.try_as_object().expect("object value").own_properties();
 
     for (key_atom, _) in props_list {
         let desc_val = object_get_property(_ctx, props, key_atom);
@@ -1862,7 +1862,7 @@ pub fn namespace_define_own_property(
     has_configurable: bool,
     has_value: bool,
 ) -> Option<bool> {
-    let obj_ref = obj.as_object();
+    let obj_ref = obj.try_as_object().expect("object value");
     if !obj_ref.is_module_namespace() {
         return None;
     }
@@ -1921,7 +1921,7 @@ fn object_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) -> 
         return JSValue::undefined();
     };
 
-    let obj_ref = obj.as_object();
+    let obj_ref = obj.try_as_object().expect("object value");
 
     if let Some(pd) = ctx
         .array_index_own_descriptor(obj, prop_atom)
@@ -1963,7 +1963,7 @@ fn object_get_own_property_descriptors(ctx: &mut JSContext, args: &[JSValue]) ->
     }
 
     let obj = &args[0];
-    let obj_ref = obj.as_object();
+    let obj_ref = obj.try_as_object().expect("object value");
 
     let is_namespace = obj_ref.is_module_namespace();
     for key_atom in obj_ref.keys() {
@@ -2040,7 +2040,7 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
         return JSValue::new_object(ptr);
     };
 
-    let obj_ref = obj_val.as_object();
+    let obj_ref = obj_val.try_as_object().expect("object value");
     let is_namespace = obj_ref.is_module_namespace();
 
     let mut names: Vec<Atom> = obj_ref
@@ -2103,7 +2103,7 @@ mod tests {
     fn assert_alive(ctx: &mut JSContext, value: JSValue) {
         assert!(value.is_object());
         let ptr = value.get_ptr();
-        let slot = value.as_object().gc_slot as usize;
+        let slot = value.try_as_object().expect("object value").gc_slot as usize;
         let mut vm = crate::runtime::vm::VM::new();
         vm.run_gc(ctx);
         assert_eq!(ctx.runtime().gc_heap().tracked_ptr_at(slot), Some(ptr));
@@ -2138,13 +2138,13 @@ mod tests {
 
         let values = crate::eval(&mut ctx, "Object.values({a: []})").unwrap();
         root(&mut ctx, values);
-        let child = values.as_object().get(ctx.intern("0")).unwrap();
+        let child = values.try_as_object().expect("object value").get(ctx.intern("0")).unwrap();
         assert_alive(&mut ctx, child);
 
         let entries = crate::eval(&mut ctx, "Object.entries({a: [[]]})").unwrap();
         root(&mut ctx, entries);
-        let pair = entries.as_object().get(ctx.intern("0")).unwrap();
-        let child = pair.as_object().get(ctx.intern("1")).unwrap();
+        let pair = entries.try_as_object().expect("object value").get(ctx.intern("0")).unwrap();
+        let child = pair.try_as_object().expect("object value").get(ctx.intern("1")).unwrap();
         assert_alive(&mut ctx, child);
 
         let descriptor = crate::eval(
@@ -2153,12 +2153,12 @@ mod tests {
         )
         .unwrap();
         root(&mut ctx, descriptor);
-        let child = descriptor.as_object().get(ctx.intern("value")).unwrap();
+        let child = descriptor.try_as_object().expect("object value").get(ctx.intern("value")).unwrap();
         assert_alive(&mut ctx, child);
 
         let created = crate::eval(&mut ctx, "Object.create({a: []})").unwrap();
         root(&mut ctx, created);
-        let child = created.as_object().get(ctx.intern("a")).unwrap();
+        let child = created.try_as_object().expect("object value").get(ctx.intern("a")).unwrap();
         assert_alive(&mut ctx, child);
     }
 }

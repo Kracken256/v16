@@ -216,7 +216,7 @@ pub fn init_globals(ctx: &mut JSContext) {
     if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
         let global = ctx.global();
         if global.is_object() {
-            let global_obj = global.as_object();
+            let global_obj = global.try_as_object().expect("object value");
             let mut values = Vec::new();
             global_obj.for_each_property(|_atom, value, _attrs| {
                 values.push(value);
@@ -366,7 +366,7 @@ fn jsvalue_to_string_internal(
         let atom = value.get_atom();
         ctx.get_atom_str(atom).to_string()
     } else if value.is_bigint() {
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         format!("{}n", obj.get_bigint_value())
     } else if value.is_object() {
         let ptr = value.get_ptr();
@@ -376,7 +376,7 @@ fn jsvalue_to_string_internal(
         }
         visited.insert(ptr);
 
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         let mut result = String::from("{");
         let mut first = true;
         obj.for_each_property(|key, val, _attrs| {
@@ -530,7 +530,7 @@ fn js_disassemble(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_function() {
         return JSValue::new_string(ctx.intern("disassemble: expected a function argument"));
     }
-    let js_func = args[0].as_function();
+    let js_func = args[0].try_as_function().expect("function value");
     let output = match js_func.bytecode.as_ref() {
         Some(bc) => bc.disassemble(),
         None => {
@@ -680,7 +680,7 @@ fn v16_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             Some(name) => {
                 let atom = ctx.intern(&name);
                 let ns_value = JSValue::new_object(ns_ptr);
-                let ns_obj = ns_value.as_object();
+                let ns_obj = ns_value.try_as_object().expect("object value");
                 if ns_obj.is_module_namespace() {
                     if let Some(desc) = ns_obj.get_own_descriptor(atom) {
                         return crate::builtins::object::namespace_live_descriptor_value(
@@ -761,7 +761,7 @@ fn v16_export_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     };
     let mut entries: Vec<(String, JSValue)> = Vec::new();
-    for (atom, value) in namespace.as_object().own_properties_including_symbols() {
+    for (atom, value) in namespace.try_as_object().expect("object value").own_properties_including_symbols() {
         if atom.0 & 0x40000000 != 0 {
             continue;
         }
@@ -791,7 +791,7 @@ fn v16_import_meta(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
 
     if let Some(ptr) = ctx.get_import_meta() {
         let existing_val = JSValue::new_object(ptr);
-        let existing = existing_val.as_object();
+        let existing = existing_val.try_as_object().expect("object value");
         let matches = existing
             .get(ctx.intern("url"))
             .map(|v| v.is_string() && ctx.get_atom_str(v.get_atom()) == url)
@@ -844,8 +844,8 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     if callee.is_function() {
-        let realm_context = callee.as_function().realm_context;
-        let realm_global = callee.as_function().realm_global;
+        let realm_context = callee.try_as_function().expect("function value").realm_context;
+        let realm_global = callee.try_as_function().expect("function value").realm_global;
         if !realm_context.is_null()
             && realm_global.is_object_like()
             && realm_global.raw_bits() != ctx.global().raw_bits()
@@ -892,7 +892,7 @@ fn extract_array_like(ctx: &mut JSContext, arg_list: &JSValue) -> Result<Vec<JSV
         return Err(());
     }
     let mut call_args = Vec::new();
-    let obj = arg_list.as_object();
+    let obj = arg_list.try_as_object().expect("object value");
     let len_val = obj.get(ctx.common_atoms.length);
     if ctx.pending_exception.is_some() { return Err(()); }
     let len = match len_val {
@@ -939,7 +939,7 @@ fn reflect_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.intern(&s)
     };
     let receiver = args.get(2).copied().unwrap_or(args[0]);
-    let target = args[0].as_object();
+    let target = args[0].try_as_object().expect("object value");
     let mut current: Option<&JSObject> = Some(target);
     let mut depth = 0u32;
     while let Some(obj) = current {
@@ -1049,7 +1049,7 @@ fn reflect_has(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if ctx.pending_exception.is_some() { return JSValue::undefined(); }
         ctx.intern(&s)
     };
-    JSValue::bool(args[0].as_object().has_property(key))
+    JSValue::bool(args[0].try_as_object().expect("object value").has_property(key))
 }
 
 fn reflect_delete_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1108,7 +1108,7 @@ fn reflect_define_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let attrs = &args[2];
     let mut desc = PropertyDescriptor::default();
     if attrs.is_object() {
-        let obj = attrs.as_object();
+        let obj = attrs.try_as_object().expect("object value");
         if let Some(v) = obj.get(ctx.intern("value")) { desc.value = Some(v); }
         if let Some(v) = obj.get(ctx.intern("writable")) { desc.writable = v.is_truthy(); }
         if let Some(v) = obj.get(ctx.intern("enumerable")) { desc.enumerable = v.is_truthy(); }
@@ -1117,11 +1117,11 @@ fn reflect_define_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(v) = obj.get(ctx.intern("set")) { desc.set = Some(v); }
     }
     let has_writable = attrs.is_object_like()
-        && attrs.as_object().get(ctx.intern("writable")).is_some();
+        && attrs.try_as_object().expect("object value").get(ctx.intern("writable")).is_some();
     let has_enumerable = attrs.is_object_like()
-        && attrs.as_object().get(ctx.intern("enumerable")).is_some();
+        && attrs.try_as_object().expect("object value").get(ctx.intern("enumerable")).is_some();
     let has_configurable = attrs.is_object_like()
-        && attrs.as_object().get(ctx.intern("configurable")).is_some();
+        && attrs.try_as_object().expect("object value").get(ctx.intern("configurable")).is_some();
     let has_value = desc.value.is_some();
     if desc.get.is_some() || desc.set.is_some() {
         desc.value = None;
@@ -1175,11 +1175,11 @@ fn reflect_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) ->
     };
     if let Some(desc) = ctx
         .array_index_own_descriptor(&args[0], key)
-        .or_else(|| args[0].as_object().get_own_descriptor(key))
+        .or_else(|| args[0].try_as_object().expect("object value").get_own_descriptor(key))
     {
         let mut result = JSObject::new();
         result.prototype = ctx.get_object_prototype();
-        if args[0].as_object().is_module_namespace() && key.0 & 0x40000000 == 0 {
+        if args[0].try_as_object().expect("object value").is_module_namespace() && key.0 & 0x40000000 == 0 {
             let value = crate::builtins::object::namespace_live_descriptor_value(ctx, &args[0], &desc);
             result.set(ctx.intern("value"), value);
             result.set(ctx.intern("writable"), JSValue::bool(true));
@@ -1219,7 +1219,7 @@ fn reflect_get_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    if let Some(proto_ptr) = args[0].as_object().prototype_ptr() {
+    if let Some(proto_ptr) = args[0].try_as_object().expect("object value").prototype_ptr() {
         JSValue::new_object(proto_ptr)
     } else {
         JSValue::null()
@@ -1248,7 +1248,7 @@ fn reflect_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if proto_val.is_null() {
         if let Some(proto_ptr) = ctx.get_object_prototype() {
             if obj as *const JSObject as *mut JSObject == proto_ptr {
@@ -1279,7 +1279,7 @@ fn reflect_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return JSValue::bool(false);
         }
         // Check for cycles
-        let mut current = proto_val.as_object().prototype_object();
+        let mut current = proto_val.try_as_object().expect("object value").prototype_object();
         let mut depth = 0u32;
         while let Some(proto) = current {
             if proto as *const JSObject as *mut JSObject == obj_ptr || depth > 1000 {
@@ -1305,7 +1305,7 @@ fn reflect_is_extensible(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    JSValue::bool(args[0].as_object().extensible())
+    JSValue::bool(args[0].try_as_object().expect("object value").extensible())
 }
 
 fn reflect_prevent_extensions(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1334,7 +1334,7 @@ fn reflect_own_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let is_namespace = obj.is_module_namespace();
     let order: Vec<Atom> = if obj.has_property_order() {
         obj.property_order_keys()
@@ -1514,7 +1514,7 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let arg_list = args.get(1).copied().unwrap_or(JSValue::undefined());
 
     if new_target.is_function() {
-        let f = new_target.as_function();
+        let f = new_target.try_as_function().expect("function value");
         if f.is_builtin() {
             let builtin_name = f.builtin_atom
                 .map(|ba| ctx.get_atom_str(ba).to_string())
@@ -1549,7 +1549,7 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     if target.is_function() {
-        let f = target.as_function();
+        let f = target.try_as_function().expect("function value");
         if f.is_builtin() {
             let builtin_name = f.builtin_atom
                 .map(|ba| ctx.get_atom_str(ba).to_string())
@@ -1569,7 +1569,7 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let proto_key = ctx.common_atoms.prototype;
     let proto_val = if new_target.is_function() {
-        new_target.as_function().base.get(proto_key)
+        new_target.try_as_function().expect("function value").base.get(proto_key)
     } else {
         None
     };
@@ -1588,7 +1588,7 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if !cur.is_object_like() {
                 break;
             }
-            match cur.as_object().prototype {
+            match cur.try_as_object().expect("object value").prototype {
                 Some(p) => {
                     cur = JSValue::new_object(p);
                     found = true;
@@ -2065,7 +2065,7 @@ pub fn to_property_key_string(ctx: &mut JSContext, v: &JSValue) -> String {
         return v.get_bool().to_string();
     }
     if v.is_bigint() {
-        return v.as_object().get_bigint_value().to_string();
+        return v.try_as_object().expect("object value").get_bigint_value().to_string();
     }
     if v.is_symbol() {
         throw_type_error(ctx, "Cannot convert a Symbol value to a property key");
@@ -2121,7 +2121,7 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
     if !v.is_object() {
         return Some(v.clone());
     }
-    let obj = v.as_object();
+    let obj = v.try_as_object().expect("object value");
     if let Some(val) = obj.get(ctx.common_atoms.__value__) {
         if !val.is_object() && !val.is_function() {
             return Some(val);
@@ -2132,7 +2132,7 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
             let global = ctx.global();
             if global.is_object() {
                 global
-                    .as_object()
+                    .try_as_object().expect("object value")
                     .get(ctx.intern("Symbol.toPrimitive"))
                     .filter(|v| v.is_symbol())
                     .map(|v| {
@@ -2143,7 +2143,7 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
             }
         };
         if let Some(tp_atom) = to_prim_atom {
-            let mut cur = Some(v.as_object());
+            let mut cur = Some(v.try_as_object().expect("object value"));
             let mut depth = 0u32;
             while let Some(p) = cur {
                 if depth > 100 {
@@ -2319,7 +2319,7 @@ pub fn js_to_number_value(ctx: &mut JSContext, v: &JSValue) -> Result<f64, ()> {
         return Ok(crate::runtime::vm::VM::string_to_number(s));
     }
     if v.is_object() {
-        let obj = v.as_object();
+        let obj = v.try_as_object().expect("object value");
         let obj_type = obj.obj_type();
         if obj_type == crate::object::object::ObjectType::Array {
             let elements: Vec<JSValue> = if let Some(arr) = obj.as_dense_array() {
@@ -2368,7 +2368,7 @@ fn number_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_int(0);
     }
     if args[0].is_bigint() {
-        let bv = args[0].as_object().get_bigint_value();
+        let bv = args[0].try_as_object().expect("object value").get_bigint_value();
         let f = bv.to_f64();
         if f.is_nan() {
             return JSValue::new_float(f64::NAN);
@@ -2519,7 +2519,7 @@ fn init_number(ctx: &mut JSContext) {
     );
     let global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object();
+        let global_obj = global.try_as_object().expect("object value");
         if let Some(parse_int_fn) = global_obj.get(ctx.intern("parseInt")) {
             set_non_enumerable(&mut num_func.base, ctx.intern("parseInt"), parse_int_fn);
         }
@@ -2695,7 +2695,7 @@ fn to_integer_or_nan(ctx: &mut JSContext, v: &JSValue) -> Result<f64, ()> {
         return Err(());
     }
     if v.is_object() {
-        let obj = v.as_object();
+        let obj = v.try_as_object().expect("object value");
         let obj_type = obj.obj_type();
         if obj_type == crate::object::object::ObjectType::Array {
             let elements: Vec<JSValue> = if let Some(arr) = obj.as_dense_array() {
@@ -2767,7 +2767,7 @@ fn this_number_value(ctx: &mut JSContext, this: &JSValue) -> Option<f64> {
         return Some(this.get_float());
     }
     if this.is_object() {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         let number_proto = ctx.get_number_prototype();
         let mut is_number_wrapper = false;
         if let Some(np) = number_proto {
@@ -3162,7 +3162,7 @@ fn boolean_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_string(ctx.intern(if this.get_bool() { "true" } else { "false" }));
     }
     if this.is_object() {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         if let Some(v) = obj.get(ctx.common_atoms.__value__) {
             if v.is_bool() {
                 return JSValue::new_string(ctx.intern(if v.get_bool() {
@@ -3219,7 +3219,7 @@ fn boolean_value_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return *this;
     }
     if this.is_object() {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         if let Some(v) = obj.get(ctx.common_atoms.__value__) {
             if v.is_bool() {
                 return v;

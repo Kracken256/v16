@@ -161,7 +161,7 @@ fn this_to_string(ctx: &mut JSContext, this: &JSValue) -> Option<String> {
         return Some(js_float_to_string(this.get_float()));
     }
     if this.is_object() {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         if let Some(v) = obj.get(ctx.common_atoms.__value__) {
             if v.is_string() {
                 return Some(ctx.get_atom_str(v.get_atom()).to_string());
@@ -830,7 +830,7 @@ fn string_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         } else if val.is_float() {
             JSValue::new_string(ctx.intern(&js_float_to_string(val.get_float())))
         } else if val.is_bigint() {
-            let obj = val.as_object();
+            let obj = val.try_as_object().expect("object value");
             let n = obj.get_bigint_value();
             JSValue::new_string(ctx.intern(&n.to_string()))
         } else if val.is_bool() {
@@ -1193,7 +1193,7 @@ fn string_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return this;
     }
     if this.is_object() {
-        if let Some(v) = this.as_object().get(ctx.common_atoms.__value__) {
+        if let Some(v) = this.try_as_object().expect("object value").get(ctx.common_atoms.__value__) {
             if v.is_string() {
                 return v;
             }
@@ -1268,7 +1268,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let length_atom = ctx.common_atoms.length;
 
     if args.len() > 1 && args[1].is_object() {
-        let sep_obj = args[1].as_object();
+        let sep_obj = args[1].try_as_object().expect("object value");
         let pattern_atom = ctx.common_atoms.__pattern__;
         if sep_obj.get(pattern_atom).is_some() {
             let limit = if args.len() > 2 && args[2].is_int() {
@@ -1278,7 +1278,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             };
 
             let mut parts: Vec<String> = Vec::new();
-            let compiled_re = args[1].as_object().get_compiled_regex();
+            let compiled_re = args[1].try_as_object().expect("object value").get_compiled_regex();
             if let Some(re) = compiled_re {
                 let mut last = 0usize;
                 let mut search_start = 0usize;
@@ -1675,7 +1675,7 @@ fn string_replace(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     if args[1].is_object() {
-        let regexp_obj = args[1].as_object();
+        let regexp_obj = args[1].try_as_object().expect("object value");
 
         let pattern_atom = ctx.common_atoms.__pattern__;
         let flags_atom = ctx.common_atoms.__flags__;
@@ -2179,7 +2179,7 @@ fn string_match_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let pattern = if args.len() > 1 {
         if args[1].is_object() {
-            let regexp_obj = args[1].as_object();
+            let regexp_obj = args[1].try_as_object().expect("object value");
 
             let flags_atom = ctx.common_atoms.__flags__;
             let flags = if let Some(f) = regexp_obj.get(flags_atom) {
@@ -2294,7 +2294,7 @@ fn string_search(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     if args[1].is_object() {
-        let regexp_obj = args[1].as_object();
+        let regexp_obj = args[1].try_as_object().expect("object value");
         let pattern_atom = ctx.common_atoms.__pattern__;
         let flags_atom = ctx.common_atoms.__flags__;
 
@@ -2349,7 +2349,7 @@ fn string_match(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     if args[1].is_object() {
-        let regexp_obj = args[1].as_object();
+        let regexp_obj = args[1].try_as_object().expect("object value");
         let pattern_atom = ctx.common_atoms.__pattern__;
         let flags_atom = ctx.common_atoms.__flags__;
 
@@ -2642,7 +2642,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    let obj = template.as_object();
+    let obj = template.try_as_object().expect("object value");
     let raw_atom = ctx.intern("raw");
     let raw_val = match obj.get(raw_atom) {
         Some(v) => v,
@@ -2686,7 +2686,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    let raw_obj = raw_val.as_object();
+    let raw_obj = raw_val.try_as_object().expect("object value");
     let length_atom = ctx.common_atoms.length;
     let len_val = raw_obj.get(length_atom).unwrap_or(JSValue::new_int(0));
     let len = js_to_length(&len_val).min(u32::MAX as u64) as usize;

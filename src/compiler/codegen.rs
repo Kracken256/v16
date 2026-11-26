@@ -13608,7 +13608,7 @@ mod tests {
             crate::runtime::vm::ExecutionOutcome::Yield(v) => v,
         };
         assert!(result.is_object(), "expected async generator object");
-        let obj = result.as_object();
+        let obj = result.try_as_object().expect("object value");
         assert!(obj.is_generator(), "expected generator flag to be set");
     }
 
@@ -13645,7 +13645,7 @@ mod tests {
             crate::builtins::promise::is_promise(&result),
             "expected a Promise"
         );
-        let promise_obj = result.as_object();
+        let promise_obj = result.try_as_object().expect("object value");
         let state = promise_obj
             .get(ctx.common_atoms.__promise_state__)
             .unwrap_or(JSValue::new_int(0))
@@ -13701,7 +13701,7 @@ mod tests {
             "expected a Promise"
         );
         crate::builtins::promise::run_microtasks_with_vm(&mut ctx, &mut vm);
-        let promise_obj = result.as_object();
+        let promise_obj = result.try_as_object().expect("object value");
         let state = promise_obj
             .get(ctx.common_atoms.__promise_state__)
             .unwrap_or(JSValue::new_int(0))

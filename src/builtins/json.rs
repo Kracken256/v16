@@ -93,7 +93,7 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let val = &args[0];
         let early = ctx
             .with_vm(|vm, ctx| {
-                let obj = val.as_object();
+                let obj = val.try_as_object().expect("object value");
                 let mut got_primitive: Option<String> = None;
                 let to_string_fn = obj.get(ctx.common_atoms.to_string);
                 if let Some(f) = to_string_fn {
@@ -307,7 +307,7 @@ fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
 
 pub fn json_is_raw_json(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let v = args.get(0).copied().unwrap_or(JSValue::undefined());
-    JSValue::bool(v.is_object() && v.as_object().is_raw_json())
+    JSValue::bool(v.is_object() && v.try_as_object().expect("object value").is_raw_json())
 }
 
 fn apply_to_json(ctx: &mut JSContext, val: &mut JSValue, key: crate::runtime::atom::Atom) {
@@ -325,12 +325,12 @@ fn apply_to_json(ctx: &mut JSContext, val: &mut JSValue, key: crate::runtime::at
 
 fn get_to_json(ctx: &mut JSContext, val: JSValue) -> Option<JSValue> {
     if val.is_object() {
-        return val.as_object().get(ctx.intern("toJSON"));
+        return val.try_as_object().expect("object value").get(ctx.intern("toJSON"));
     }
     if val.is_bigint() {
         if let Some(bigint_proto) = ctx.get_bigint_prototype() {
             let proto_val = JSValue::new_object(bigint_proto);
-            return proto_val.as_object().get(ctx.intern("toJSON"));
+            return proto_val.try_as_object().expect("object value").get(ctx.intern("toJSON"));
         }
     }
     None
@@ -385,16 +385,16 @@ fn jsvalue_to_json_with_options(
 fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate::runtime::atom::Atom) -> JSValue {
     ctx.with_vm(|vm, ctx| {
         let val = if holder.is_object() {
-            holder.as_object().get(key)
+            holder.try_as_object().expect("object value").get(key)
         } else {
             None
         };
         let Some(val) = val else { return JSValue::undefined() };
 
         if val.is_object() {
-            if val.as_object().is_array() {
+            if val.try_as_object().expect("object value").is_array() {
                 let len_atom = ctx.common_atoms.length;
-                let len = val.as_object().get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
+                let len = val.try_as_object().expect("object value").get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
                 for i in 0..len {
                     let i_atom = ctx.int_atom_mut(i);
                     let new_val = json_walk(ctx, reviver, val, i_atom);
@@ -407,7 +407,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
                     }
                 }
             } else {
-                let mut props: Vec<(Atom, JSValue)> = val.as_object().own_properties();
+                let mut props: Vec<(Atom, JSValue)> = val.try_as_object().expect("object value").own_properties();
                 // Sort: numeric keys first (ascending), then string keys in insertion order
                 props.sort_by(|a, b| {
                     let a_str = ctx.get_atom_str(a.0);
@@ -440,7 +440,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
             ctx.get_atom_str(key).to_string()
         };
         let val2 = if holder.is_object() {
-            holder.as_object().get(key)
+            holder.try_as_object().expect("object value").get(key)
         } else {
             None
         };
@@ -465,7 +465,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
 
 fn get_indent_string_with_ctx(ctx: &mut JSContext, space: &JSValue) -> String {
     let effective_space = if space.is_object() {
-        let obj = space.as_object();
+        let obj = space.try_as_object().expect("object value");
         let inner = obj.get(ctx.common_atoms.__value__);
         // Only call valueOf/toString if the object has [[NumberData]] or [[StringData]]
         if let Some(v) = inner {
@@ -642,9 +642,9 @@ fn jsvalue_to_json_internal(
     seen: &mut Vec<*mut crate::object::object::JSObject>,
     key: crate::runtime::atom::Atom,
 ) -> Option<String> {
-    if value.is_object() && value.as_object().is_raw_json() {
+    if value.is_object() && value.try_as_object().expect("object value").is_raw_json() {
         let raw = value
-            .as_object()
+            .try_as_object().expect("object value")
             .get(ctx.intern("rawJSON"))
             .unwrap_or(JSValue::undefined());
         if raw.is_string() {
@@ -697,7 +697,7 @@ fn jsvalue_to_json_internal(
     }
 
     if value.is_object() {
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
 
         let unwrapped = unwrap_wrapper_object(ctx, obj);
         if unwrapped.is_some() {
@@ -724,7 +724,7 @@ fn jsvalue_to_json_internal(
         }
         seen.push(ptr);
 
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
 
         if obj.is_array() {
             let result = array_to_json(ctx, obj, replacer, seen);
@@ -796,7 +796,7 @@ fn object_to_json(
 
     let filter_keys: Option<Vec<crate::runtime::atom::Atom>> = if let Some(repl) = replacer {
         if repl.is_object() {
-            let repl_obj = repl.as_object();
+            let repl_obj = repl.try_as_object().expect("object value");
             if repl_obj.is_array() {
                 let len_atom = ctx.common_atoms.length;
                 let len = repl_obj
@@ -838,7 +838,7 @@ fn object_to_json(
                                 keys.push(ctx.intern(&f.to_string()));
                             }
                         } else if k.is_object() {
-                            let obj = k.as_object();
+                            let obj = k.try_as_object().expect("object value");
                             let to_str_fn = obj.get(ctx.common_atoms.to_string);
                             if let Some(to_str_fn) = to_str_fn {
                                 if to_str_fn.is_function() {

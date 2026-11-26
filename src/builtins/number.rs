@@ -28,7 +28,7 @@ pub fn number_to_exponential(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     } else if this.is_float() {
         this.get_float()
     } else if this.is_object() {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         if let Some(v) = obj.get(ctx.common_atoms.__value__) {
             if v.is_int() {
                 v.get_int() as f64
@@ -191,7 +191,7 @@ pub fn number_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             crate::builtins::string::js_float_to_string(f)
         }
     } else if this.is_object() {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         let number_proto = ctx.get_number_prototype();
         let mut is_number_wrapper = false;
         if let Some(np) = number_proto {
@@ -200,7 +200,7 @@ pub fn number_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 is_number_wrapper = true;
             }
             if !is_number_wrapper {
-                let mut current = this.as_object().prototype_object();
+                let mut current = this.try_as_object().expect("object value").prototype_object();
                 let mut depth = 0u32;
                 while let Some(p) = current {
                     if depth > 10 {

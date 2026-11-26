@@ -1140,7 +1140,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> crate::value::JSV
 
 fn dispatch_ws_message(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::object::JSObject, data: &str, _is_text: bool) {
     let ws_obj = crate::value::JSValue::new_object(ws_obj_ptr);
-    let ws_obj = ws_obj.as_object();
+    let ws_obj = ws_obj.try_as_object().expect("object value");
     let on_msg = ws_obj
         .get(ctx.intern("onmessage"))
         .unwrap_or(crate::value::JSValue::undefined());
@@ -1153,7 +1153,7 @@ fn dispatch_ws_message(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::obje
 
 fn dispatch_ws_close(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::object::JSObject, code: u16, reason: String) {
     let ws_obj = crate::value::JSValue::new_object(ws_obj_ptr);
-    let ws_obj = ws_obj.as_object();
+    let ws_obj = ws_obj.try_as_object().expect("object value");
     let on_close = ws_obj
         .get(ctx.intern("onclose"))
         .unwrap_or(crate::value::JSValue::undefined());
@@ -1176,7 +1176,7 @@ fn dispatch_ws_close(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::object
 
 fn dispatch_ws_error(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::object::JSObject, error: &str) {
     let ws_obj = crate::value::JSValue::new_object(ws_obj_ptr);
-    let ws_obj = ws_obj.as_object();
+    let ws_obj = ws_obj.try_as_object().expect("object value");
     let on_error = ws_obj
         .get(ctx.intern("onerror"))
         .unwrap_or(crate::value::JSValue::undefined());
@@ -1193,7 +1193,7 @@ fn dispatch_sse_event(
     event: &crate::builtins::eventsource::SseEvent,
 ) {
     let es_obj = crate::value::JSValue::new_object(es_obj_ptr);
-    let es_obj = es_obj.as_object();
+    let es_obj = es_obj.try_as_object().expect("object value");
     let on_msg = es_obj
         .get(ctx.intern("onmessage"))
         .unwrap_or(crate::value::JSValue::undefined());

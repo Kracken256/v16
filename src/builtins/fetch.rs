@@ -36,7 +36,7 @@ fn fetch_impl(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     let headers = if args.len() > 2 && args[2].is_object() {
-        let obj = args[2].as_object();
+        let obj = args[2].try_as_object().expect("object value");
         let mut h = crate::http::headers::Headers::new();
         let keys = obj.keys();
         for key in keys {
@@ -88,7 +88,7 @@ fn response_text(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_object() {
         return reject(ctx, "no body");
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let body_atom = ctx.intern("__body__");
     obj.get(body_atom).unwrap_or(JSValue::undefined())
 }
@@ -97,7 +97,7 @@ fn response_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_object() {
         return reject(ctx, "no body");
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let body_atom = ctx.intern("__body__");
     let body = obj.get(body_atom).unwrap_or(JSValue::undefined());
     if body.is_undefined() {

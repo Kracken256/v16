@@ -8,7 +8,7 @@ fn is_callable_target(ctx: &mut JSContext, target: JSValue) -> bool {
         return true;
     }
     if target.is_object() {
-        let obj = target.as_object();
+        let obj = target.try_as_object().expect("object value");
         if obj.is_proxy() {
             return obj.proxy_callable();
         }
@@ -24,7 +24,7 @@ fn is_callable_target(ctx: &mut JSContext, target: JSValue) -> bool {
 
 fn is_constructor_target(ctx: &mut JSContext, target: JSValue) -> bool {
     if target.is_function() {
-        let f = target.as_function();
+        let f = target.try_as_function().expect("function value");
         if f.is_builtin() {
             let name = f
                 .builtin_atom
@@ -35,7 +35,7 @@ fn is_constructor_target(ctx: &mut JSContext, target: JSValue) -> bool {
         return !f.is_arrow() && !f.is_async() && !f.is_generator() && !f.is_method;
     }
     if target.is_object() {
-        let obj = target.as_object();
+        let obj = target.try_as_object().expect("object value");
         if obj.is_proxy() {
             return obj.proxy_constructable();
         }
@@ -132,11 +132,11 @@ fn proxy_revoke(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let proxy_atom = ctx.intern("__v16_revoked_proxy__");
-    let proxy = match callee.as_object().get_own(proxy_atom) {
+    let proxy = match callee.try_as_object().expect("object value").get_own(proxy_atom) {
         Some(proxy) => proxy,
         None => return JSValue::undefined(),
     };
-    if proxy.is_object() && proxy.as_object().is_proxy() {
+    if proxy.is_object() && proxy.try_as_object().expect("object value").is_proxy() {
         proxy.as_object_mut().revoke_proxy();
     }
     JSValue::undefined()

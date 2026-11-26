@@ -1009,7 +1009,7 @@ pub fn date_get_time(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     if args[0].is_object() {
-        let obj = args[0].as_object();
+        let obj = args[0].try_as_object().expect("object value");
         let key = ctx.intern("__dateValue__");
         if let Some(ts) = obj.get(key) {
             return ts;
@@ -1180,7 +1180,7 @@ fn require_date_this(ctx: &mut JSContext, this: &JSValue) -> Option<JSValue> {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return Some(JSValue::undefined());
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if obj.get(ctx.intern("__dateValue__")).is_none() {
         let has_value = if let Some(v) = obj.get(ctx.common_atoms.__value__) {
             v.is_float() || v.is_int()
@@ -1836,7 +1836,7 @@ pub fn date_value_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !this.is_object() {
         return JSValue::new_float(f64::NAN);
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     let key = ctx.intern("__dateValue__");
     if let Some(ts) = obj.get(key) {
         return ts;
@@ -1897,7 +1897,7 @@ pub fn date_to_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let to_iso = if o.is_object_like() {
-        o.as_object().get(ctx.intern("toISOString"))
+        o.try_as_object().expect("object value").get(ctx.intern("toISOString"))
     } else {
         None
     };
@@ -1925,7 +1925,7 @@ pub fn init_date_to_primitive(ctx: &mut JSContext) {
     if !global.is_object() {
         return;
     }
-    let global_obj = global.as_object();
+    let global_obj = global.try_as_object().expect("object value");
 
     let stp_key = ctx.intern("Symbol.toPrimitive");
     let sym_val = match global_obj.get(stp_key) {
@@ -1940,7 +1940,7 @@ pub fn init_date_to_primitive(ctx: &mut JSContext) {
         _ => return,
     };
     let proto_key = ctx.intern("prototype");
-    let proto_val = date_ctor.as_object().get(proto_key);
+    let proto_val = date_ctor.try_as_object().expect("object value").get(proto_key);
     if let Some(pv) = proto_val {
         if pv.is_object() {
             let fn_val =
@@ -1986,7 +1986,7 @@ pub fn date_to_primitive(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     } else {
         ""
     };
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     let (first_method, second_method) = match hint {
         "string" | "default" => ("toString", "valueOf"),
         "number" => ("valueOf", "toString"),
@@ -2057,7 +2057,7 @@ pub fn date_to_primitive(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn get_date_timestamp_with_ctx(this: &JSValue, ctx: &mut JSContext) -> f64 {
     if this.is_object() {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
 
         if let Some(ts) = obj.get(ctx.intern("__dateValue__")) {
             if ts.is_int() {

@@ -65,7 +65,7 @@ fn to_primitive_number(ctx: &mut JSContext, value: JSValue) -> Option<JSValue> {
         let to_prim_sym =
             crate::builtins::symbol::get_or_create_well_known_symbol(ctx, "Symbol.toPrimitive");
         let to_prim_key = crate::runtime::atom::Atom(0x40000000 | to_prim_sym.get_symbol_id());
-        let to_primitive = value.as_object().get(to_prim_key);
+        let to_primitive = value.try_as_object().expect("object value").get(to_prim_key);
         if let Some(method) = to_primitive {
             if !method.is_function() {
                 throw_type_error(ctx, "Cannot convert object to primitive value");
@@ -84,7 +84,7 @@ fn to_primitive_number(ctx: &mut JSContext, value: JSValue) -> Option<JSValue> {
             }
         }
         for atom in [ctx.common_atoms.value_of, ctx.common_atoms.to_string] {
-            let method = value.as_object().get(atom);
+            let method = value.try_as_object().expect("object value").get(atom);
             if let Some(f) = method {
                 if f.is_function() {
                     match vm.call_function_with_this(ctx, f, value, &[]) {
@@ -150,7 +150,7 @@ fn number_to_bigint(ctx: &mut JSContext, number: f64) -> Option<BigInt> {
 fn to_bigint(ctx: &mut JSContext, value: JSValue) -> Option<BigInt> {
     let primitive = to_primitive_number(ctx, value)?;
     if primitive.is_bigint() {
-        return Some((*primitive.as_object().get_bigint_value()).clone());
+        return Some((*primitive.try_as_object().expect("object value").get_bigint_value()).clone());
     }
     if primitive.is_bool() {
         return Some(BigInt::from_i64(if primitive.get_bool() { 1 } else { 0 }));
@@ -342,12 +342,12 @@ fn bigint_as_uint_n(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn this_bigint_value(ctx: &mut JSContext, this_val: &JSValue) -> Option<BigInt> {
     if this_val.is_bigint() {
-        return Some((*this_val.as_object().get_bigint_value()).clone());
+        return Some((*this_val.try_as_object().expect("object value").get_bigint_value()).clone());
     }
     if this_val.is_object() {
-        if let Some(inner) = this_val.as_object().get(ctx.common_atoms.__value__) {
+        if let Some(inner) = this_val.try_as_object().expect("object value").get(ctx.common_atoms.__value__) {
             if inner.is_bigint() {
-                return Some((*inner.as_object().get_bigint_value()).clone());
+                return Some((*inner.try_as_object().expect("object value").get_bigint_value()).clone());
             }
         }
     }

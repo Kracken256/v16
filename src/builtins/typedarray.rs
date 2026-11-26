@@ -150,7 +150,7 @@ fn typed_array_from_args(
     let first_arg = &args[0];
 
     if first_arg.is_object() {
-        let obj = first_arg.as_object();
+        let obj = first_arg.try_as_object().expect("object value");
 
         if obj.obj_type() == ObjectType::ArrayBuffer {
             let byte_offset = if args.len() > 1 {
@@ -283,7 +283,7 @@ fn array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut max_byte_length: Option<usize> = None;
     if let Some(opts) = args.get(1) {
         if opts.is_object() {
-            if let Some(mbl) = opts.as_object().get(ctx.intern("maxByteLength")) {
+            if let Some(mbl) = opts.try_as_object().expect("object value").get(ctx.intern("maxByteLength")) {
                 if !mbl.is_undefined() {
                     let n = match crate::builtins::global::js_to_number_value(ctx, &mbl) {
                         Ok(n) => n,
@@ -318,7 +318,7 @@ fn shared_array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSV
 fn data_view_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty()
         || !args[0].is_object()
-        || args[0].as_object().obj_type() != ObjectType::ArrayBuffer
+        || args[0].try_as_object().expect("object value").obj_type() != ObjectType::ArrayBuffer
     {
         throw_type_error(
             ctx,
@@ -387,7 +387,7 @@ fn typedarray_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             items.push(JSValue::new_string(ctx.intern(&ch.to_string())));
         }
     } else if source.is_object() {
-        let obj = source.as_object();
+        let obj = source.try_as_object().expect("object value");
 
         let sym_iter_atom = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
         if let Some(iter_val) = obj.get(sym_iter_atom) {
@@ -395,7 +395,7 @@ fn typedarray_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 match crate::builtins::array::call_callback_with_this(ctx, iter_val, source, &[]) {
                     Ok(iterator) => {
                         if iterator.is_object() {
-                            let iter_obj = iterator.as_object();
+                            let iter_obj = iterator.try_as_object().expect("object value");
                             let next_fn = iter_obj.get(ctx.intern("next"));
                             if let Some(next_val) = next_fn {
                                 if next_val.is_function() {
@@ -403,7 +403,7 @@ fn typedarray_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                         match crate::builtins::array::call_callback_with_this(ctx, next_val, iterator, &[]) {
                                             Ok(result) => {
                                                 if result.is_object() {
-                                                    let robj = result.as_object();
+                                                    let robj = result.try_as_object().expect("object value");
                                                     let done = robj
                                                         .get(ctx.intern("done"))
                                                         .map(|v| v.is_truthy())
@@ -566,7 +566,7 @@ fn typed_array_get_buffer(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     obj.get(ctx.intern("buffer"))
         .unwrap_or(JSValue::undefined())
 }
@@ -575,7 +575,7 @@ fn typed_array_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::TypedArray {
         return JSValue::undefined();
     }
@@ -590,7 +590,7 @@ fn typed_array_get_byte_offset(ctx: &mut JSContext, args: &[JSValue]) -> JSValue
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     obj.get(ctx.intern("byteOffset"))
         .unwrap_or(JSValue::undefined())
 }
@@ -599,7 +599,7 @@ fn typed_array_get_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::TypedArray {
         return JSValue::undefined();
     }
@@ -610,7 +610,7 @@ fn typed_array_to_string_tag(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::TypedArray {
         return JSValue::undefined();
     }
@@ -624,7 +624,7 @@ fn array_buffer_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::ArrayBuffer {
         return JSValue::undefined();
     }
@@ -637,7 +637,7 @@ fn array_buffer_get_resizable(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::ArrayBuffer {
         return JSValue::undefined();
     }
@@ -650,7 +650,7 @@ fn array_buffer_get_max_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JS
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::ArrayBuffer {
         return JSValue::undefined();
     }
@@ -665,7 +665,7 @@ fn array_buffer_get_max_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JS
 
 fn array_buffer_resize(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_val = args.first().copied().unwrap_or(JSValue::undefined());
-    if !this_val.is_object() || this_val.as_object().obj_type() != ObjectType::ArrayBuffer {
+    if !this_val.is_object() || this_val.try_as_object().expect("object value").obj_type() != ObjectType::ArrayBuffer {
         throw_type_error(
             ctx,
             "ArrayBuffer.prototype.resize called on incompatible receiver",
@@ -717,7 +717,7 @@ fn array_buffer_resize(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_val = args.first().copied().unwrap_or(JSValue::undefined());
-    if !this_val.is_object() || this_val.as_object().obj_type() != ObjectType::ArrayBuffer {
+    if !this_val.is_object() || this_val.try_as_object().expect("object value").obj_type() != ObjectType::ArrayBuffer {
         throw_type_error(
             ctx,
             "ArrayBuffer.prototype.slice called on incompatible receiver",
@@ -772,9 +772,9 @@ fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             data.data[..count].copy_from_slice(&src.data[start..end]);
         }
     }
-    if let Some(ctor) = this_val.as_object().get(ctx.intern("constructor")) {
+    if let Some(ctor) = this_val.try_as_object().expect("object value").get(ctx.intern("constructor")) {
         if ctor.is_object_like() {
-            if let Some(proto) = ctor.as_object().get(ctx.intern("prototype")) {
+            if let Some(proto) = ctor.try_as_object().expect("object value").get(ctx.intern("prototype")) {
                 if proto.is_object_like() {
                     result.as_object_mut().prototype =
                         Some(proto.get_ptr());
@@ -788,7 +788,7 @@ fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 fn array_buffer_is_view(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let arg = args.first().copied().unwrap_or(JSValue::undefined());
     if arg.is_object() {
-        let t = arg.as_object().obj_type();
+        let t = arg.try_as_object().expect("object value").obj_type();
         if t == ObjectType::DataView || t == ObjectType::TypedArray {
             return JSValue::bool(true);
         }
@@ -800,7 +800,7 @@ fn data_view_get_buffer(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !dv_check_this(args, ctx) {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     obj.get(ctx.intern("buffer"))
         .unwrap_or(JSValue::undefined())
 }
@@ -809,7 +809,7 @@ fn data_view_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !dv_check_this(args, ctx) {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     obj.get(ctx.intern("byteLength"))
         .unwrap_or(JSValue::undefined())
 }
@@ -818,7 +818,7 @@ fn data_view_get_byte_offset(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !dv_check_this(args, ctx) {
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     obj.get(ctx.intern("byteOffset"))
         .unwrap_or(JSValue::undefined())
 }
@@ -888,7 +888,7 @@ fn dv_extract_buffer_info(args: &[JSValue], ctx: &mut JSContext) -> Option<(Vec<
     if args.is_empty() || !args[0].is_object() {
         return None;
     }
-    let view_obj = args[0].as_object();
+    let view_obj = args[0].try_as_object().expect("object value");
     let byte_offset = view_obj
         .get(ctx.intern("byteOffset"))
         .map(|v| v.to_number() as usize)
@@ -929,7 +929,7 @@ fn dv_check_this(args: &[JSValue], ctx: &mut JSContext) -> bool {
         throw_type_error(ctx, "Method called on incompatible receiver");
         return false;
     }
-    let view_obj = args[0].as_object();
+    let view_obj = args[0].try_as_object().expect("object value");
     if view_obj.obj_type() != crate::object::object::ObjectType::DataView {
         throw_type_error(ctx, "Method called on incompatible receiver");
         return false;
@@ -991,7 +991,7 @@ fn dv_write_bytes_checked(args: &[JSValue], ctx: &mut JSContext, bytes: &[u8]) -
         }
     };
     let little_endian = args.get(3).map_or(false, |v| v.is_truthy());
-    let view_obj = args[0].as_object();
+    let view_obj = args[0].try_as_object().expect("object value");
     let byte_offset = view_obj
         .get(ctx.intern("byteOffset"))
         .map(|v| v.to_number() as usize)
@@ -1193,7 +1193,7 @@ fn data_view_get_biguint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 fn data_view_set_bigint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 3 { return JSValue::undefined(); }
     let val = if args[2].is_bigint() {
-        let obj = args[2].as_object();
+        let obj = args[2].try_as_object().expect("object value");
         obj.get_bigint_value().to_i64_wrapping()
     } else {
         args[2].to_number() as i64
@@ -1206,7 +1206,7 @@ fn data_view_set_bigint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 fn data_view_set_biguint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 3 { return JSValue::undefined(); }
     let val = if args[2].is_bigint() {
-        let obj = args[2].as_object();
+        let obj = args[2].try_as_object().expect("object value");
         obj.get_bigint_value().to_u64_wrapping()
     } else {
         args[2].to_number() as u64
@@ -1230,7 +1230,7 @@ fn ta_check_this(args: &[JSValue], ctx: &mut JSContext) -> bool {
         throw_type_error(ctx, "Method called on incompatible receiver");
         return false;
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::TypedArray {
         throw_type_error(ctx, "Method called on incompatible receiver");
         return false;
@@ -1416,7 +1416,7 @@ pub fn ta_set_element(ctx: &mut JSContext, obj: &mut JSObject, index: usize, val
         }
         TypedArrayKind::BigInt64 => {
             let v = if value.is_bigint() {
-                value.as_object().get_bigint_value().to_i64_wrapping() as u64
+                value.try_as_object().expect("object value").get_bigint_value().to_i64_wrapping() as u64
             } else {
                 to_int_modulo(num, 64)
             };
@@ -1424,7 +1424,7 @@ pub fn ta_set_element(ctx: &mut JSContext, obj: &mut JSObject, index: usize, val
         }
         TypedArrayKind::BigUint64 => {
             let v = if value.is_bigint() {
-                value.as_object().get_bigint_value().to_u64_wrapping()
+                value.try_as_object().expect("object value").get_bigint_value().to_u64_wrapping()
             } else {
                 to_int_modulo(num, 64)
             };
@@ -1482,7 +1482,7 @@ fn typed_array_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     for i in 0..len {
         if let Some(val) = ta_get_element(ctx, obj, i) {
@@ -1501,7 +1501,7 @@ fn typed_array_every(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     for i in 0..len {
         if let Some(val) = ta_get_element(ctx, obj, i) {
@@ -1527,7 +1527,7 @@ fn typed_array_some(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     for i in 0..len {
         if let Some(val) = ta_get_element(ctx, obj, i) {
@@ -1553,7 +1553,7 @@ fn typed_array_find(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     for i in 0..len {
         if let Some(val) = ta_get_element(ctx, obj, i) {
@@ -1579,7 +1579,7 @@ fn typed_array_find_index(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     for i in 0..len {
         if let Some(val) = ta_get_element(ctx, obj, i) {
@@ -1605,7 +1605,7 @@ fn typed_array_find_last(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let mut result = JSValue::undefined();
     for i in 0..len {
@@ -1632,7 +1632,7 @@ fn typed_array_find_last_index(ctx: &mut JSContext, args: &[JSValue]) -> JSValue
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let mut result = JSValue::new_int(-1);
     for i in 0..len {
@@ -1658,7 +1658,7 @@ fn typed_array_reduce(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Callback is not a function");
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let mut acc = JSValue::undefined();
     let mut start = 0;
@@ -1693,7 +1693,7 @@ fn typed_array_reduce_right(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Callback is not a function");
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let mut acc = JSValue::undefined();
     let mut end = len;
@@ -1729,7 +1729,7 @@ fn typed_array_map(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let kind = obj.get_typed_array_kind().unwrap_or(TypedArrayKind::Int32);
     let result = typed_array_from_args(ctx, kind, &[
@@ -1761,7 +1761,7 @@ fn typed_array_filter(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let kind = obj.get_typed_array_kind().unwrap_or(TypedArrayKind::Int32);
     let mut result: Vec<JSValue> = Vec::new();
@@ -1796,7 +1796,7 @@ fn typed_array_filter(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 fn typed_array_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !ta_check_this(args, ctx) { return JSValue::undefined(); }
     let search = args.get(1).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let from_index = if args.len() >= 3 {
         let v = args[2].to_number() as i64;
@@ -1817,7 +1817,7 @@ fn typed_array_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 fn typed_array_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !ta_check_this(args, ctx) { return JSValue::undefined(); }
     let search = args.get(1).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     if len == 0 {
         return JSValue::new_int(-1);
@@ -1854,7 +1854,7 @@ fn typed_array_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 fn typed_array_includes(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !ta_check_this(args, ctx) { return JSValue::undefined(); }
     let search = args.get(1).copied().unwrap_or(JSValue::undefined());
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let from_index = if args.len() >= 3 {
         let v = args[2].to_number() as i64;
@@ -1897,7 +1897,7 @@ fn typed_array_join(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     } else {
         ",".to_string()
     };
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj);
     let mut parts = Vec::new();
     for i in 0..len {
@@ -1924,7 +1924,7 @@ fn typed_array_join(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn typed_array_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !ta_check_this(args, ctx) { return JSValue::undefined(); }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj) as i64;
     let relative_index = args.get(1).copied().unwrap_or(JSValue::new_int(0)).to_number() as i64;
     let k = if relative_index >= 0 {
@@ -1971,7 +1971,7 @@ fn ta_iterator_next_impl(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = base.as_object();
+    let obj = base.try_as_object().expect("object value");
     let idx_atom = ctx.common_atoms.__iter_idx__;
     let iter_idx = obj
         .get(idx_atom)
@@ -1992,7 +1992,7 @@ fn ta_iterator_next_impl(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Iterator [[IteratedObject]] is not an object");
         return JSValue::undefined();
     }
-    let target_obj = target.as_object();
+    let target_obj = target.try_as_object().expect("object value");
     let state = match typed_array_view_state(ctx, target_obj) {
         Some(state) => state,
         None => {
@@ -2074,7 +2074,7 @@ fn typed_array_reverse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn typed_array_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !ta_check_this(args, ctx) { return JSValue::undefined(); }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     let len = ta_get_length(ctx, obj) as i64;
     let start = {
         let v = args.get(1).copied().unwrap_or(JSValue::new_int(0)).to_number() as i64;
@@ -2193,7 +2193,7 @@ fn typed_array_subarray(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = args[0].as_object();
+    let obj = args[0].try_as_object().expect("object value");
     if obj.obj_type() != ObjectType::TypedArray {
         throw_type_error(ctx, "Method called on incompatible receiver");
         return JSValue::undefined();
@@ -3023,7 +3023,7 @@ mod tests {
     fn assert_tracked_after_gc(ctx: &mut JSContext, value: JSValue) {
         assert!(value.is_object());
         let ptr = value.get_ptr();
-        let slot = value.as_object().gc_slot as usize;
+        let slot = value.try_as_object().expect("object value").gc_slot as usize;
         ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
         let mut vm = crate::runtime::vm::VM::new();
         vm.run_gc(ctx);
@@ -3045,12 +3045,12 @@ mod tests {
 
         let typed_array = crate::eval(&mut ctx, "new Uint8Array(8)").unwrap();
         ctx.runtime_mut().gc_heap_mut().extra_roots.push(typed_array);
-        let buffer = typed_array.as_object().get(ctx.intern("buffer")).unwrap();
+        let buffer = typed_array.try_as_object().expect("object value").get(ctx.intern("buffer")).unwrap();
         assert_tracked_after_gc(&mut ctx, buffer);
 
         let view = crate::eval(&mut ctx, "new DataView(new ArrayBuffer(8))").unwrap();
         ctx.runtime_mut().gc_heap_mut().extra_roots.push(view);
-        let buffer = view.as_object().get(ctx.intern("buffer")).unwrap();
+        let buffer = view.try_as_object().expect("object value").get(ctx.intern("buffer")).unwrap();
         assert_tracked_after_gc(&mut ctx, buffer);
     }
 }

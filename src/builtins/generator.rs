@@ -641,7 +641,7 @@ fn make_type_error(ctx: &mut JSContext, message: &str) -> JSValue {
 
 fn async_generator_validate(ctx: &mut JSContext, this: JSValue) -> Option<JSValue> {
     if this.is_object() {
-        if this.as_object().get_async_generator_state().is_some() {
+        if this.try_as_object().expect("object value").get_async_generator_state().is_some() {
             return None;
         }
     }
@@ -652,7 +652,7 @@ fn async_generator_is_done(this: JSValue) -> bool {
     if !this.is_object() {
         return true;
     }
-    this.as_object()
+    this.try_as_object().expect("object value")
         .get_async_state()
         .map(|state| state.done)
         .unwrap_or(true)
@@ -662,7 +662,7 @@ fn async_generator_is_started(this: JSValue) -> bool {
     if !this.is_object() {
         return false;
     }
-    this.as_object()
+    this.try_as_object().expect("object value")
         .get_async_generator_state()
         .map(|state| state.started)
         .unwrap_or(false)

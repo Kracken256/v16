@@ -1057,7 +1057,7 @@ impl VM {
             return false;
         }
         let sym_atom = crate::runtime::atom::Atom(0x40000000 | sym_iter.get_symbol_id());
-        let arr_obj = arr.as_object();
+        let arr_obj = arr.try_as_object().expect("object value");
         match arr_obj.get(sym_atom) {
             Some(v) => v.is_function() && v.get_ptr() == default_ptr,
             None => false,
@@ -1105,7 +1105,7 @@ impl VM {
         if !iter_val.is_object_like() {
             return None;
         }
-        let record = iter_val.as_object();
+        let record = iter_val.try_as_object().expect("object value");
         let iter_obj = record.get(ctx.common_atoms.__iter_obj__)?;
         let next = record
             .get(ctx.common_atoms.__iter_next__)
@@ -1146,7 +1146,7 @@ impl VM {
             return Ok(self.create_iter_object(ctx, iterable));
         }
         if iterable.is_object_like() && !is_async {
-            let is_dense = iterable.is_object() && iterable.as_object().is_dense_array();
+            let is_dense = iterable.is_object() && iterable.try_as_object().expect("object value").is_dense_array();
             if is_dense && self.array_uses_default_iterator(ctx, iterable) {
                 return Ok(self.create_iter_object(ctx, iterable));
             }
@@ -1313,19 +1313,19 @@ impl VM {
         frame.with_env = function_ptr
             .map(|ptr| {
                 let func_val = JSValue::new_function(ptr);
-                func_val.as_function().with_env.clone()
+                func_val.try_as_function().expect("function value").with_env.clone()
             })
             .flatten();
         frame.param_env = function_ptr
             .map(|ptr| {
                 let func_val = JSValue::new_function(ptr);
-                func_val.as_function().param_env
+                func_val.try_as_function().expect("function value").param_env
             })
             .unwrap_or(JSValue::undefined());
         frame.param_env_own = false;
         frame.ic_table = function_ptr.and_then(|fptr| {
             let js_func = JSValue::new_function(fptr);
-            let js_func = js_func.as_function();
+            let js_func = js_func.try_as_function().expect("function value");
             js_func
                 .bytecode
                 .as_ref()
@@ -1343,7 +1343,7 @@ impl VM {
         frame.is_async = is_async;
         if let Some(fptr) = function_ptr {
             let func = JSValue::new_function(fptr);
-            let func = func.as_function();
+            let func = func.try_as_function().expect("function value");
             frame.is_strict_frame = func.is_strict();
             frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
         } else {
@@ -1436,13 +1436,13 @@ impl VM {
         frame.with_env = function_ptr
             .map(|ptr| {
                 let func_val = JSValue::new_function(ptr);
-                func_val.as_function().with_env.clone()
+                func_val.try_as_function().expect("function value").with_env.clone()
             })
             .flatten();
         frame.param_env = function_ptr
             .map(|ptr| {
                 let func_val = JSValue::new_function(ptr);
-                func_val.as_function().param_env
+                func_val.try_as_function().expect("function value").param_env
             })
             .unwrap_or(JSValue::undefined());
         frame.param_env_own = false;
@@ -1459,7 +1459,7 @@ impl VM {
         frame.is_async = is_async;
         if let Some(fptr) = function_ptr {
             let func = JSValue::new_function(fptr);
-            let func = func.as_function();
+            let func = func.try_as_function().expect("function value");
             frame.is_strict_frame = func.is_strict();
             frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
         } else {
@@ -1524,7 +1524,7 @@ impl VM {
         atom: crate::runtime::atom::Atom,
     ) -> Option<JSValue> {
         while env.is_object() {
-            let obj = env.as_object();
+            let obj = env.try_as_object().expect("object value");
             if let Some(value) = obj.get_own(atom) {
                 return Some(value);
             }
@@ -1543,11 +1543,11 @@ impl VM {
         value: JSValue,
     ) -> bool {
         while env.is_object() {
-            if env.as_object().get_own(atom).is_some() {
+            if env.try_as_object().expect("object value").get_own(atom).is_some() {
                 env.as_object_mut().set_cached(atom, value, ctx.shape_cache_mut());
                 return true;
             }
-            match env.as_object().prototype {
+            match env.try_as_object().expect("object value").prototype {
                 Some(ptr) => env = JSValue::new_object(ptr),
                 None => break,
             }
@@ -1656,7 +1656,7 @@ impl VM {
     fn frame_realm_global(&self, ctx: &JSContext) -> JSValue {
         if let Some(fptr) = self.frames[self.frame_index].function_ptr {
             let func = JSValue::new_function(fptr);
-            let func = func.as_function();
+            let func = func.try_as_function().expect("function value");
             if func.realm_global.is_object_like() {
                 let current = ctx.global();
                 if !current.is_object_like() || current.raw_bits() != func.realm_global.raw_bits() {
@@ -1708,7 +1708,7 @@ impl VM {
                 let frame = &vm.frames[fi];
                 if let Some(fptr) = frame.function_ptr {
                     let func = JSValue::new_function(fptr);
-                    let func = func.as_function();
+                    let func = func.try_as_function().expect("function value");
                     if let Some(uv) = func.upvalues.as_ref() {
                         if let Some(cell) = uv.upvalue_cells.get(&name) {
                             let value = cell.get();
@@ -1719,7 +1719,7 @@ impl VM {
                     }
                     let home = func.home_object;
                     if home.is_object_like() {
-                        let home_obj = home.as_object();
+                        let home_obj = home.try_as_object().expect("object value");
                         let owner_ptr = home.get_ptr();
                         if home_obj.has_private_kind(owner_ptr, name)
                             || home_obj.has_private_method(owner_ptr, name)
@@ -1732,7 +1732,7 @@ impl VM {
                         let proto_ptr = func.cached_prototype_ptr;
                         if !proto_ptr.is_null() {
                             let proto_obj = JSValue::new_object(proto_ptr);
-                            let proto_obj = proto_obj.as_object();
+                            let proto_obj = proto_obj.try_as_object().expect("object value");
                             if proto_obj.has_private_kind(proto_ptr, name)
                                 || proto_obj.has_private_method(proto_ptr, name)
                                 || proto_obj.has_private_field(proto_ptr, name)
@@ -1853,7 +1853,7 @@ impl VM {
                 let global = ctx.global();
                 if global.is_object() {
                     let exists = global
-                        .as_object()
+                        .try_as_object().expect("object value")
                         .has_own(crate::runtime::atom::Atom(name_atom));
                     if !exists && caller_self_strict {
                         return CallerVarSet::NotFound;
@@ -1934,7 +1934,7 @@ impl VM {
             if fi == 0 {
                 let global = ctx.global();
                 if global.is_object() {
-                    if global.as_object().get_own(crate::runtime::atom::Atom(name_atom)).is_none()
+                    if global.try_as_object().expect("object value").get_own(crate::runtime::atom::Atom(name_atom)).is_none()
                     {
                         global.as_object_mut().set_cached(
                             crate::runtime::atom::Atom(name_atom),
@@ -2009,7 +2009,7 @@ impl VM {
         if func_val.is_function() {
             let ptr = func_val.get_function_ptr();
             let js_func = JSValue::new_function(ptr);
-            let js_func = js_func.as_function();
+            let js_func = js_func.try_as_function().expect("function value");
             if js_func.is_class_constructor && !is_call_new && !is_super_call {
                 self.set_pending_type_error(
                     ctx,
@@ -2158,7 +2158,7 @@ impl VM {
                 }
                 if !js_func.home_object.is_undefined() {
                     if js_func.home_object.is_object_like() {
-                        let home = js_func.home_object.as_object();
+                        let home = js_func.home_object.try_as_object().expect("object value");
                         let base = home
                             .prototype
                             .map(|p| JSValue::new_object(p))
@@ -2169,7 +2169,7 @@ impl VM {
                     let sc = self.frames[self.frame_index].super_ctor;
                     if sc.is_object_like() {
                         let base = sc
-                            .as_object()
+                            .try_as_object().expect("object value")
                             .get(ctx.common_atoms.prototype)
                             .unwrap_or(JSValue::undefined());
                         self.frames[self.frame_index].super_base = base;
@@ -2285,7 +2285,7 @@ impl VM {
                 }
                 if is_call_new && result.is_function() {
                     let proto_key = ctx.common_atoms.prototype;
-                    if let Some(proto_val) = func_val.as_object().get(proto_key) {
+                    if let Some(proto_val) = func_val.try_as_object().expect("object value").get(proto_key) {
                         if proto_val.is_object_like() {
                             result.as_function_mut().base.prototype = Some(
                                 proto_val.get_ptr(),
@@ -2303,16 +2303,16 @@ impl VM {
                 Ok(false)
             }
         } else if func_val.is_object() && is_call_new {
-            let obj = func_val.as_object();
+            let obj = func_val.try_as_object().expect("object value");
             if let Some(bound_fn) = obj.get(ctx.common_atoms.__boundFn) {
                 let bound_args_val = obj.get(ctx.common_atoms.__boundArgs).filter(|v| v.is_object());
                 let bound_len = bound_args_val
-                    .and_then(|v| v.as_object().get(ctx.common_atoms.length))
+                    .and_then(|v| v.try_as_object().expect("object value").get(ctx.common_atoms.length))
                     .map(|v| v.get_int() as usize)
                     .unwrap_or(0);
                 let mut actual_args = Vec::with_capacity(bound_len + argc as usize);
                 if let Some(ref bound_args_val) = bound_args_val {
-                    let bound_args_obj = bound_args_val.as_object();
+                    let bound_args_obj = bound_args_val.try_as_object().expect("object value");
                     for i in 0..bound_len {
                         let key = self.int_atom(i, ctx);
                         if let Some(arg_val) = bound_args_obj.get(key) {
@@ -2333,7 +2333,7 @@ impl VM {
                 }
                 let mut new_obj = crate::object::object::JSObject::new();
                 if bound_fn.is_function() {
-                    let target_func = bound_fn.as_function();
+                    let target_func = bound_fn.try_as_function().expect("function value");
                     let proto_atom = ctx.common_atoms.prototype;
                     if let Some(proto_val) = target_func.base.get(proto_atom) {
                         if proto_val.is_object_like() {
@@ -2571,7 +2571,7 @@ impl VM {
             return JSValue::undefined();
         };
         let func_val = JSValue::new_function(fptr);
-        let func = func_val.as_function();
+        let func = func_val.try_as_function().expect("function value");
         match func
             .upvalues
             .as_ref()
@@ -2588,7 +2588,7 @@ impl VM {
             return;
         };
         let func_val = JSValue::new_function(fptr);
-        let func = func_val.as_function();
+        let func = func_val.try_as_function().expect("function value");
         if let Some(cell) = func
             .upvalues
             .as_ref()
@@ -2602,7 +2602,7 @@ impl VM {
     fn upvalue_atom(&self, slot: usize) -> Option<crate::runtime::atom::Atom> {
         let fptr = self.frames[self.frame_index].function_ptr?;
         let func_val = JSValue::new_function(fptr);
-        let func = func_val.as_function();
+        let func = func_val.try_as_function().expect("function value");
         func.upvalues
             .as_ref()?
             .upvalue_slot_atoms
@@ -2616,7 +2616,7 @@ impl VM {
             let frame = &self.frames[fi];
             let func_name = if let Some(fptr) = frame.function_ptr {
                 let func_val = JSValue::new_function(fptr);
-                let js_func = func_val.as_function();
+                let js_func = func_val.try_as_function().expect("function value");
                 ctx.get_atom_str(js_func.name).to_string()
             } else {
                 "<top-level>".to_string()
@@ -2624,7 +2624,7 @@ impl VM {
             let mut location = crate::compiler::location::SourceLocation::unknown();
             if let Some(fptr) = frame.function_ptr {
                 let func_val = JSValue::new_function(fptr);
-                let js_func = func_val.as_function();
+                let js_func = func_val.try_as_function().expect("function value");
                 location.filename = js_func.source_filename.clone();
                 if let Some(ref table) = js_func.line_number_table {
                     if let Some(line) = table.lookup_line(frame.current_pc as u32) {
@@ -2657,14 +2657,14 @@ impl VM {
         let frame = &self.frames[self.frame_index];
         if let Some(fptr) = frame.function_ptr {
             let func = JSValue::new_function(fptr);
-            let func = func.as_function();
+            let func = func.try_as_function().expect("function value");
             if !func.is_arrow() && func.is_derived_constructor {
                 return func
                     .base
                     .prototype
                     .map(|proto| {
                         let proto_obj = JSValue::new_object(proto);
-                        let proto_obj = proto_obj.as_object();
+                        let proto_obj = proto_obj.try_as_object().expect("object value");
                         if proto_obj.is_function_object {
                             JSValue::new_function(proto.cast())
                         } else {
@@ -2680,7 +2680,7 @@ impl VM {
     fn private_elements_owner_fn(frame: &CallFrame) -> Option<*mut crate::object::function::JSFunction> {
         let fptr = frame.function_ptr?;
         let func = JSValue::new_function(fptr);
-        let func = func.as_function();
+        let func = func.try_as_function().expect("function value");
         let has_elements = func.has_private_elements || !func.instance_fields.is_empty();
         if func.is_arrow() {
             if ! func.arrow_enclosing_ctor_ptr.is_null() {
@@ -2700,7 +2700,7 @@ impl VM {
             return;
         }
         let func = JSValue::new_function(func_ptr);
-        let func = func.as_function();
+        let func = func.try_as_function().expect("function value");
         if func.has_private_elements || !func.instance_fields.is_empty() {
             self.pending_instance_elements = Some((this_val, func_ptr));
         }
@@ -2718,7 +2718,7 @@ impl VM {
         }
         let (has_private_elements, owner, field_count) = {
             let func = JSValue::new_function(func_ptr);
-            let func = func.as_function();
+            let func = func.try_as_function().expect("function value");
             (
                 func.has_private_elements,
                 func.cached_prototype_ptr,
@@ -2726,7 +2726,7 @@ impl VM {
             )
         };
         if has_private_elements && !owner.is_null() {
-            let obj = this_val.as_object();
+            let obj = this_val.try_as_object().expect("object value");
             if obj.has_private_brand(owner) {
                 self.set_pending_type_error(
                     ctx,
@@ -2743,7 +2743,7 @@ impl VM {
         for i in 0..field_count {
             let (key, private_owner, private_name, initializer) = {
                 let func = JSValue::new_function(func_ptr);
-                let func = func.as_function();
+                let func = func.try_as_function().expect("function value");
                 let field = &func.instance_fields[i];
                 (
                     field.key,
@@ -2775,7 +2775,7 @@ impl VM {
                         crate::object::object::PrivateKind::Field,
                     );
                 }
-            } else if this_val.is_object() && this_val.as_object().is_proxy() {
+            } else if this_val.is_object() && this_val.try_as_object().expect("object value").is_proxy() {
                 let desc = crate::object::object::PropertyDescriptor {
                     value: Some(value),
                     writable: true,
@@ -2892,7 +2892,7 @@ impl VM {
         self.frames[self.frame_index].this_initialized = true;
         if result.is_object_like() {
             if this_val.is_object_like() {
-                let proto = this_val.as_object().prototype;
+                let proto = this_val.try_as_object().expect("object value").prototype;
                 if let Some(proto_ptr) = proto {
                     result.as_object_mut().prototype = Some(proto_ptr);
                 }
@@ -2954,7 +2954,7 @@ impl VM {
         let mut proto = ctx.get_type_error_prototype();
         if let Some(fptr) = self.frames[self.frame_index].function_ptr {
             let func = JSValue::new_function(fptr);
-            let func = func.as_function();
+            let func = func.try_as_function().expect("function value");
             let current = ctx as *mut JSContext;
             if !func.realm_context.is_null() && func.realm_context != current {
                 if let Some(realm_proto) =
@@ -2996,7 +2996,7 @@ impl VM {
     }
 
     fn is_bound_function_value(&self, ctx: &JSContext, value: JSValue) -> bool {
-        value.is_object() && value.as_object().get_own(ctx.common_atoms.__boundFn).is_some()
+        value.is_object() && value.try_as_object().expect("object value").get_own(ctx.common_atoms.__boundFn).is_some()
     }
 
     fn is_callable_value(&self, ctx: &JSContext, value: JSValue) -> bool {
@@ -3004,7 +3004,7 @@ impl VM {
             return true;
         }
         if value.is_object() {
-            let obj = value.as_object();
+            let obj = value.try_as_object().expect("object value");
             if obj.is_proxy() {
                 return obj.proxy_callable();
             }
@@ -3039,7 +3039,7 @@ impl VM {
         if !obj_val.is_object() && !obj_val.is_function() {
             return None;
         }
-        let mut current = Some(obj_val.as_object());
+        let mut current = Some(obj_val.try_as_object().expect("object value"));
         let mut depth = 0u32;
         while let Some(pobj) = current {
             if depth > 1000 {
@@ -3077,7 +3077,7 @@ impl VM {
         }
         if self.is_bound_function_value(ctx, ctor_val) {
             let bound_fn = ctor_val
-                .as_object()
+                .try_as_object().expect("object value")
                 .get_own(ctx.common_atoms.__boundFn)
                 .unwrap_or_else(JSValue::undefined);
             return self.instanceof_operator(ctx, bound_fn, obj_val);
@@ -3103,7 +3103,7 @@ impl VM {
             return None;
         }
         let proto_ptr = proto_val.get_ptr();
-        let mut current = obj_val.as_object().prototype_object();
+        let mut current = obj_val.try_as_object().expect("object value").prototype_object();
         let mut depth = 0u32;
         while let Some(p) = current {
             if std::ptr::eq( p, proto_ptr) {
@@ -3199,7 +3199,7 @@ impl VM {
                 .take()
                 .unwrap_or_else(JSValue::undefined));
         }
-        let is_proxy = with_value.is_object() && with_value.as_object().is_proxy();
+        let is_proxy = with_value.is_object() && with_value.try_as_object().expect("object value").is_proxy();
         let mut keys: Vec<crate::runtime::atom::Atom> = Vec::new();
         if is_proxy {
             let own_keys = match self.proxy_own_keys(ctx, with_value) {
@@ -3323,7 +3323,7 @@ impl VM {
         }
         if kind == 0 {
             let arr_atom = ctx.common_atoms.__iter_arr__;
-            let has_fast_path = iter_val.as_object().get(arr_atom).is_some();
+            let has_fast_path = iter_val.try_as_object().expect("object value").get(arr_atom).is_some();
             if has_fast_path {
                 match self.op_iterator_next(
                     ctx,
@@ -3993,7 +3993,7 @@ impl VM {
             }
             let stack_val = self.get_reg(stack_reg);
             let count = if stack_val.is_object_like() {
-                match stack_val.as_object().as_dense_array() {
+                match stack_val.try_as_object().expect("object value").as_dense_array() {
                     Some(arr) => (arr.len() / 3) as i64,
                     None => 0,
                 }
@@ -4022,7 +4022,7 @@ impl VM {
             self.set_reg(index_reg, JSValue::new_int(idx - 1));
             let (value, method, kind) = {
                 let stack_val = self.get_reg(stack_reg);
-                let arr = stack_val.as_object().as_dense_array();
+                let arr = stack_val.try_as_object().expect("object value").as_dense_array();
                 let base = (idx as usize) * 3;
                 let value = arr.and_then(|a| a.get(base)).unwrap_or_else(JSValue::undefined);
                 let method = arr
@@ -4423,7 +4423,7 @@ impl VM {
 
     fn value_is_constructor(ctx: &JSContext, value: JSValue) -> bool {
         if value.is_function() {
-            let f = value.as_function();
+            let f = value.try_as_function().expect("function value");
             if f.is_builtin() {
                 let name = f
                     .builtin_atom
@@ -4434,7 +4434,7 @@ impl VM {
                 !f.is_arrow() && !f.is_async() && !f.is_generator() && !f.is_method
             }
         } else if value.is_object() {
-            let obj = value.as_object();
+            let obj = value.try_as_object().expect("object value");
             if obj.is_proxy() {
                 return obj.proxy_constructable();
             }
@@ -4474,7 +4474,7 @@ impl VM {
     fn frame_is_derived_constructor(frame: &CallFrame) -> bool {
         frame.function_ptr.map_or(false, |fptr| {
             let func_val = JSValue::new_function(fptr);
-            func_val.as_function().is_derived_constructor
+            func_val.try_as_function().expect("function value").is_derived_constructor
         })
     }
 
@@ -4751,7 +4751,7 @@ impl VM {
             return "undefined".to_string();
         }
         if value.is_object() {
-            let obj = value.as_object();
+            let obj = value.try_as_object().expect("object value");
             let name = obj.get(ctx.common_atoms.name).and_then(|v| {
                 if v.is_string() {
                     Some(ctx.get_atom_str(v.get_atom()).to_string())
@@ -4762,7 +4762,7 @@ impl VM {
             let name = name.or_else(|| {
                 obj.get(ctx.common_atoms.constructor).and_then(|ctor| {
                     if ctor.is_function() {
-                        let func = ctor.as_function();
+                        let func = ctor.try_as_function().expect("function value");
                         let name = ctx.get_atom_str(func.name);
                         if name.is_empty() {
                             None
@@ -4770,7 +4770,7 @@ impl VM {
                             Some(name.to_string())
                         }
                     } else if ctor.is_object() {
-                        let ctor_obj = ctor.as_object();
+                        let ctor_obj = ctor.try_as_object().expect("object value");
                         ctor_obj.get(ctx.common_atoms.name).and_then(|v| {
                             if v.is_string() {
                                 Some(ctx.get_atom_str(v.get_atom()).to_string())
@@ -5065,7 +5065,7 @@ impl VM {
             return Err("not a constructor".to_string());
         }
 
-        let js_func = ctor.as_function();
+        let js_func = ctor.try_as_function().expect("function value");
 
         let mut new_obj = crate::object::object::JSObject::new();
 
@@ -5126,7 +5126,7 @@ impl VM {
             return Err("not a constructor".to_string());
         }
         self.pending_new_target = Some(new_target);
-        let js_func = ctor.as_function();
+        let js_func = ctor.try_as_function().expect("function value");
         if js_func.is_class_constructor && !js_func.is_derived_constructor {
             self.mark_instance_elements_pending(this_obj, ctor.get_function_ptr());
         }
@@ -5170,9 +5170,9 @@ impl VM {
         }
 
         if func.is_object() {
-            let obj = func.as_object();
+            let obj = func.try_as_object().expect("object value");
             if let Some(bound_fn) = obj.get(ctx.common_atoms.__boundFn) {
-                if bound_fn.is_function() && bound_fn.as_function().is_class_constructor {
+                if bound_fn.is_function() && bound_fn.try_as_function().expect("function value").is_class_constructor {
                     let msg = "Class constructor cannot be invoked without 'new'".to_string();
                     self.set_pending_type_error(ctx, &msg);
                     self.last_caught_exception = self.pending_throw.take();
@@ -5184,13 +5184,13 @@ impl VM {
                     .filter(|val| val.is_object());
 
                 let bound_len = bound_args_val
-                    .and_then(|v| v.as_object().get(ctx.common_atoms.length))
+                    .and_then(|v| v.try_as_object().expect("object value").get(ctx.common_atoms.length))
                     .map(|v| v.get_int() as usize)
                     .unwrap_or(0);
 
                 let mut actual_args = Vec::with_capacity(bound_len.saturating_add(args.len()));
                 if let Some(bound_args_val) = bound_args_val {
-                    let bound_args_obj = bound_args_val.as_object();
+                    let bound_args_obj = bound_args_val.try_as_object().expect("object value");
                     for i in 0..bound_len {
                         let key = self.int_atom(i, ctx);
                         if let Some(arg_val) = bound_args_obj.get(key) {
@@ -5214,7 +5214,7 @@ impl VM {
             return Err(msg);
         }
 
-        if !constructing && func.as_function().is_class_constructor {
+        if !constructing && func.try_as_function().expect("function value").is_class_constructor {
             let msg = "Class constructor cannot be invoked without 'new'".to_string();
             self.set_pending_type_error(ctx, &msg);
             self.last_caught_exception = self.pending_throw.take();
@@ -5222,7 +5222,7 @@ impl VM {
         }
 
         let ptr = func.get_function_ptr();
-        let js_func = func.as_function();
+        let js_func = func.try_as_function().expect("function value");
 
         if js_func.is_builtin() {
             let builtin_name = js_func
@@ -5257,7 +5257,7 @@ impl VM {
                     let msg = if exc.is_string() {
                         ctx.get_atom_str(exc.get_atom()).to_string()
                     } else if exc.is_object() {
-                        let obj = exc.as_object();
+                        let obj = exc.try_as_object().expect("object value");
                         let m = obj.get(ctx.common_atoms.message);
                         let n = obj.get(ctx.intern("name"));
                         match (n, m) {
@@ -5285,7 +5285,7 @@ impl VM {
                     let msg = if exc.is_string() {
                         ctx.get_atom_str(exc.get_atom()).to_string()
                     } else if exc.is_object() {
-                        let obj = exc.as_object();
+                        let obj = exc.try_as_object().expect("object value");
                         let m = obj.get(ctx.common_atoms.message);
                         let n = obj.get(ctx.intern("name"));
                         match (n, m) {
@@ -5522,7 +5522,7 @@ impl VM {
                     self.mark_instance_elements_pending(fn_this, ptr);
                 }
                 if !js_func.home_object.is_undefined() && js_func.home_object.is_object_like() {
-                    let home = js_func.home_object.as_object();
+                    let home = js_func.home_object.try_as_object().expect("object value");
                     let base = home
                         .prototype
                         .map(|p| JSValue::new_object(p))
@@ -5754,7 +5754,7 @@ impl VM {
             let mut allow_call = false;
             if let Some(ptr) = frame.function_ptr {
                 let func = JSValue::new_function(ptr);
-                let func = func.as_function();
+                let func = func.try_as_function().expect("function value");
                 if !func.home_object.is_undefined() {
                     allow_property = true;
                 }
@@ -5784,7 +5784,7 @@ impl VM {
                 for fi in (0..=vm.frame_index).rev() {
                     if let Some(fptr) = vm.frames[fi].function_ptr {
                         let func = JSValue::new_function(fptr);
-                        let func = func.as_function();
+                        let func = func.try_as_function().expect("function value");
                         if !func.is_arrow() {
                             found = true;
                             break;
@@ -5806,10 +5806,10 @@ impl VM {
             let frame = &self.frames[fi];
             if let Some(ptr) = frame.function_ptr {
                 let func = JSValue::new_function(ptr);
-                let func = func.as_function();
+                let func = func.try_as_function().expect("function value");
                 if func.home_object.is_object_like() {
                     let owner = func.home_object.get_ptr();
-                    let obj = func.home_object.as_object();
+                    let obj = func.home_object.try_as_object().expect("object value");
                     obj.for_each_private_kind(|key, _| {
                         if key.owner == owner {
                             eval_private_names.push(key.name);
@@ -5830,7 +5830,7 @@ impl VM {
                     let proto_ptr = func.cached_prototype_ptr;
                     if !proto_ptr.is_null() {
                         let proto = JSValue::new_object(proto_ptr);
-                        let proto = proto.as_object();
+                        let proto = proto.try_as_object().expect("object value");
                         proto.for_each_private_kind(|key, _| {
                             if key.owner == proto_ptr {
                                 eval_private_names.push(key.name);
@@ -6103,7 +6103,7 @@ impl VM {
                 .function_ptr
                 .map(|ptr| {
                     let func_val = JSValue::new_function(ptr);
-                    func_val.as_function().with_env.clone()
+                    func_val.try_as_function().expect("function value").with_env.clone()
                 })
                 .flatten();
             let (frame_param_env, frame_param_env_own) = match self.pending_param_env.take() {
@@ -6113,7 +6113,7 @@ impl VM {
                         .function_ptr
                         .map(|ptr| {
                             let func_val = JSValue::new_function(ptr);
-                            func_val.as_function().param_env
+                            func_val.try_as_function().expect("function value").param_env
                         })
                         .unwrap_or(JSValue::undefined()),
                     false,
@@ -6155,7 +6155,7 @@ impl VM {
 
             if let Some(ptr) = self.frames[0].function_ptr {
                 let js_func = JSValue::new_function(ptr);
-                let js_func = js_func.as_function();
+                let js_func = js_func.try_as_function().expect("function value");
                 if js_func.is_arrow() {
                     self.frames[0].this_cell = js_func.arrow_this_cell.clone();
                     self.frames[0].super_ctor = js_func.arrow_super;
@@ -6179,7 +6179,7 @@ impl VM {
                     }
                     if !js_func.home_object.is_undefined() {
                         if js_func.home_object.is_object_like() {
-                            let home = js_func.home_object.as_object();
+                            let home = js_func.home_object.try_as_object().expect("object value");
                             let base = home
                                 .prototype
                                 .map(|p| JSValue::new_object(p))
@@ -6190,7 +6190,7 @@ impl VM {
                         let sc = self.frames[0].super_ctor;
                         if sc.is_object_like() {
                             let base = sc
-                                .as_object()
+                                .try_as_object().expect("object value")
                                 .get(ctx.common_atoms.prototype)
                                 .unwrap_or(JSValue::undefined());
                             self.frames[0].super_base = base;
@@ -6311,13 +6311,13 @@ impl VM {
                     if frame.is_constructor {
                         if let Some(fptr) = frame.function_ptr {
                             let func = JSValue::new_function(fptr);
-                            let func = func.as_function();
+                            let func = func.try_as_function().expect("function value");
                             if let Some(ref bc) = func.bytecode {
                                 if bc.is_simple_constructor
                                     && bc.cached_constructor_final_shape.is_none()
                                 {
                                     if ret.is_object() {
-                                        let obj = ret.as_object();
+                                        let obj = ret.try_as_object().expect("object value");
                                         if let Some(shape) = obj.get_shape() {
                                             let func_mut_val = JSValue::new_function(fptr);
                                             let func_mut = func_mut_val.as_function_mut();
@@ -6414,7 +6414,7 @@ impl VM {
                         return Ok(ExecutionOutcome::Yield(JSValue::undefined()));
                     }
                     if crate::builtins::promise::is_promise(&val) {
-                        let promise_obj = val.as_object();
+                        let promise_obj = val.try_as_object().expect("object value");
                         let state_atom = ctx.common_atoms.__promise_state__;
                         let result_atom = ctx.common_atoms.__promise_result__;
                         let state = promise_obj
@@ -7295,7 +7295,7 @@ impl VM {
                     } else if a.is_function() {
                         ca.typeof_function
                     } else if a.is_object() {
-                        let obj = a.as_object();
+                        let obj = a.try_as_object().expect("object value");
                         if obj.is_proxy() {
                             if obj.proxy_callable() {
                                 ca.typeof_function
@@ -7874,7 +7874,7 @@ impl VM {
                             let global = self.frame_realm_global(ctx);
                             let mut result = JSValue::undefined();
                             if global.is_object() {
-                                let global_obj = global.as_object();
+                                let global_obj = global.try_as_object().expect("object value");
 
                                 let global_shape_id = global_obj.shape_id_cache;
                                 let mut ic_hit = false;
@@ -7985,7 +7985,7 @@ impl VM {
                         if !caller_has_binding {
                             let global = self.frame_realm_global(ctx);
                             if global.is_object() {
-                                global_has_binding = global.as_object().has_property(atom);
+                                global_has_binding = global.try_as_object().expect("object value").has_property(atom);
                             }
                         }
                         if caller_has_binding {
@@ -8010,7 +8010,7 @@ impl VM {
                             if global.is_object() {
                                 let mut failure = false;
                                 if is_strict {
-                                    if let Some(desc) = global.as_object().get_own_descriptor(atom)
+                                    if let Some(desc) = global.try_as_object().expect("object value").get_own_descriptor(atom)
                                     {
                                         if !desc.writable
                                             && desc.get.is_none()
@@ -8077,7 +8077,7 @@ impl VM {
                             if self.eval_binding_frames == 0 && self.caller_vm.is_none() {
                                 let global = self.frame_realm_global(ctx);
                                 if global.is_object() {
-                                    found = global.as_object().get_own(atom).is_some();
+                                    found = global.try_as_object().expect("object value").get_own(atom).is_some();
                                 }
 
                                 if !found {
@@ -8103,7 +8103,7 @@ impl VM {
                                 if !found {
                                     let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
-                                        found = global.as_object().get_own(atom).is_some();
+                                        found = global.try_as_object().expect("object value").get_own(atom).is_some();
                                     }
                                 }
                             } else {
@@ -8113,7 +8113,7 @@ impl VM {
                                 if !found {
                                     let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
-                                        found = global.as_object().get_own(atom).is_some();
+                                        found = global.try_as_object().expect("object value").get_own(atom).is_some();
                                     }
                                 }
                             }
@@ -8146,7 +8146,7 @@ impl VM {
                         }
                         let global = self.frame_realm_global(ctx);
                         if global.is_object() {
-                            let global_obj_ref = global.as_object();
+                            let global_obj_ref = global.try_as_object().expect("object value");
                             if is_strict {
                                 if let Some(desc) = global_obj_ref.get_own_descriptor(atom) {
                                     if !desc.writable && desc.get.is_none() && desc.set.is_none() {
@@ -8258,7 +8258,7 @@ impl VM {
                             if self.eval_binding_frames == 0 && self.caller_vm.is_none() {
                                 let global = self.frame_realm_global(ctx);
                                 if global.is_object() {
-                                    found = global.as_object().get_own(atom).is_some();
+                                    found = global.try_as_object().expect("object value").get_own(atom).is_some();
                                 }
                                 if !found {
                                     if let Some(vnm) = self.frames[0].var_name_map.as_ref() {
@@ -8283,7 +8283,7 @@ impl VM {
                                 if !found {
                                     let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
-                                        found = global.as_object().get_own(atom).is_some();
+                                        found = global.try_as_object().expect("object value").get_own(atom).is_some();
                                     }
                                 }
                             } else {
@@ -8293,7 +8293,7 @@ impl VM {
                                 if !found {
                                     let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
-                                        found = global.as_object().get_own(atom).is_some();
+                                        found = global.try_as_object().expect("object value").get_own(atom).is_some();
                                     }
                                 }
                             }
@@ -8402,7 +8402,7 @@ impl VM {
                             if !conflict {
                                 let global = ctx.global();
                                 if global.is_object() {
-                                    if let Some(desc) = global.as_object().get_own_descriptor(atom) {
+                                    if let Some(desc) = global.try_as_object().expect("object value").get_own_descriptor(atom) {
                                         conflict = !desc.configurable;
                                     }
                                 }
@@ -8438,7 +8438,7 @@ impl VM {
                             let mut definable = false;
                             let global = ctx.global();
                             if global.is_object() {
-                                let global_obj = global.as_object();
+                                let global_obj = global.try_as_object().expect("object value");
                                 match global_obj.get_own_descriptor(atom) {
                                     None => definable = global_obj.extensible(),
                                     Some(desc) => {
@@ -8467,7 +8467,7 @@ impl VM {
                             let mut definable = false;
                             let global = ctx.global();
                             if global.is_object() {
-                                let global_obj = global.as_object();
+                                let global_obj = global.try_as_object().expect("object value");
                                 definable = global_obj.has_own(atom) || global_obj.extensible();
                             }
                             if !definable {
@@ -8697,7 +8697,7 @@ impl VM {
                                 let mut definable = false;
                                 let global = ctx.global();
                                 if global.is_object() {
-                                    let global_obj = global.as_object();
+                                    let global_obj = global.try_as_object().expect("object value");
                                     match global_obj.get_own_descriptor(atom) {
                                         None => definable = global_obj.extensible(),
                                         Some(desc) => {
@@ -8728,7 +8728,7 @@ impl VM {
                                 let mut definable = false;
                                 let global = ctx.global();
                                 if global.is_object() {
-                                    let global_obj = global.as_object();
+                                    let global_obj = global.try_as_object().expect("object value");
                                     definable =
                                         global_obj.has_own(atom) || global_obj.extensible();
                                 }
@@ -8959,7 +8959,7 @@ impl VM {
                         self.set_reg(key_reg, key_val);
                     }
                     let result = if obj_val.is_object_like() && key_val.is_int() {
-                        let js_obj = obj_val.as_object();
+                        let js_obj = obj_val.try_as_object().expect("object value");
                         if js_obj.is_dense_array() {
                             let idx = key_val.get_int() as usize;
                             let index_atom = self.int_atom(idx, ctx);
@@ -9053,7 +9053,7 @@ impl VM {
                             }
                         } else if let Some(proto_ptr) = ctx.get_string_prototype() {
                             let proto_val = JSValue::new_object(proto_ptr);
-                            let proto_obj = proto_val.as_object();
+                            let proto_obj = proto_val.try_as_object().expect("object value");
                             proto_obj
                                 .get(key_val.get_atom())
                                 .unwrap_or(JSValue::undefined())
@@ -9061,7 +9061,7 @@ impl VM {
                             JSValue::undefined()
                         }
                     } else if obj_val.is_object_like() && key_val.is_string() {
-                        let js_obj = obj_val.as_object();
+                        let js_obj = obj_val.try_as_object().expect("object value");
                         let atom = key_val.get_atom();
 
                         if let Some(getter) = js_obj.get_own_accessor_value(atom) {
@@ -9146,7 +9146,7 @@ impl VM {
                     } else if obj_val.is_symbol() && key_val.is_string() {
                         if let Some(proto_ptr) = ctx.get_symbol_prototype() {
                             let proto_val = JSValue::new_object(proto_ptr);
-                            let proto_obj = proto_val.as_object();
+                            let proto_obj = proto_val.try_as_object().expect("object value");
                             let atom = key_val.get_atom();
                             if let Some(getter) = proto_obj.get_own_accessor_value(atom) {
                                 if getter.is_function() {
@@ -9166,7 +9166,7 @@ impl VM {
                     } else if obj_val.is_symbol() && key_val.is_symbol() {
                         if let Some(proto_ptr) = ctx.get_symbol_prototype() {
                             let proto_val = JSValue::new_object(proto_ptr);
-                            let proto_obj = proto_val.as_object();
+                            let proto_obj = proto_val.try_as_object().expect("object value");
                             let sym_key =
                                 crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
                             proto_obj.get(sym_key).unwrap_or(JSValue::undefined())
@@ -9176,7 +9176,7 @@ impl VM {
                     } else if obj_val.is_bigint() && key_val.is_string() {
                         if let Some(proto_ptr) = ctx.get_bigint_prototype() {
                             let proto_val = JSValue::new_object(proto_ptr);
-                            let proto_obj = proto_val.as_object();
+                            let proto_obj = proto_val.try_as_object().expect("object value");
                             let atom = key_val.get_atom();
                             if let Some(getter) = proto_obj.get_own_accessor_value(atom) {
                                 if getter.is_function() {
@@ -9533,7 +9533,7 @@ impl VM {
                         let mut found = false;
                         while let Some(ptr) = current {
                             let pobj_val = JSValue::new_object(ptr);
-                            let pobj = pobj_val.as_object();
+                            let pobj = pobj_val.try_as_object().expect("object value");
                             if let Some(getter) = pobj.get_own_accessor_value(atom) {
                                 if getter.is_function() {
                                     let r = self
@@ -9572,7 +9572,7 @@ impl VM {
                         }
                     } else if key_val.is_symbol() {
                         if obj_val.is_object_like() {
-                            let js_obj = obj_val.as_object();
+                            let js_obj = obj_val.try_as_object().expect("object value");
                             let sym_key =
                                 crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
                             js_obj.get(sym_key).unwrap_or(JSValue::undefined())
@@ -9583,7 +9583,7 @@ impl VM {
                         if obj_val.is_object() {
                             let idx = key_val.get_int();
                             let js_obj_check =
-                                obj_val.as_object();
+                                obj_val.try_as_object().expect("object value");
 
                             if idx >= 0 {
                                 if let Some(val) = js_obj_check.get_indexed(idx as usize) {
@@ -10133,7 +10133,7 @@ impl VM {
                         }
                         continue;
                     }
-                    if obj_val.is_object() && obj_val.as_object().is_proxy() {
+                    if obj_val.is_object() && obj_val.try_as_object().expect("object value").is_proxy() {
                         let Some(key) = self.canonical_property_key_value(ctx, key_val) else {
                             if let Some(exc) = self.take_pending_exception(ctx) {
                                 match self.dispatch_throw_value(ctx, exc) {
@@ -10160,7 +10160,7 @@ impl VM {
                             }
                         continue;
                     }
-                    let js_obj = obj_val.as_object();
+                    let js_obj = obj_val.try_as_object().expect("object value");
                     let result = if key_val.is_string() {
                         let atom = key_val.get_atom();
                         js_obj.has_property(atom) || ctx.array_index_has_own(&obj_val, atom)
@@ -10204,13 +10204,13 @@ impl VM {
                     }
 
                     if ctor_val.is_function() {
-                        let js_func = ctor_val.as_function();
+                        let js_func = ctor_val.try_as_function().expect("function value");
                         let ctor_proto = js_func.cached_prototype_ptr;
                         if !ctor_proto.is_null()
                             && !js_func.has_symbol_on_base()
                             && (obj_val.is_object() || obj_val.is_function())
                         {
-                            let obj_proto = obj_val.as_object().prototype;
+                            let obj_proto = obj_val.try_as_object().expect("object value").prototype;
                             let obj_proto_key = obj_proto.unwrap_or(std::ptr::null_mut());
                             let ctor_ptr = ctor_val.get_ptr();
                             if self.instanceof_cache_ctor == ctor_ptr
@@ -10229,7 +10229,7 @@ impl VM {
                                     break;
                                 }
                                 let proto_val = JSValue::new_object(proto_ptr);
-                                proto_opt = proto_val.as_object().prototype;
+                                proto_opt = proto_val.try_as_object().expect("object value").prototype;
                                 limit += 1;
                                 if limit > 1000 {
                                     break;
@@ -10297,7 +10297,7 @@ impl VM {
                         );
 
                         if re_val.is_object() {
-                            if let Some(compiled) = re_val.as_object().get_compiled_regex() {
+                            if let Some(compiled) = re_val.try_as_object().expect("object value").get_compiled_regex() {
                                 self.regex_lit_cache.insert(cache_key, compiled.clone());
                             }
                         }
@@ -10320,10 +10320,10 @@ impl VM {
                     {
                         let atom = key_val.get_atom();
                         let owner_ptr = owner_val.get_ptr();
-                        let owner_obj = owner_val.as_object();
+                        let owner_obj = owner_val.try_as_object().expect("object value");
                         match owner_obj.get_private_kind(owner_ptr, atom) {
                             Some(crate::object::object::PrivateKind::Method) => {
-                                let js_obj = obj_val.as_object();
+                                let js_obj = obj_val.try_as_object().expect("object value");
                                 if !js_obj.has_private_brand(owner_ptr) {
                                     failed = true;
                                 } else {
@@ -10334,7 +10334,7 @@ impl VM {
                                 }
                             }
                             Some(crate::object::object::PrivateKind::Accessor) => {
-                                let js_obj = obj_val.as_object();
+                                let js_obj = obj_val.try_as_object().expect("object value");
                                 if !js_obj.has_private_brand(owner_ptr) {
                                     failed = true;
                                 } else {
@@ -10373,7 +10373,7 @@ impl VM {
                                 }
                             }
                             _ => {
-                                let js_obj = obj_val.as_object();
+                                let js_obj = obj_val.try_as_object().expect("object value");
                                 match js_obj.get_private_field(owner_ptr, atom) {
                                     Some(v) => result = v,
                                     None => failed = true,
@@ -10414,10 +10414,10 @@ impl VM {
                     {
                         let atom = key_val.get_atom();
                         let owner_ptr = owner_val.get_ptr();
-                        let owner_obj = owner_val.as_object();
+                        let owner_obj = owner_val.try_as_object().expect("object value");
                         match owner_obj.get_private_kind(owner_ptr, atom) {
                             Some(crate::object::object::PrivateKind::Accessor) => {
-                                let js_obj = obj_val.as_object();
+                                let js_obj = obj_val.try_as_object().expect("object value");
                                 if !js_obj.has_private_brand(owner_ptr) {
                                     failed = true;
                                 } else {
@@ -10635,7 +10635,7 @@ impl VM {
                             }
                             continue;
                         };
-                        if obj_val.is_object() && obj_val.as_object().is_proxy() {
+                        if obj_val.is_object() && obj_val.try_as_object().expect("object value").is_proxy() {
                             let desc = crate::object::object::PropertyDescriptor {
                                 value: Some(value),
                                 writable: true,
@@ -10676,7 +10676,7 @@ impl VM {
                             continue;
                         }
                         let mut failed = false;
-                        if !obj_val.as_object().extensible() {
+                        if !obj_val.try_as_object().expect("object value").extensible() {
                             failed = true;
                         } else {
                             let atom = if key_val.is_symbol() {
@@ -10685,7 +10685,7 @@ impl VM {
                                 key_val.get_atom()
                             };
                             if obj_val
-                                .as_object()
+                                .try_as_object().expect("object value")
                                 .get_own_descriptor(atom)
                                 .map_or(false, |d| !d.configurable)
                             {
@@ -10806,13 +10806,13 @@ impl VM {
                     let result = if key_val.is_string() && owner_val.is_object_like() {
                         let atom = key_val.get_atom();
                         let owner_ptr = owner_val.get_ptr();
-                        let owner_obj = owner_val.as_object();
+                        let owner_obj = owner_val.try_as_object().expect("object value");
                         match owner_obj.get_private_kind(owner_ptr, atom) {
                             Some(crate::object::object::PrivateKind::Method)
                             | Some(crate::object::object::PrivateKind::Accessor) => {
-                                obj_val.as_object().has_private_brand(owner_ptr)
+                                obj_val.try_as_object().expect("object value").has_private_brand(owner_ptr)
                             }
-                            _ => obj_val.as_object().has_private_field(owner_ptr, atom),
+                            _ => obj_val.try_as_object().expect("object value").has_private_field(owner_ptr, atom),
                         }
                     } else {
                         false
@@ -10879,7 +10879,7 @@ impl VM {
                     if dst_val.is_object() || dst_val.is_function() {
                         let mut excluded = std::collections::HashSet::new();
                         if keys_val.is_object() {
-                            let keys_obj = keys_val.as_object();
+                            let keys_obj = keys_val.try_as_object().expect("object value");
                             let dense_arr = keys_obj.as_dense_array();
                             let len = if let Some(arr) = dense_arr {
                                 arr.elements.len()
@@ -10980,7 +10980,7 @@ impl VM {
                             }
                         }
                         let js_obj = JSValue::new_object(ptr);
-                        let js_obj = js_obj.as_object();
+                        let js_obj = js_obj.try_as_object().expect("object value");
                         let mut int_keys: Vec<i64> = Vec::new();
                         let mut str_keys: Vec<crate::runtime::atom::Atom> = Vec::new();
                         // Handle dense array indices
@@ -11070,15 +11070,15 @@ impl VM {
                     let dst_val = self.get_reg(dst);
                     let src_val = self.get_reg(src);
                     if dst_val.is_object() && src_val.is_object() {
-                        let is_src_array = src_val.as_object().is_dense_array();
-                        let is_dst_array = dst_val.as_object().is_dense_array();
+                        let is_src_array = src_val.try_as_object().expect("object value").is_dense_array();
+                        let is_dst_array = dst_val.try_as_object().expect("object value").is_dense_array();
                         if is_src_array && is_dst_array {
                             let src_len = src_val
-                                .as_object()
+                                .try_as_object().expect("object value")
                                 .as_dense_array()
                                 .map_or(0, |a| a.elements.len());
                             for i in 0..src_len {
-                                let v = match src_val.as_object().as_dense_array() {
+                                let v = match src_val.try_as_object().expect("object value").as_dense_array() {
                                     Some(a) => a.elements[i],
                                     None => break,
                                 };
@@ -11093,7 +11093,7 @@ impl VM {
                                     .set(len_atom, JSValue::new_int(dst_arr.elements.len() as i64));
                             }
                         } else if is_dst_array {
-                            let src_obj = src_val.as_object();
+                            let src_obj = src_val.try_as_object().expect("object value");
                             if let Some(dst_arr) = dst_val.as_object_mut().as_dense_array_mut() {
                                 let len_atom = ctx.common_atoms.length;
                                 let arr_len = src_obj
@@ -11154,7 +11154,7 @@ impl VM {
                     let src_val = self.get_reg(src_reg);
                     if arr_val.is_object() && src_val.is_object() {
                         let src_values = src_val
-                            .as_object()
+                            .try_as_object().expect("object value")
                             .as_dense_array()
                             .map(|src| src.elements.clone())
                             .unwrap_or_default();
@@ -11630,7 +11630,7 @@ impl VM {
                     if let Some(env_val) = current {
                         let parent_atom = ctx.intern("\u{1}with_parent");
                         let env_obj =
-                            env_val.as_object();
+                            env_val.try_as_object().expect("object value");
                         let parent = env_obj.get_own(parent_atom);
                         self.frames[self.frame_index].with_env =
                             parent.filter(|p| p.is_object_like());
@@ -11804,7 +11804,7 @@ impl VM {
                     let value = self.get_reg(val_reg);
                     if object.is_object_like() {
                         let is_proxy =
-                            object.is_object() && object.as_object().is_proxy();
+                            object.is_object() && object.try_as_object().expect("object value").is_proxy();
                         match self.object_has_property_checked(ctx, object, atom) {
                             Some(true) => {
                                 self.set_named_prop(ctx, object, value, atom, usize::MAX);
@@ -12018,7 +12018,7 @@ impl VM {
                     if is_super_call
                         && func_val.is_function()
                         && func_val
-                            .as_function()
+                            .try_as_function().expect("function value")
                             .builtin_atom
                             .map(|ba| ctx.get_atom_str(ba) == "symbol_constructor")
                             .unwrap_or(false)
@@ -12055,7 +12055,7 @@ impl VM {
                             self.get_reg(func_reg)
                         };
                         if func_val.is_function() {
-                            let js_func = func_val.as_function();
+                            let js_func = func_val.try_as_function().expect("function value");
 
                             if !js_func.cached_prototype_ptr.is_null() {
                                 obj.prototype = Some(js_func.cached_prototype_ptr);
@@ -12132,7 +12132,7 @@ impl VM {
                             frame.is_constructor = true;
                             frame.new_target = caller_new_target;
                         } else {
-                            let is_builtin = func_val.is_function() && func_val.as_function().is_builtin();
+                            let is_builtin = func_val.is_function() && func_val.try_as_function().expect("function value").is_builtin();
                             if is_builtin {
                                 self.bind_super_call_builtin_result(dst);
                             } else {
@@ -12211,7 +12211,7 @@ impl VM {
                     let arr_val = self.get_reg(arr_reg);
                     let mut args = Vec::new();
                     if arr_val.is_object() {
-                        let arr = arr_val.as_object();
+                        let arr = arr_val.try_as_object().expect("object value");
                         let len_atom = ctx.common_atoms.length;
                         if let Some(dense) = arr.as_dense_array() {
                             for val in dense.elements.iter() {
@@ -12263,7 +12263,7 @@ impl VM {
                     if is_super_call
                         && func_val.is_function()
                         && func_val
-                            .as_function()
+                            .try_as_function().expect("function value")
                             .builtin_atom
                             .map(|ba| ctx.get_atom_str(ba) == "symbol_constructor")
                             .unwrap_or(false)
@@ -12292,7 +12292,7 @@ impl VM {
                             obj.prototype = Some(proto_ptr);
                         }
                         if func_val.is_function() {
-                            let js_func = func_val.as_function();
+                            let js_func = func_val.try_as_function().expect("function value");
 
                             if !js_func.cached_prototype_ptr.is_null() {
                                 obj.prototype = Some(js_func.cached_prototype_ptr);
@@ -12348,7 +12348,7 @@ impl VM {
 
                     if func_val.is_function() {
                         let ptr = func_val.get_function_ptr();
-                        let js_func = func_val.as_function();
+                        let js_func = func_val.try_as_function().expect("function value");
                         if js_func.is_class_constructor && !is_call_new && !is_super_call {
                             self.set_pending_type_error(
                                 ctx,
@@ -12556,7 +12556,7 @@ impl VM {
                     let cached: Option<std::sync::Arc<crate::compiler::opcode::NestedBytecode>> =
                         if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
                             let parent_func = JSValue::new_function(parent_ptr);
-                            let parent_func = parent_func.as_function();
+                            let parent_func = parent_func.try_as_function().expect("function value");
                             if let Some(bc) = parent_func.bytecode.as_ref() {
                                 // First check the instance's own nested_bytecodes
                                 let found = bc
@@ -12800,7 +12800,7 @@ impl VM {
                     if function_kind & 4 != 0 {
                         if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
                             let parent_func = JSValue::new_function(parent_ptr);
-                            let parent_func = parent_func.as_function();
+                            let parent_func = parent_func.try_as_function().expect("function value");
                             func.arrow_enclosing_ctor_ptr = if parent_func.is_arrow() {
                                 parent_func.arrow_enclosing_ctor_ptr
                             } else if parent_func.is_class_constructor
@@ -12906,7 +12906,7 @@ impl VM {
                         } else if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr
                         {
                             let parent_func = JSValue::new_function(parent_ptr);
-                            let parent_func = parent_func.as_function();
+                            let parent_func = parent_func.try_as_function().expect("function value");
 
                             if let Some(parent_cell) = parent_func
                                 .upvalues_ref()
@@ -12967,7 +12967,7 @@ impl VM {
                         func.realm_context = active_realm;
                     } else if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
                         let parent = JSValue::new_function(parent_ptr);
-                        let parent = parent.as_function();
+                        let parent = parent.try_as_function().expect("function value");
                         if !parent.realm_context.is_null() {
                             func.realm_context = parent.realm_context;
                         }
@@ -13104,7 +13104,7 @@ impl VM {
                     if !exists {
                         let global = self.frame_realm_global(ctx);
                         if global.is_object() {
-                            exists = global.as_object().get_own(atom).is_some();
+                            exists = global.try_as_object().expect("object value").get_own(atom).is_some();
                         }
                     }
                     if !exists {
@@ -13446,7 +13446,7 @@ impl VM {
                             match func_ptr {
                                 Some(ptr) => {
                                     let js_func = JSValue::new_function(ptr);
-                                    let js_func = js_func.as_function();
+                                    let js_func = js_func.try_as_function().expect("function value");
                                     if js_func
                                         .bytecode
                                         .as_ref()
@@ -13560,7 +13560,7 @@ impl VM {
                             let iter_fn = ctx
                                 .get_array_prototype()
                                 .map(|p| JSValue::new_object(p))
-                                .and_then(|proto_val| proto_val.as_object().get(sym_iter_atom));
+                                .and_then(|proto_val| proto_val.try_as_object().expect("object value").get(sym_iter_atom));
                             if let Some(f) = iter_fn {
                                 args_obj.define_property(
                                     sym_iter_atom,
@@ -13771,7 +13771,7 @@ impl VM {
         this_val: JSValue,
         args: &[JSValue],
     ) -> Result<Option<JSValue>, String> {
-        let js_func = func_val.as_function();
+        let js_func = func_val.try_as_function().expect("function value");
 
         let snapshot_this = if !js_func.is_strict() {
             boxed_sloppy_this(ctx, this_val)
@@ -14083,7 +14083,7 @@ impl VM {
             return Vec::new();
         }
 
-        let js_obj = src_val.as_object();
+        let js_obj = src_val.try_as_object().expect("object value");
         if let Some(array) = js_obj.as_dense_array() {
             for index in 0..array.elements.len() {
                 integer_keys.push((index as u64, ctx.int_atom_mut(index)));
@@ -14157,7 +14157,7 @@ impl VM {
         if src_val.is_null_or_undefined() {
             return Ok(());
         }
-        if src_val.is_object() && src_val.as_object().is_proxy() {
+        if src_val.is_object() && src_val.try_as_object().expect("object value").is_proxy() {
             let keys = self.proxy_own_keys(ctx, src_val)?;
             for key in keys {
                 let atom = self.key_value_to_atom(ctx, key);
@@ -14241,7 +14241,7 @@ impl VM {
                 };
                 while let Some(ptr) = current {
                     let proto_val = JSValue::new_object(ptr);
-                    let proto = proto_val.as_object();
+                    let proto = proto_val.try_as_object().expect("object value");
                     if let Some(entry) = proto.get_own_accessor_entry(atom) {
                         if let Some(getter) = entry.get {
                             if getter.is_function() {
@@ -14258,11 +14258,11 @@ impl VM {
             }
             return Ok(JSValue::undefined());
         }
-        if obj.is_object() && obj.as_object().is_proxy() {
+        if obj.is_object() && obj.try_as_object().expect("object value").is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             return self.proxy_get_internal(ctx, obj, key, obj);
         }
-        let js_obj = obj.as_object();
+        let js_obj = obj.try_as_object().expect("object value");
         if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
             if let Some(getter) = entry.get {
                 if getter.is_function() {
@@ -14370,7 +14370,7 @@ impl VM {
         ctx: &mut JSContext,
         proxy: JSValue,
     ) -> Result<(JSValue, JSValue), String> {
-        let obj = proxy.as_object();
+        let obj = proxy.try_as_object().expect("object value");
         match (obj.proxy_target(), obj.proxy_handler()) {
             (Some(target), Some(handler)) => Ok((target, handler)),
             _ => {
@@ -14458,7 +14458,7 @@ impl VM {
         let result = self.call_function_with_this(ctx, trap, handler, &args)?;
         let atom = self.key_value_to_atom(ctx, key);
         let target_desc = if target.is_object_like() {
-            target.as_object().get_own_descriptor(atom)
+            target.try_as_object().expect("object value").get_own_descriptor(atom)
         } else {
             None
         };
@@ -14488,11 +14488,11 @@ impl VM {
         if !target.is_object_like() {
             return Ok(JSValue::undefined());
         }
-        if target.is_object() && target.as_object().is_proxy() {
+        if target.is_object() && target.try_as_object().expect("object value").is_proxy() {
             return self.proxy_get_internal(ctx, target, key, receiver);
         }
         let atom = self.key_value_to_atom(ctx, key);
-        let js_obj = target.as_object();
+        let js_obj = target.try_as_object().expect("object value");
         if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
             if let Some(getter) = entry.get {
                 if getter.is_function() {
@@ -14562,7 +14562,7 @@ impl VM {
         }
         let atom = self.key_value_to_atom(ctx, key);
         let target_desc = if target.is_object_like() {
-            target.as_object().get_own_descriptor(atom)
+            target.try_as_object().expect("object value").get_own_descriptor(atom)
         } else {
             None
         };
@@ -14600,7 +14600,7 @@ impl VM {
         if !receiver.is_object_like() {
             return Ok(false);
         }
-        if receiver.is_object() && receiver.as_object().is_proxy() {
+        if receiver.is_object() && receiver.try_as_object().expect("object value").is_proxy() {
             match self.proxy_get_own_descriptor(ctx, receiver, key)? {
                 Some(existing) => {
                     let is_accessor = existing.get.is_some() || existing.set.is_some();
@@ -14611,7 +14611,7 @@ impl VM {
                 None => {
                     let (target, _handler) = self.proxy_resolve(ctx, receiver)?;
                     let extensible =
-                        target.is_object_like() && target.as_object().extensible();
+                        target.is_object_like() && target.try_as_object().expect("object value").extensible();
                     if !extensible {
                         return Ok(false);
                     }
@@ -14650,17 +14650,17 @@ impl VM {
         if !target.is_object_like() {
             return Ok(false);
         }
-        if target.is_object() && target.as_object().is_proxy() {
+        if target.is_object() && target.try_as_object().expect("object value").is_proxy() {
             return self.proxy_set_internal(ctx, target, key, value, receiver);
         }
         let atom = self.key_value_to_atom(ctx, key);
         let mut current = target;
         let mut depth = 0u32;
         while current.is_object_like() {
-            if current.is_object() && current.as_object().is_proxy() {
+            if current.is_object() && current.try_as_object().expect("object value").is_proxy() {
                 return self.proxy_set_internal(ctx, current, key, value, receiver);
             }
-            let obj = current.as_object();
+            let obj = current.try_as_object().expect("object value");
             if let Some(entry) = obj.get_own_accessor_entry(atom) {
                 if let Some(setter) = entry.set {
                     if setter.is_function() {
@@ -14712,7 +14712,7 @@ impl VM {
         obj_val: JSValue,
         key: JSValue,
     ) -> Result<Option<crate::object::object::PropertyDescriptor>, String> {
-        if obj_val.is_object() && obj_val.as_object().is_proxy() {
+        if obj_val.is_object() && obj_val.try_as_object().expect("object value").is_proxy() {
             return self.proxy_get_own_descriptor(ctx, obj_val, key);
         }
         if !obj_val.is_object_like() {
@@ -14746,7 +14746,7 @@ impl VM {
             return Ok(None);
         }
         let atom = self.key_value_to_atom(ctx, key);
-        let obj = obj_val.as_object();
+        let obj = obj_val.try_as_object().expect("object value");
         if let Some(array) = obj.as_dense_array() {
             if let Some(index) = ctx.atom_table().get_array_index(atom) {
                 if let Some(v) = array.elements.get(index).copied() {
@@ -14780,7 +14780,7 @@ impl VM {
         let trap_result = self.call_function_with_this(ctx, trap, handler, &args)?;
         let target_desc = self.ordinary_get_own_descriptor(ctx, target, key)?;
         let extensible_target =
-            target.is_object_like() && target.as_object().extensible();
+            target.is_object_like() && target.try_as_object().expect("object value").extensible();
         if trap_result.is_undefined() {
             if let Some(td) = &target_desc {
                 if !td.configurable {
@@ -14923,7 +14923,7 @@ impl VM {
         if !target.is_object_like() {
             return Ok(true);
         }
-        let tobj = target.as_object();
+        let tobj = target.try_as_object().expect("object value");
         let target_desc = tobj.get_own_descriptor(atom);
         let target_extensible = tobj.extensible();
         let Some(existing) = target_desc else {
@@ -14995,7 +14995,7 @@ impl VM {
         if !target.is_object_like() {
             return Ok(false);
         }
-        if target.is_object() && target.as_object().is_proxy() {
+        if target.is_object() && target.try_as_object().expect("object value").is_proxy() {
             return self.proxy_define_property_internal(ctx, target, key, desc);
         }
         let atom = self.key_value_to_atom(ctx, key);
@@ -15012,7 +15012,7 @@ impl VM {
         let trap_atom = ctx.intern("ownKeys");
         let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
         let Some(trap) = trap else {
-            let obj = target.as_object();
+            let obj = target.try_as_object().expect("object value");
             let mut keys: Vec<JSValue> = Vec::new();
             for atom in obj.keys() {
                 keys.push(self.atom_to_key_value(ctx, atom));
@@ -15061,8 +15061,8 @@ impl VM {
             }
             keys.push(key);
         }
-        if !target.as_object().extensible() {
-            let target_obj = target.as_object();
+        if !target.try_as_object().expect("object value").extensible() {
+            let target_obj = target.try_as_object().expect("object value");
             let mut target_keys: Vec<JSValue> = Vec::new();
             for atom in target_obj.keys() {
                 target_keys.push(self.atom_to_key_value(ctx, atom));
@@ -15092,10 +15092,10 @@ impl VM {
         let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
         let Some(trap) = trap else {
             let atom = self.key_value_to_atom(ctx, key);
-            if target.is_object() && target.as_object().is_proxy() {
+            if target.is_object() && target.try_as_object().expect("object value").is_proxy() {
                 return self.proxy_has_internal(ctx, target, key);
             }
-            return Ok(target.as_object().has_property(atom));
+            return Ok(target.try_as_object().expect("object value").has_property(atom));
         };
         let args = [target, key];
         let result = self.call_function_with_this(ctx, trap, handler, &args)?;
@@ -15103,7 +15103,7 @@ impl VM {
         if !trap_result {
             let atom = self.key_value_to_atom(ctx, key);
             if target.is_object_like() {
-                let tobj = target.as_object();
+                let tobj = target.try_as_object().expect("object value");
                 if !tobj.extensible() {
                     let target_has = tobj.get_own_descriptor(atom).is_some();
                     if target_has {
@@ -15132,7 +15132,7 @@ impl VM {
         if !crate::builtins::promise::is_promise(&val) {
             return Ok(Some(val));
         }
-        let promise_obj = val.as_object();
+        let promise_obj = val.try_as_object().expect("object value");
         let state_atom = ctx.common_atoms.__promise_state__;
         let result_atom = ctx.common_atoms.__promise_result__;
         let state = promise_obj
@@ -15206,7 +15206,7 @@ impl VM {
                 }
                 return Ok(false);
             } else if arr_val.is_object() {
-                let arr_obj = arr_val.as_object();
+                let arr_obj = arr_val.try_as_object().expect("object value");
                 if let Some(arr) = arr_obj.as_dense_array() {
                     let length = arr
                         .header
@@ -15432,7 +15432,7 @@ impl VM {
         if !promise.is_object() || !crate::builtins::promise::is_promise(&promise) {
             return PromiseSettlement::Fulfilled(promise);
         }
-        let obj = promise.as_object();
+        let obj = promise.try_as_object().expect("object value");
         let state = obj
             .get(ctx.common_atoms.__promise_state__)
             .map(|v| v.get_int())
@@ -15484,7 +15484,7 @@ impl VM {
             return None;
         }
         let atom = ctx.intern("\u{1}with_object");
-        env.as_object().get_own(atom)
+        env.try_as_object().expect("object value").get_own(atom)
     }
 
     fn with_env_parent(
@@ -15496,7 +15496,7 @@ impl VM {
             return None;
         }
         let atom = ctx.intern("\u{1}with_parent");
-        env.as_object().get_own(atom)
+        env.try_as_object().expect("object value").get_own(atom)
     }
 
     fn object_has_property_checked(
@@ -15505,7 +15505,7 @@ impl VM {
         object_val: JSValue,
         atom: crate::runtime::atom::Atom,
     ) -> Option<bool> {
-        if object_val.is_object() && object_val.as_object().is_proxy() {
+        if object_val.is_object() && object_val.try_as_object().expect("object value").is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             match self.proxy_has_internal(ctx, object_val, key) {
                 Ok(found) => Some(found),
@@ -15515,7 +15515,7 @@ impl VM {
                 }
             }
         } else if object_val.is_object_like() {
-            Some(object_val.as_object().has_property(atom))
+            Some(object_val.try_as_object().expect("object value").has_property(atom))
         } else {
             Some(false)
         }
@@ -15568,7 +15568,7 @@ impl VM {
             if !env_val.is_object_like() {
                 break;
             }
-            let env_obj = env_val.as_object();
+            let env_obj = env_val.try_as_object().expect("object value");
             let object = env_obj.get_own(object_atom);
             let parent = env_obj.get_own(parent_atom);
             if let Some(object_val) = object {
@@ -15654,7 +15654,7 @@ impl VM {
             let global = ctx.global();
             let mut found = false;
             if global.is_object_like() {
-                let global_obj = global.as_object();
+                let global_obj = global.try_as_object().expect("object value");
                 if global_obj.has_property(atom) {
                     self.get_named_prop_result(ctx, dst, global, atom, instr_pc);
                     found = true;
@@ -15719,7 +15719,7 @@ impl VM {
         if kind == 0 {
             let global = ctx.global();
             if global.is_object_like() {
-                let global_obj = global.as_object();
+                let global_obj = global.try_as_object().expect("object value");
                 if self.frames[self.frame_index].is_strict_frame && !global_obj.has_property(atom)
                 {
                     self.set_pending_reference_error(
@@ -15762,7 +15762,7 @@ impl VM {
             self.set_pending_type_error(ctx, "Cannot read property of null or undefined");
             return None;
         }
-        if obj_val.is_object() && obj_val.as_object().is_proxy() {
+        if obj_val.is_object() && obj_val.try_as_object().expect("object value").is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             match self.proxy_get_internal(ctx, obj_val, key, this_val) {
                 Ok(v) => {
@@ -15806,10 +15806,10 @@ impl VM {
             let mut current = start_proto;
             while let Some(ptr) = current {
                 let pobj_val = JSValue::new_object(ptr);
-                let pobj = pobj_val.as_object();
+                let pobj = pobj_val.try_as_object().expect("object value");
                 if let Some(getter) = pobj.get_own_accessor_value(atom) {
                     if getter.is_function() {
-                        let js_func = getter.as_function();
+                        let js_func = getter.try_as_function().expect("function value");
                         let fn_this = if !js_func.is_strict() {
                             crate::builtins::object::object_to_object(ctx, &obj_val)
                         } else {
@@ -15862,7 +15862,7 @@ impl VM {
             return Some(JSValue::undefined());
         }
         if obj_val.is_object_like() {
-            let js_obj = obj_val.as_object();
+            let js_obj = obj_val.try_as_object().expect("object value");
             if js_obj.is_mapped_arguments() {
                 if let Some(entry) = js_obj.argument_entry(atom) {
                     if entry.is_accessor() {
@@ -15926,12 +15926,12 @@ impl VM {
                                         }
                                         depth += 1;
                                         let p_val = JSValue::new_object(p);
-                                        cur = p_val.as_object().prototype;
+                                        cur = p_val.try_as_object().expect("object value").prototype;
                                     }
                                 }
                                 if proto_matches {
                                     let proto_obj = JSValue::new_object(proto);
-                                    let proto_obj = proto_obj.as_object();
+                                    let proto_obj = proto_obj.try_as_object().expect("object value");
                                     proto_obj.get_by_offset(offset as usize)
                                 } else {
                                     None
@@ -15991,7 +15991,7 @@ impl VM {
                                 }
                                 depth += 1;
                                 let proto_val = JSValue::new_object(proto_ptr);
-                                let proto = proto_val.as_object();
+                                let proto = proto_val.try_as_object().expect("object value");
                                 if let Some(offset) = proto.find_offset(atom) {
                                     let v = proto
                                         .get_by_offset(offset)
@@ -16044,7 +16044,7 @@ impl VM {
                             if !found && obj_val.is_function() && js_obj.prototype.is_none() {
                                 if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
                                     let fn_proto_val = JSValue::new_object(fn_proto_ptr);
-                                    let fn_proto = fn_proto_val.as_object();
+                                    let fn_proto = fn_proto_val.try_as_object().expect("object value");
                                     if let Some(offset) = fn_proto.find_offset(atom) {
                                         let v = fn_proto
                                             .get_by_offset(offset)
@@ -16146,7 +16146,7 @@ impl VM {
                             }
                             depth += 1;
                             let proto_val = JSValue::new_object(proto_ptr);
-                            let proto = proto_val.as_object();
+                            let proto = proto_val.try_as_object().expect("object value");
                             if let Some(offset) = proto.find_offset(atom) {
                                 value = proto.get_by_offset(offset).unwrap_or(JSValue::undefined());
                                 found = true;
@@ -16180,7 +16180,7 @@ impl VM {
                     if !found && obj_val.is_function() && js_obj.prototype.is_none() {
                         if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
                             let fn_proto_val = JSValue::new_object(fn_proto_ptr);
-                            let fn_proto = fn_proto_val.as_object();
+                            let fn_proto = fn_proto_val.try_as_object().expect("object value");
                             if let Some(offset) = fn_proto.find_offset(atom) {
                                 value = fn_proto
                                     .get_by_offset(offset)
@@ -16225,7 +16225,7 @@ impl VM {
                 ))
             } else if let Some(proto_ptr) = ctx.get_string_prototype() {
                 let proto_val = JSValue::new_object(proto_ptr);
-                let proto_obj = proto_val.as_object();
+                let proto_obj = proto_val.try_as_object().expect("object value");
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
@@ -16233,7 +16233,7 @@ impl VM {
         } else if obj_val.is_int() || obj_val.is_float() {
             if let Some(proto_ptr) = ctx.get_number_prototype() {
                 let proto_val = JSValue::new_object(proto_ptr);
-                let proto_obj = proto_val.as_object();
+                let proto_obj = proto_val.try_as_object().expect("object value");
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
@@ -16241,7 +16241,7 @@ impl VM {
         } else if obj_val.is_bool() {
             if let Some(proto_ptr) = ctx.get_bool_prototype() {
                 let proto_val = JSValue::new_object(proto_ptr);
-                let proto_obj = proto_val.as_object();
+                let proto_obj = proto_val.try_as_object().expect("object value");
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
@@ -16257,7 +16257,7 @@ impl VM {
                 }
             } else if let Some(proto_ptr) = ctx.get_symbol_prototype() {
                 let proto_val = JSValue::new_object(proto_ptr);
-                let proto = proto_val.as_object();
+                let proto = proto_val.try_as_object().expect("object value");
                 Some(proto.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
@@ -16279,7 +16279,7 @@ impl VM {
         let obj_val = self.get_reg(obj_reg);
 
         if obj_val.is_object_like() {
-            let js_obj = obj_val.as_object();
+            let js_obj = obj_val.try_as_object().expect("object value");
 
             if js_obj.is_dense_array() && atom == ctx.common_atoms.length {
                 if js_obj.props_len() > 0 {
@@ -16362,7 +16362,7 @@ impl VM {
             self.ic_get_reads123_values(instr_pc, shape_id)
         {
             if ic_hit {
-                let js_obj = obj_val.as_object();
+                let js_obj = obj_val.try_as_object().expect("object value");
                 if r_proto.is_null() {
                     let val = if r_offset == u32::MAX {
                         JSValue::undefined()
@@ -16417,7 +16417,7 @@ impl VM {
         offset: u32,
         proto_ptr: *mut crate::object::object::JSObject,
     ) -> bool {
-        let js_obj = obj_val.as_object();
+        let js_obj = obj_val.try_as_object().expect("object value");
         let mut cur = js_obj.prototype_object();
         let mut depth = 0u32;
         while let Some(proto_obj) = cur {
@@ -16466,7 +16466,7 @@ impl VM {
                 if ic_hit {
                     if !r0_proto.is_null() {
                         let proto_obj = JSValue::new_object(r0_proto);
-                        let proto_obj = proto_obj.as_object();
+                        let proto_obj = proto_obj.try_as_object().expect("object value");
                         if let Some(v) = proto_obj.get_by_offset(r0_offset as usize) {
                             self.set_reg(dst, v);
                             return true;
@@ -16552,7 +16552,7 @@ impl VM {
         atom: crate::runtime::atom::Atom,
     ) -> (bool, Option<JSValue>) {
         if obj_val.is_object_like() {
-            let js_obj = obj_val.as_object();
+            let js_obj = obj_val.try_as_object().expect("object value");
             if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
                 return (true, entry.set);
             }
@@ -16602,7 +16602,7 @@ impl VM {
         obj_val: JSValue,
         atom: crate::runtime::atom::Atom,
     ) -> bool {
-        let js_obj = obj_val.as_object();
+        let js_obj = obj_val.try_as_object().expect("object value");
         let mut current = js_obj.prototype_object();
         while let Some(proto) = current {
             if proto.obj_type() == crate::object::object::ObjectType::TypedArray {
@@ -16676,7 +16676,7 @@ impl VM {
             let mut current = base;
             let mut depth = 0u32;
             while current.is_object_like() {
-                let obj = current.as_object();
+                let obj = current.try_as_object().expect("object value");
                 if let Some(entry) = obj.get_own_accessor_entry(atom) {
                     found = Some((true, entry.set, false));
                     break;
@@ -16737,7 +16737,7 @@ impl VM {
                 if !receiver.is_object_like() {
                     return false;
                 }
-                let recv_obj = receiver.as_object();
+                let recv_obj = receiver.try_as_object().expect("object value");
                 if recv_obj.get_own_accessor_entry(atom).is_some() {
                     if self.frames[self.frame_index].is_strict_frame {
                         self.set_pending_type_error(
@@ -16804,7 +16804,7 @@ impl VM {
             }
             return false;
         }
-        if obj_val.is_object() && obj_val.as_object().is_proxy() {
+        if obj_val.is_object() && obj_val.try_as_object().expect("object value").is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             match self.proxy_set_internal(ctx, obj_val, key, value, obj_val) {
                 Ok(true) => {}
@@ -17169,7 +17169,7 @@ impl VM {
         if !global.is_object() {
             return None;
         }
-        let sym_val = global.as_object().get(ctx.intern("Symbol.toPrimitive"))?;
+        let sym_val = global.try_as_object().expect("object value").get(ctx.intern("Symbol.toPrimitive"))?;
         if !sym_val.is_symbol() {
             return None;
         }
@@ -17199,9 +17199,9 @@ impl VM {
             return *v;
         }
         let obj: &crate::object::JSObject = if v.is_object() {
-            v.as_object()
+            v.try_as_object().expect("object value")
         } else if v.is_function() {
-            let func = v.as_function();
+            let func = v.try_as_function().expect("function value");
 
             if let Some(custom_fn) = func.base.get(ctx.common_atoms.value_of) {
                 if custom_fn.is_function() {
@@ -17243,7 +17243,7 @@ impl VM {
             let mut cur: Option<*mut crate::object::object::JSObject> = Some(v.get_ptr());
             while let Some(p) = cur {
                 let p_val = JSValue::new_object(p);
-                let pobj = p_val.as_object();
+                let pobj = p_val.try_as_object().expect("object value");
                 if let Some(v) = pobj.get_own_value(a) {
                     return v.is_function();
                 }
@@ -17269,7 +17269,7 @@ impl VM {
                         let mut current = obj.prototype;
                         while let Some(proto_ptr) = current {
                             let proto_val = JSValue::new_object(proto_ptr);
-                            let proto = proto_val.as_object();
+                            let proto = proto_val.try_as_object().expect("object value");
                             if let Some(desc) = proto.get_own_descriptor(tp_atom) {
                                 if let Some(getter) = desc.get {
                                     return self.call_function_with_this(ctx, getter, *v, &[]).ok();
@@ -17327,7 +17327,7 @@ impl VM {
                 let mut current = obj.prototype;
                 while let Some(proto_ptr) = current {
                     let proto_val = JSValue::new_object(proto_ptr);
-                    let proto = proto_val.as_object();
+                    let proto = proto_val.try_as_object().expect("object value");
                     if let Some(desc) = proto.get_own_descriptor(tp_atom) {
                         if let Some(getter) = desc.get {
                             let saved = std::mem::take(&mut self.exception_handlers);
@@ -17393,7 +17393,7 @@ impl VM {
         }
 
         if v.is_function() {
-            let func = v.as_function();
+            let func = v.try_as_function().expect("function value");
             let name = ctx.get_atom_str(func.name);
             if !name.is_empty() {
                 return JSValue::new_string(
@@ -17468,9 +17468,9 @@ impl VM {
             return Self::js_to_string(v, ctx);
         }
         let obj: &crate::object::JSObject = if v.is_object() {
-            v.as_object()
+            v.try_as_object().expect("object value")
         } else if v.is_function() {
-            &v.as_function().base
+            &v.try_as_function().expect("function value").base
         } else {
             return Self::js_to_string(v, ctx);
         };
@@ -17485,7 +17485,7 @@ impl VM {
                 }
             }
 
-            let func = v.as_function();
+            let func = v.try_as_function().expect("function value");
             let name = ctx.get_atom_str(func.name);
             if name.is_empty() {
                 return JSValue::new_string(ctx.intern("function () { [native code] }"));
@@ -17510,7 +17510,7 @@ impl VM {
         } else {
             return Self::js_to_string(v, ctx);
         };
-        let to_str = obj_proto.as_object().get(to_str_atom);
+        let to_str = obj_proto.try_as_object().expect("object value").get(to_str_atom);
         if let Some(f) = to_str {
             if f.is_function() {
                 match self.call_function_with_this(ctx, f, *v, &[]) {
@@ -17917,7 +17917,7 @@ impl VM {
         } else if v.is_symbol() {
             return f64::NAN;
         } else if v.is_object() {
-            if let Some(prim) = v.as_object().get(ctx.common_atoms.__value__) {
+            if let Some(prim) = v.try_as_object().expect("object value").get(ctx.common_atoms.__value__) {
                 return Self::js_to_number(&prim, ctx);
             }
         }
@@ -17985,7 +17985,7 @@ impl VM {
 
     fn get_bigint(v: &JSValue) -> std::rc::Rc<crate::builtins::bignum::BigInt> {
         if v.is_bigint() {
-            v.as_object().get_bigint_value()
+            v.try_as_object().expect("object value").get_bigint_value()
         } else {
             std::rc::Rc::new(crate::builtins::bignum::BigInt::zero())
         }

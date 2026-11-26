@@ -114,7 +114,7 @@ fn is_callable(ctx: &mut JSContext, v: &JSValue) -> bool {
         return true;
     }
     if v.is_object() {
-        return v.as_object().get(ctx.common_atoms.__boundFn).is_some();
+        return v.try_as_object().expect("object value").get(ctx.common_atoms.__boundFn).is_some();
     }
     false
 }
@@ -231,7 +231,7 @@ fn get_property_with_getter(
     obj_val: JSValue,
     prop: crate::runtime::atom::Atom,
 ) -> Result<JSValue, String> {
-    let obj = obj_val.as_object();
+    let obj = obj_val.try_as_object().expect("object value");
     if let Some(entry) = obj.get_own_accessor_entry(prop) {
         if let Some(getter) = entry.get {
             if getter.is_function() {
@@ -278,7 +278,7 @@ pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
     let sym_atom = crate::runtime::atom::Atom(0x40000000 | sym_iter.get_symbol_id());
 
     let iter_obj = if iterable.is_object() {
-        iterable.as_object()
+        iterable.try_as_object().expect("object value")
     } else {
         return values;
     };
@@ -308,7 +308,7 @@ pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
         return values;
     }
 
-    let iter_obj = iterator.as_object();
+    let iter_obj = iterator.try_as_object().expect("object value");
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
 
@@ -325,7 +325,7 @@ pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
                 idx += 1;
             }
         } else if arr_val.is_object() {
-            let arr_obj = arr_val.as_object();
+            let arr_obj = arr_val.try_as_object().expect("object value");
             let dense = arr_obj.as_dense_array();
             let length = if let Some(arr) = dense {
                 arr.len()
@@ -407,7 +407,7 @@ pub fn create_iterator_from_iterable(ctx: &mut JSContext, iterable: JSValue) -> 
     let sym_atom = crate::runtime::atom::Atom(0x40000000 | sym_iter.get_symbol_id());
 
     let iter_obj = if iterable.is_object() {
-        iterable.as_object()
+        iterable.try_as_object().expect("object value")
     } else {
         return None;
     };
@@ -454,7 +454,7 @@ pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue,
                 return Some((JSValue::undefined(), true));
             }
         } else if arr_val.is_object() {
-            let arr_obj = arr_val.as_object();
+            let arr_obj = arr_val.try_as_object().expect("object value");
             let dense = arr_obj.as_dense_array();
             let length = if let Some(arr) = dense {
                 arr.len()
@@ -523,7 +523,7 @@ pub fn iterator_return(ctx: &mut JSContext, iterator: JSValue) {
     if !iterator.is_object() {
         return;
     }
-    let iter_obj = iterator.as_object();
+    let iter_obj = iterator.try_as_object().expect("object value");
     let return_atom = ctx.intern("return");
     let return_fn = iter_obj.get(return_atom).or_else(|| {
         let mut proto = iter_obj.prototype_object();
@@ -561,8 +561,8 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if iterable.is_object() || iterable.is_string() {
             if let Some(iterator) = create_iterator_from_iterable(ctx, *iterable) {
                 let set_atom = ctx.intern("set");
-                let adder = this_val.as_object().get(set_atom).or_else(|| {
-                    let mut proto = this_val.as_object().prototype_object();
+                let adder = this_val.try_as_object().expect("object value").get(set_atom).or_else(|| {
+                    let mut proto = this_val.try_as_object().expect("object value").prototype_object();
                     while let Some(pobj) = proto {
                         if let Some(v) = pobj.get(set_atom) {
                             return Some(v);
@@ -703,7 +703,7 @@ fn map_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.set called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.set called on incompatible receiver");
         return JSValue::undefined();
@@ -740,7 +740,7 @@ fn map_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.get called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.get called on incompatible receiver");
         return JSValue::undefined();
@@ -761,7 +761,7 @@ fn map_size_getter(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method get Map.prototype.size called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method get Map.prototype.size called on incompatible receiver");
         return JSValue::undefined();
@@ -776,7 +776,7 @@ fn set_size_getter(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method get Set.prototype.size called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method get Set.prototype.size called on incompatible receiver");
         return JSValue::undefined();
@@ -794,7 +794,7 @@ fn map_get_or_insert(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.getOrInsert called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.getOrInsert called on incompatible receiver");
         return JSValue::undefined();
@@ -827,7 +827,7 @@ fn map_get_or_insert_computed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
         throw_type_error(ctx, "Method Map.prototype.getOrInsertComputed called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.getOrInsertComputed called on incompatible receiver");
         return JSValue::undefined();
@@ -933,7 +933,7 @@ fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let group_arr_val = result_obj.get(mv_atom).unwrap_or_else(JSValue::undefined);
             if group_arr_val.is_object() {
                 let len = group_arr_val
-                    .as_object()
+                    .try_as_object().expect("object value")
                     .get(ctx.common_atoms.length)
                     .map(|v| v.get_int() as usize)
                     .unwrap_or(0);
@@ -967,7 +967,7 @@ fn map_has(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.has called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.has called on incompatible receiver");
         return JSValue::undefined();
@@ -985,7 +985,7 @@ fn map_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
@@ -1030,7 +1030,7 @@ fn map_clear(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
@@ -1064,7 +1064,7 @@ fn map_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Callback is not a function");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.forEach called on incompatible receiver");
         return JSValue::undefined();
@@ -1091,7 +1091,7 @@ fn map_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.keys called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.keys called on incompatible receiver");
         return JSValue::undefined();
@@ -1108,7 +1108,7 @@ fn map_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.values called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.values called on incompatible receiver");
         return JSValue::undefined();
@@ -1125,7 +1125,7 @@ fn map_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.entries called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype.entries called on incompatible receiver");
         return JSValue::undefined();
@@ -1142,7 +1142,7 @@ fn map_symbol_iterator(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype[Symbol.iterator] called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_mapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Map.prototype[Symbol.iterator] called on incompatible receiver");
         return JSValue::undefined();
@@ -1199,7 +1199,7 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             .filter(|value| value.is_string())
             .map(|value| ctx.get_atom_str(value.get_atom()).to_string())
             .unwrap_or_else(|| "key".to_string());
-        let coll = collection.as_object();
+        let coll = collection.try_as_object().expect("object value");
         let is_set = kind == "set-value" || kind == "set-entry";
         let size = if is_set { set_size(ctx, coll) } else { map_size(ctx, coll) };
         if iter_idx < size {
@@ -1245,7 +1245,7 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Iterator [[IteratedObject]] is not an object");
         return JSValue::undefined();
     }
-    let arr_obj = arr_val.as_object();
+    let arr_obj = arr_val.try_as_object().expect("object value");
     let len = arr_obj.get(ctx.common_atoms.length).map(|v| super::string::js_to_length(&v) as usize).unwrap_or(0);
     if iter_idx < len {
         let value = super::array::array_get(arr_obj, iter_idx, ctx).unwrap_or_else(JSValue::undefined);
@@ -1279,7 +1279,7 @@ fn set_symbol_iterator(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype[Symbol.iterator] called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype[Symbol.iterator] called on incompatible receiver");
         return JSValue::undefined();
@@ -1336,7 +1336,7 @@ fn weakmap_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakMap.prototype.set called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_weakmapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method WeakMap.prototype.set called on incompatible receiver");
         return JSValue::undefined();
@@ -1377,7 +1377,7 @@ fn weakmap_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakMap.prototype.get called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_weakmapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method WeakMap.prototype.get called on incompatible receiver");
         return JSValue::undefined();
@@ -1402,7 +1402,7 @@ fn weakmap_has(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakMap.prototype.has called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_weakmapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method WeakMap.prototype.has called on incompatible receiver");
         return JSValue::undefined();
@@ -1422,7 +1422,7 @@ fn weakmap_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakMap.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_weakmapdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method WeakMap.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
@@ -1485,7 +1485,7 @@ fn weakset_add(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakSet.prototype.add called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_weaksetdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method WeakSet.prototype.add called on incompatible receiver");
         return JSValue::undefined();
@@ -1520,7 +1520,7 @@ fn weakset_has(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakSet.prototype.has called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_weaksetdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method WeakSet.prototype.has called on incompatible receiver");
         return JSValue::undefined();
@@ -1540,7 +1540,7 @@ fn weakset_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakSet.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_weaksetdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method WeakSet.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
@@ -1574,8 +1574,8 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if iterable.is_object() || iterable.is_string() {
             if let Some(iterator) = create_iterator_from_iterable(ctx, *iterable) {
                 let add_atom = ctx.intern("add");
-                let adder = this_val.as_object().get(add_atom).or_else(|| {
-                    let mut proto = this_val.as_object().prototype_object();
+                let adder = this_val.try_as_object().expect("object value").get(add_atom).or_else(|| {
+                    let mut proto = this_val.try_as_object().expect("object value").prototype_object();
                     while let Some(pobj) = proto {
                         if let Some(v) = pobj.get(add_atom) {
                             return Some(v);
@@ -1647,7 +1647,7 @@ fn set_add(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.add called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype.add called on incompatible receiver");
         return JSValue::undefined();
@@ -1677,7 +1677,7 @@ fn set_has(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.has called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype.has called on incompatible receiver");
         return JSValue::undefined();
@@ -1695,7 +1695,7 @@ fn set_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
@@ -1734,7 +1734,7 @@ fn set_clear(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
@@ -1761,7 +1761,7 @@ fn set_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.values called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype.values called on incompatible receiver");
         return JSValue::undefined();
@@ -1782,7 +1782,7 @@ fn set_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.entries called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype.entries called on incompatible receiver");
         return JSValue::undefined();
@@ -1805,7 +1805,7 @@ fn set_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     if !has_setdata_slot(ctx, obj) {
         throw_type_error(ctx, "Method Set.prototype.forEach called on incompatible receiver");
         return JSValue::undefined();
@@ -1902,7 +1902,7 @@ fn get_set_record(ctx: &mut JSContext, other: JSValue) -> Option<SetRecord> {
         return None;
     }
     {
-        let obj = other.as_object();
+        let obj = other.try_as_object().expect("object value");
         if has_setdata_slot(ctx, obj) {
             return Some(SetRecord {
                 is_set: true,
@@ -1962,7 +1962,7 @@ fn record_has(
     value: JSValue,
 ) -> Option<bool> {
     if record.is_set {
-        let obj = record.set_val.as_object();
+        let obj = record.set_val.try_as_object().expect("object value");
         Some(set_find(ctx, obj, &value).is_some())
     } else {
         match call_callback_with_this(ctx, record.has_fn, other, &[value]) {
@@ -2005,7 +2005,7 @@ fn require_set_receiver(ctx: &mut JSContext, args: &[JSValue], method: &str) -> 
         );
         return None;
     }
-    if !has_setdata_slot(ctx, this.as_object()) {
+    if !has_setdata_slot(ctx, this.try_as_object().expect("object value")) {
         throw_type_error(
             ctx,
             &format!("Method Set.prototype.{} called on incompatible receiver", method),
@@ -2025,13 +2025,13 @@ fn set_union(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let result = create_empty_set(ctx);
     {
-        let this_obj = this_val.as_object();
+        let this_obj = this_val.try_as_object().expect("object value");
         for e in set_elements(ctx, this_obj) {
             set_add_value(ctx, result, e);
         }
     }
     if record.is_set {
-        let other_obj = record.set_val.as_object();
+        let other_obj = record.set_val.try_as_object().expect("object value");
         for e in set_elements(ctx, other_obj) {
             set_add_value(ctx, result, e);
         }
@@ -2056,7 +2056,7 @@ fn set_intersection(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let result = create_empty_set(ctx);
     let this_elems = {
-        let this_obj = this_val.as_object();
+        let this_obj = this_val.try_as_object().expect("object value");
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
@@ -2079,7 +2079,7 @@ fn set_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let result = create_empty_set(ctx);
     let this_elems = {
-        let this_obj = this_val.as_object();
+        let this_obj = this_val.try_as_object().expect("object value");
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
@@ -2102,14 +2102,14 @@ fn set_symmetric_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let result = create_empty_set(ctx);
     let this_elems = {
-        let this_obj = this_val.as_object();
+        let this_obj = this_val.try_as_object().expect("object value");
         set_elements(ctx, this_obj)
     };
     for e in &this_elems {
         set_add_value(ctx, result, *e);
     }
     let other_elems: Vec<JSValue> = if record.is_set {
-        let other_obj = record.set_val.as_object();
+        let other_obj = record.set_val.try_as_object().expect("object value");
         set_elements(ctx, other_obj)
     } else {
         let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
@@ -2137,7 +2137,7 @@ fn set_is_subset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     };
     let this_elems = {
-        let this_obj = this_val.as_object();
+        let this_obj = this_val.try_as_object().expect("object value");
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
@@ -2159,7 +2159,7 @@ fn set_is_superset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     };
     let other_elems: Vec<JSValue> = if record.is_set {
-        let other_obj = record.set_val.as_object();
+        let other_obj = record.set_val.try_as_object().expect("object value");
         set_elements(ctx, other_obj)
     } else {
         let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
@@ -2167,7 +2167,7 @@ fn set_is_superset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         };
         keys
     };
-    let this_obj = this_val.as_object();
+    let this_obj = this_val.try_as_object().expect("object value");
     for e in other_elems {
         if set_find(ctx, this_obj, &e).is_none() {
             return JSValue::bool(false);
@@ -2185,7 +2185,7 @@ fn set_is_disjoint_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     };
     let this_elems = {
-        let this_obj = this_val.as_object();
+        let this_obj = this_val.try_as_object().expect("object value");
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
@@ -2625,7 +2625,7 @@ mod tests {
     fn assert_tracked_after_gc(ctx: &mut JSContext, value: JSValue) {
         assert!(value.is_object());
         let ptr = value.get_ptr();
-        let slot = value.as_object().gc_slot as usize;
+        let slot = value.try_as_object().expect("object value").gc_slot as usize;
         root(ctx, value);
         let mut vm = crate::runtime::vm::VM::new();
         vm.run_gc(ctx);
@@ -2656,7 +2656,7 @@ mod tests {
         let mut ctx = rt.new_context();
         let result = crate::eval(&mut ctx, "new Map([[1, 2]]).entries().next()").unwrap();
         root(&mut ctx, result);
-        let pair = result.as_object().get(ctx.intern("value")).unwrap();
+        let pair = result.try_as_object().expect("object value").get(ctx.intern("value")).unwrap();
         assert_tracked_after_gc(&mut ctx, pair);
     }
 }

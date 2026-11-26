@@ -154,7 +154,7 @@ pub fn weakref_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let target = match args.first() {
         Some(value) if value.is_object_like() => {
-            ctx.runtime_mut().gc_heap().weak_handle(value.as_object())
+            ctx.runtime_mut().gc_heap().weak_handle(value.try_as_object().expect("object value"))
         }
         _ => None,
     };
@@ -175,7 +175,7 @@ pub fn weakref_deref(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
 
     let target = match obj.get_native_data::<WeakRefState>() {
         Some(state) => state.target,

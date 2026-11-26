@@ -69,7 +69,7 @@ fn get_locale_from_first_arg(ctx: &mut JSContext, args: &[JSValue]) -> AtomOrDef
     }
 
     if locales.is_object() {
-        let obj = locales.as_object();
+        let obj = locales.try_as_object().expect("object value");
         if let Some(first) = obj.get(ctx.common_atoms.n0) {
             if first.is_string() {
                 return AtomOrDefault::Atom(first.get_atom());
@@ -175,7 +175,7 @@ fn value_to_string(ctx: &mut JSContext, v: JSValue) -> String {
         return String::new();
     }
     if v.is_object() || v.is_function() {
-        let obj = v.as_object();
+        let obj = v.try_as_object().expect("object value");
         let to_string_atom = ctx.common_atoms.to_string;
         if let Some(to_string_fn) = obj.get(to_string_atom) {
             if to_string_fn.is_function() {
@@ -249,7 +249,7 @@ fn parse_collator_state(ctx: &mut JSContext, args: &[JSValue]) -> Result<Collato
         JSValue::undefined()
     };
     if options_val.is_object() {
-        let options = options_val.as_object();
+        let options = options_val.try_as_object().expect("object value");
 
         if let Some(usage_opt) = parse_string_option(ctx, options, "usage", &["sort", "search"])? {
             usage = ctx.intern(&usage_opt);
@@ -419,7 +419,7 @@ fn get_collator_state_from_value(ctx: &mut JSContext, value: JSValue) -> Option<
     if !(value.is_object() || value.is_function()) {
         return None;
     }
-    let obj = value.as_object();
+    let obj = value.try_as_object().expect("object value");
     let locale_key = ctx.intern("__intlLocale__");
     let locale = obj
         .get(locale_key)
@@ -551,7 +551,7 @@ fn intl_collator_compare_call(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
         );
         return JSValue::undefined();
     }
-    let f = callee.as_function();
+    let f = callee.try_as_function().expect("function value");
     let Some(state) = f.base.get_native_data::<CollatorState>() else {
         throw_type_error(
             ctx,
@@ -642,7 +642,7 @@ fn set_locale_slot(ctx: &mut JSContext, target: &mut JSObject, locale: crate::ru
 
 fn get_locale_slot(ctx: &mut JSContext, value: JSValue) -> crate::runtime::atom::Atom {
     if value.is_object() || value.is_function() {
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         if let Some(slot) = obj.get(ctx.intern("__intlLocale__")) {
             if slot.is_string() {
                 return slot.get_atom();
@@ -900,11 +900,11 @@ fn intl_collator_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     let mut obj = JSObject::new();
-    if let Some(global_intl) = ctx.global().as_object().get(ctx.intern("Intl")) {
+    if let Some(global_intl) = ctx.global().try_as_object().expect("object value").get(ctx.intern("Intl")) {
         if global_intl.is_function() {
-            if let Some(collator_ctor) = global_intl.as_object().get(ctx.intern("Collator")) {
+            if let Some(collator_ctor) = global_intl.try_as_object().expect("object value").get(ctx.intern("Collator")) {
                 if collator_ctor.is_function() {
-                    let ctor = collator_ctor.as_function();
+                    let ctor = collator_ctor.try_as_function().expect("function value");
                     if !ctor.cached_prototype_ptr.is_null() {
                         obj.prototype = Some(ctor.cached_prototype_ptr);
                     }
@@ -926,11 +926,11 @@ fn intl_numberformat_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
     };
 
     let mut obj = JSObject::new();
-    if let Some(global_intl) = ctx.global().as_object().get(ctx.intern("Intl")) {
+    if let Some(global_intl) = ctx.global().try_as_object().expect("object value").get(ctx.intern("Intl")) {
         if global_intl.is_function() {
-            if let Some(ctor_val) = global_intl.as_object().get(ctx.intern("NumberFormat")) {
+            if let Some(ctor_val) = global_intl.try_as_object().expect("object value").get(ctx.intern("NumberFormat")) {
                 if ctor_val.is_function() {
-                    let ctor = ctor_val.as_function();
+                    let ctor = ctor_val.try_as_function().expect("function value");
                     if !ctor.cached_prototype_ptr.is_null() {
                         obj.prototype = Some(ctor.cached_prototype_ptr);
                     }
@@ -952,11 +952,11 @@ fn intl_datetimeformat_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSV
     };
 
     let mut obj = JSObject::new();
-    if let Some(global_intl) = ctx.global().as_object().get(ctx.intern("Intl")) {
+    if let Some(global_intl) = ctx.global().try_as_object().expect("object value").get(ctx.intern("Intl")) {
         if global_intl.is_function() {
-            if let Some(ctor_val) = global_intl.as_object().get(ctx.intern("DateTimeFormat")) {
+            if let Some(ctor_val) = global_intl.try_as_object().expect("object value").get(ctx.intern("DateTimeFormat")) {
                 if ctor_val.is_function() {
-                    let ctor = ctor_val.as_function();
+                    let ctor = ctor_val.try_as_function().expect("function value");
                     if !ctor.cached_prototype_ptr.is_null() {
                         obj.prototype = Some(ctor.cached_prototype_ptr);
                     }
@@ -987,7 +987,7 @@ fn supported_locales_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     if locales.is_object() {
-        let obj = locales.as_object();
+        let obj = locales.try_as_object().expect("object value");
         let mut len = obj
             .get(ctx.common_atoms.length)
             .map(|v| v.to_number() as i64)

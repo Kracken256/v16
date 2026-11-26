@@ -185,7 +185,7 @@ fn get_promise_reactions(ctx: &mut JSContext, obj: &JSObject) -> Vec<Reaction> {
             if ptr.is_null() {
                 return Vec::new();
             }
-            let arr = reactions_val.as_object();
+            let arr = reactions_val.try_as_object().expect("object value");
             let len_atom = intern_str(ctx, "length");
             let len = arr.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
             let mut reactions = Vec::new();
@@ -193,7 +193,7 @@ fn get_promise_reactions(ctx: &mut JSContext, obj: &JSObject) -> Vec<Reaction> {
                 let idx_atom = intern_str(ctx, &i.to_string());
                 if let Some(r_val) = arr.get(idx_atom) {
                     if r_val.is_object() {
-                        let r_obj = r_val.as_object();
+                        let r_obj = r_val.try_as_object().expect("object value");
                         let handler_atom = intern_str(ctx, "handler");
                         let is_reject_atom = intern_str(ctx, "isReject");
                         let all_settled_atom = intern_str(ctx, "allSettled");
@@ -262,7 +262,7 @@ pub fn is_promise(value: &JSValue) -> bool {
     if !value.is_object() {
         return false;
     }
-    let obj = value.as_object();
+    let obj = value.try_as_object().expect("object value");
     obj.is_promise()
 }
 
@@ -325,7 +325,7 @@ fn promise_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         JSValue::undefined()
     };
     if value.is_object() {
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         if obj.is_promise() {
             return value;
         }
@@ -433,7 +433,7 @@ fn promise_catch(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let then_atom = ctx.intern("then");
     let then_fn = if this_val.is_object() {
-        this_val.as_object().get(then_atom)
+        this_val.try_as_object().expect("object value").get(then_atom)
     } else {
         None
     };
@@ -480,7 +480,7 @@ fn promise_finally(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let then_atom = ctx.intern("then");
     let then_fn = if this_val.is_object() {
-        this_val.as_object().get(then_atom)
+        this_val.try_as_object().expect("object value").get(then_atom)
     } else {
         None
     };
@@ -537,7 +537,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result_promise_val;
     }
 
-    let obj = iterable.as_object();
+    let obj = iterable.try_as_object().expect("object value");
 
     let sym_iter = crate::builtins::symbol::get_symbol_iterator(ctx);
     if sym_iter.is_symbol() {
@@ -650,7 +650,7 @@ fn promise_race(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result_promise_val;
     }
 
-    let obj = iterable.as_object();
+    let obj = iterable.try_as_object().expect("object value");
     let len = get_array_length(&obj, ctx);
 
     for i in 0..len {
@@ -711,7 +711,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result_promise_val;
     }
 
-    let obj = iterable.as_object();
+    let obj = iterable.try_as_object().expect("object value");
 
     let len = get_array_length(&obj, ctx);
 
@@ -806,7 +806,7 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result_promise_val;
     }
 
-    let obj = iterable.as_object();
+    let obj = iterable.try_as_object().expect("object value");
 
     let len = get_array_length(&obj, ctx);
 
@@ -926,13 +926,13 @@ pub(crate) fn resolve_promise_value(
         return;
     }
     {
-        let target_obj = target.as_object();
+        let target_obj = target.try_as_object().expect("object value");
         if !target_obj.is_promise() || !get_promise_state(ctx, target_obj).is_pending() {
             return;
         }
         // Chaining a promise with itself is a TypeError.
         if value.is_object()
-            && value.as_object() as *const JSObject == target_obj as *const JSObject
+            && value.try_as_object().expect("object value") as *const JSObject == target_obj as *const JSObject
         {
             reject_promise_with_type_error(
                 ctx,
@@ -972,7 +972,7 @@ pub(crate) fn resolve_promise_value(
 
 fn resolve_value_as_promise(ctx: &mut JSContext, value: JSValue) -> JSValue {
     if value.is_object() {
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         if obj.is_promise() {
             return value;
         }
@@ -991,13 +991,13 @@ fn promise_internal_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let target_atom = ctx.intern("__target_promise__");
-    let func_obj = callee_fn.as_function();
+    let func_obj = callee_fn.try_as_function().expect("function value");
     let promise_val = func_obj.base.get(target_atom).unwrap_or(JSValue::undefined());
     if !promise_val.is_object() {
         return JSValue::undefined();
     }
     {
-        let promise = promise_val.as_object();
+        let promise = promise_val.try_as_object().expect("object value");
         if !promise.is_promise() || !get_promise_state(ctx, promise).is_pending() {
             return JSValue::undefined();
         }
@@ -1019,7 +1019,7 @@ fn promise_internal_reject(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let target_atom = ctx.intern("__target_promise__");
-    let func_obj = callee_fn.as_function();
+    let func_obj = callee_fn.try_as_function().expect("function value");
     let promise_val = func_obj.base.get(target_atom).unwrap_or(JSValue::undefined());
     if !promise_val.is_object() {
         return JSValue::undefined();
@@ -1307,7 +1307,7 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                     let target_val = reaction.target_promise;
                     let target_ok = target_val.is_object()
                         && {
-                            let t = target_val.as_object();
+                            let t = target_val.try_as_object().expect("object value");
                             t.is_promise() && get_promise_state(ctx, t).is_pending()
                         };
                     if target_ok {
@@ -1345,7 +1345,7 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                 } else if reaction.target_promise.is_object() {
                     let target_val = reaction.target_promise;
                     let pending = {
-                        let t = target_val.as_object();
+                        let t = target_val.try_as_object().expect("object value");
                         t.is_promise() && get_promise_state(ctx, t).is_pending()
                     };
                     if pending {
@@ -1621,7 +1621,7 @@ mod tests {
     fn assert_tracked_after_gc(ctx: &mut JSContext, value: JSValue) {
         assert!(value.is_object());
         let ptr = value.get_ptr();
-        let slot = value.as_object().gc_slot as usize;
+        let slot = value.try_as_object().expect("object value").gc_slot as usize;
         ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
         let mut vm = crate::runtime::vm::VM::new();
         vm.run_gc(ctx);

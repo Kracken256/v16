@@ -158,7 +158,7 @@ fn parse_js_array(ctx: &mut JSContext, arg: Option<&JSValue>) -> Vec<String> {
         Some(v) if v.is_object() => v,
         _ => return Vec::new(),
     };
-    let obj = obj_val.as_object();
+    let obj = obj_val.try_as_object().expect("object value");
 
     let len = if let Some(arr) = obj.as_dense_array() {
         arr.len()

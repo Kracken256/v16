@@ -30,7 +30,7 @@ fn to_string_vm(ctx: &mut JSContext, value: JSValue) -> Option<String> {
     if value.is_object() {
         return ctx
             .with_vm(|vm, ctx| {
-                let obj = value.as_object();
+                let obj = value.try_as_object().expect("object value");
                 let to_string_fn = obj.get(ctx.common_atoms.to_string);
                 if let Some(f) = to_string_fn {
                     if f.is_function() {
@@ -307,7 +307,7 @@ fn coerce_to_string(ctx: &mut JSContext, value: &JSValue) -> Result<String, ()> 
         return Ok("undefined".to_string());
     }
     if value.is_bigint() {
-        return Ok(value.as_object().get_bigint_value().to_string());
+        return Ok(value.try_as_object().expect("object value").get_bigint_value().to_string());
     }
     if value.is_symbol() {
         crate::builtins::global::throw_type_error(

@@ -431,9 +431,9 @@ mod tests {
         let value = crate::eval(&mut ctx, "JSON.parse('{\"a\":[1,2,3]}')").unwrap();
         ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
 
-        let array = value.as_object().get(ctx.intern("a")).unwrap();
+        let array = value.try_as_object().expect("object value").get(ctx.intern("a")).unwrap();
         let array_ptr = array.get_ptr();
-        let array_slot = array.as_object().gc_slot as usize;
+        let array_slot = array.try_as_object().expect("object value").gc_slot as usize;
 
         let mut vm = crate::runtime::vm::VM::new();
         vm.run_gc(&mut ctx);

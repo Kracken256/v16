@@ -152,7 +152,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
     debug_assert_ne!(
-        value.as_function().base.gc_slot,
+        value.try_as_function().expect("function value").base.gc_slot,
         u32::MAX,
         "track_function did not set gc_slot"
     );
@@ -522,7 +522,7 @@ fn array_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         .get(ctx.common_atoms.__iter_kind__)
         .map(|v| if v.is_int() { v.get_int() } else { 0 })
         .unwrap_or(0);
-    let arr_obj = arr_val.as_object();
+    let arr_obj = arr_val.try_as_object().expect("object value");
     let len = arr_obj.get(ctx.common_atoms.length).map(|v| js_to_length(&v) as usize).unwrap_or(0);
     if iter_idx < len {
         let value = super::array::array_get(arr_obj, iter_idx, ctx).unwrap_or(JSValue::undefined());
@@ -957,7 +957,7 @@ fn array_concat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     for item in concat_items {
         if item.is_object() {
-            let obj = item.as_object();
+            let obj = item.try_as_object().expect("object value");
             let spread_atom =
                 crate::builtins::symbol::get_symbol_is_concat_spreadable_atom(ctx);
             let is_spreadable = match obj.get(spread_atom) {
@@ -1006,7 +1006,7 @@ fn array_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let this_obj = to_object_or_return_undefined(this_val, ctx);
 
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let len = if let Some(l) = obj.get(length_atom) {
         if l.is_int() { l.get_int() as i32 } else { 0 }
@@ -1053,7 +1053,7 @@ fn array_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx);
@@ -1122,7 +1122,7 @@ fn array_includes(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx);
@@ -1194,7 +1194,7 @@ fn val_same_value_zero(a: &JSValue, b: &JSValue) -> bool {
 fn array_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = args.first().copied().unwrap_or(JSValue::undefined());
     let join_fn = if this.is_object_like() {
-        this.as_object().get(ctx.intern("join"))
+        this.try_as_object().expect("object value").get(ctx.intern("join"))
     } else {
         None
     };
@@ -1223,7 +1223,7 @@ fn array_join(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let this_obj = to_object_or_return_undefined(this_val, ctx);
 
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1287,7 +1287,7 @@ fn array_is_array(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let arg = &args[0];
     if arg.is_object() {
-        let obj = arg.as_object();
+        let obj = arg.try_as_object().expect("object value");
         JSValue::bool(obj.is_array())
     } else {
         JSValue::bool(false)
@@ -1300,7 +1300,7 @@ fn get_property_with_getter(
     prop: crate::runtime::atom::Atom,
 ) -> Result<JSValue, String> {
     if obj_val.is_object_like() {
-        let mut current = Some(obj_val.as_object());
+        let mut current = Some(obj_val.try_as_object().expect("object value"));
         let mut depth = 0u32;
         while let Some(obj) = current {
             if let Some(entry) = obj.get_own_accessor_entry(prop) {
@@ -1349,7 +1349,7 @@ fn array_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return create_array_obj_from_ctor(ctx, ctor, &items);
     }
 
-    let obj = source.as_object();
+    let obj = source.try_as_object().expect("object value");
 
     let sym_iter_atom = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
     let iter_val = match get_property_with_getter(ctx, source, sym_iter_atom) {
@@ -1454,7 +1454,7 @@ fn is_builtin_array_ctor(ctx: &mut JSContext, ctor: JSValue) -> bool {
     if !ctor.is_function() {
         return false;
     }
-    if let Some(ba) = ctor.as_function().builtin_atom {
+    if let Some(ba) = ctor.try_as_function().expect("function value").builtin_atom {
         ctx.get_atom_str(ba) == "array_constructor"
     } else {
         false
@@ -1579,7 +1579,7 @@ fn array_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     let obj = if this_obj.is_object_like() {
-        this_obj.as_object()
+        this_obj.try_as_object().expect("object value")
     } else {
         return JSValue::undefined();
     };
@@ -1632,7 +1632,7 @@ fn array_map(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     let obj = if this_obj.is_object_like() {
-        this_obj.as_object()
+        this_obj.try_as_object().expect("object value")
     } else {
         let mut result = new_jsarray_with_proto(ctx);
         result
@@ -1681,7 +1681,7 @@ fn array_filter(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1719,7 +1719,7 @@ fn array_reduce(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1786,7 +1786,7 @@ fn array_every(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1821,7 +1821,7 @@ fn array_some(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1856,7 +1856,7 @@ fn array_find(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1891,7 +1891,7 @@ fn array_find_index(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1924,7 +1924,7 @@ fn array_reduce_right(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx) as usize;
@@ -1989,12 +1989,12 @@ fn array_sort(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, len_atom, ctx) as usize
     };
     let mut elements: Vec<JSValue> = (0..len)
         .map(|i| {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             array_get(arr, i, ctx).unwrap_or(JSValue::undefined())
         })
         .collect();
@@ -2050,7 +2050,7 @@ fn array_reverse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         arr.get(len_atom)
             .as_ref()
             .map(|v| js_to_length(v))
@@ -2061,7 +2061,7 @@ fn array_reverse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let mut elements: Vec<JSValue> = (0..len)
         .map(|i| {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             array_get(arr, i as usize, ctx).unwrap_or(JSValue::undefined())
         })
         .collect();
@@ -2126,7 +2126,7 @@ fn array_fill(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let value = args.get(1).copied().unwrap_or(JSValue::undefined());
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, len_atom, ctx)
     };
     let start = args.get(2).map(|v| relative_index(ctx, v, len)).unwrap_or(0);
@@ -2146,7 +2146,7 @@ fn array_copy_within(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let obj_val = to_object_or_return_undefined(this, ctx);
     let len = {
-        let arr = obj_val.as_object();
+        let arr = obj_val.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, ctx.common_atoms.length, ctx)
     };
 
@@ -2201,7 +2201,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         arr.get(len_atom)
             .as_ref()
             .map(|v| js_to_length(v))
@@ -2232,7 +2232,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut removed: Vec<JSValue> = Vec::with_capacity(delete_count.min(1024) as usize);
 
     for i in 0..delete_count {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         removed.push(array_get(arr, (start + i) as usize, ctx).unwrap_or(JSValue::undefined()));
     }
 
@@ -2241,7 +2241,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if shift != 0 && len > 1_000_000 {
         let mut keys: Vec<u64> = Vec::new();
         {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             for slot in arr.iter_props() {
                 if let Ok(k) = ctx.get_atom_str(slot.atom).parse::<u64>() {
                     keys.push(k);
@@ -2256,7 +2256,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         for s in keys {
             if s >= start + delete_count && s < len {
                 let val = {
-                    let arr = this.as_object();
+                    let arr = this.try_as_object().expect("object value");
                     array_get(arr, s as usize, ctx).unwrap_or(JSValue::undefined())
                 };
                 let t = (s as i64 + shift) as usize;
@@ -2267,7 +2267,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if shift < 0 {
             let mut del: Vec<u64> = Vec::new();
             {
-                let arr = this.as_object();
+                let arr = this.try_as_object().expect("object value");
                 for slot in arr.iter_props() {
                     if let Ok(k) = ctx.get_atom_str(slot.atom).parse::<u64>() {
                         if k >= new_len && k < len {
@@ -2286,7 +2286,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let src_idx = (start + delete_count + (i - start)) as usize;
             let dst_idx = (start + insert_items.len() as u64 + (i - start)) as usize;
             let val = {
-                let arr = this.as_object();
+                let arr = this.try_as_object().expect("object value");
                 array_get(arr, src_idx, ctx).unwrap_or(JSValue::undefined())
             };
             let arr = this.as_object_mut();
@@ -2301,7 +2301,7 @@ fn array_splice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let src_idx = (start + delete_count + (i - start)) as usize;
             let dst_idx = (start + insert_items.len() as u64 + (i - start)) as usize;
             let val = {
-                let arr = this.as_object();
+                let arr = this.try_as_object().expect("object value");
                 array_get(arr, src_idx, ctx).unwrap_or(JSValue::undefined())
             };
             let arr = this.as_object_mut();
@@ -2339,7 +2339,7 @@ fn array_to_spliced(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, len_atom, ctx)
     };
     if len > ARRAY_LENGTH_LIMIT {
@@ -2372,7 +2372,7 @@ fn array_to_spliced(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let mut elements: Vec<JSValue> = (0..len)
         .map(|i| {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             array_get(arr, i, ctx).unwrap_or(JSValue::undefined())
         })
         .collect();
@@ -2406,7 +2406,7 @@ fn array_flat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return;
         }
         let len_atom = ctx.common_atoms.length;
-        let arr = arr_val.as_object();
+        let arr = arr_val.try_as_object().expect("object value");
         if !arr.is_array() {
             result.push(arr_val);
             return;
@@ -2417,7 +2417,7 @@ fn array_flat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             .collect();
         for el in elements {
             if depth > 0 && el.is_object() {
-                let el_obj = el.as_object();
+                let el_obj = el.try_as_object().expect("object value");
                 if el_obj.is_array() {
                     flatten(ctx, el, depth - 1, result);
                     continue;
@@ -2429,7 +2429,7 @@ fn array_flat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let mut flat_elements: Vec<JSValue> = Vec::new();
     {
-        let obj = this.as_object();
+        let obj = this.try_as_object().expect("object value");
         let this_len = safe_array_len_with_ctx(&obj, ctx.common_atoms.length, ctx) as usize;
         for i in 0..this_len {
             let el = array_get(obj, i, ctx).unwrap_or(JSValue::undefined());
@@ -2460,21 +2460,21 @@ fn array_flat_map(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, len_atom, ctx) as usize
     };
 
     let mut result_elements: Vec<JSValue> = Vec::new();
     for i in 0..len {
         let el = {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             array_get(arr, i, ctx).unwrap_or(JSValue::undefined())
         };
         let idx_val = JSValue::new_int(i as i64);
         match call_callback(ctx, callback, &[el, idx_val, this]) {
             Ok(mapped) => {
                 if mapped.is_object() {
-                    let mapped_obj = mapped.as_object();
+                    let mapped_obj = mapped.try_as_object().expect("object value");
                     if mapped_obj.is_array() {
                         let mlen = mapped_obj
                             .get(len_atom)
@@ -2519,7 +2519,7 @@ fn array_find_last(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx).min(9007199254740991) as usize;
@@ -2557,7 +2557,7 @@ fn array_find_last_index(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_arg = args.get(2).copied().unwrap_or(JSValue::undefined());
 
     let this_obj = to_object_or_return_undefined(this, ctx);
-    let obj = this_obj.as_object();
+    let obj = this_obj.try_as_object().expect("object value");
 
     let length_atom = ctx.common_atoms.length;
     let len = safe_array_len_with_ctx(obj, length_atom, ctx).min(9007199254740991) as usize;
@@ -2590,7 +2590,7 @@ fn array_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
-    let arr = this.as_object();
+    let arr = this.try_as_object().expect("object value");
     let len = safe_array_len_with_ctx(&arr, len_atom, ctx) as usize;
     let idx_arg = args.get(1).copied().unwrap_or(JSValue::undefined());
     let n = match crate::builtins::global::js_to_number_value(ctx, &idx_arg) {
@@ -2625,7 +2625,7 @@ fn array_to_sorted(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, len_atom, ctx)
     };
     if len > ARRAY_LENGTH_LIMIT {
@@ -2635,7 +2635,7 @@ fn array_to_sorted(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = len as usize;
     let mut elements: Vec<JSValue> = (0..len)
         .map(|i| {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             array_get(arr, i, ctx).unwrap_or(JSValue::undefined())
         })
         .collect();
@@ -2685,7 +2685,7 @@ fn array_to_reversed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, len_atom, ctx)
     };
     if len > ARRAY_LENGTH_LIMIT {
@@ -2695,7 +2695,7 @@ fn array_to_reversed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = len as usize;
     let mut elements: Vec<JSValue> = (0..len)
         .map(|i| {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             array_get(arr, i, ctx).unwrap_or(JSValue::undefined())
         })
         .collect();
@@ -2723,7 +2723,7 @@ fn array_with(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
     let len = {
-        let arr = this.as_object();
+        let arr = this.try_as_object().expect("object value");
         safe_array_len_with_ctx(&arr, len_atom, ctx)
     };
     if len > ARRAY_LENGTH_LIMIT {
@@ -2733,7 +2733,7 @@ fn array_with(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = len as usize;
     let mut elements: Vec<JSValue> = (0..len)
         .map(|i| {
-            let arr = this.as_object();
+            let arr = this.try_as_object().expect("object value");
             array_get(arr, i, ctx).unwrap_or(JSValue::undefined())
         })
         .collect();
@@ -2766,7 +2766,7 @@ fn array_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let this = to_object_or_return_undefined(this, ctx);
     let len_atom = ctx.common_atoms.length;
-    let arr = this.as_object();
+    let arr = this.try_as_object().expect("object value");
     let len = arr.get(len_atom).map(|v| v.get_int() as u64).unwrap_or(0);
 
     let from_index_f = if args.len() > 2 {
@@ -2839,7 +2839,7 @@ fn array_from_async(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     if items.is_object() {
-        let obj = items.as_object();
+        let obj = items.try_as_object().expect("object value");
         let then_atom = ctx.common_atoms.then;
         if obj.get(then_atom).is_some() {
             let result = vec![*items];

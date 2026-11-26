@@ -58,7 +58,7 @@ fn call_js_function(
     if !func.is_function() {
         return Err("not a function".to_string());
     }
-    let js_func = func.as_function();
+    let js_func = func.try_as_function().expect("function value");
 
     if js_func.is_builtin() {
         if let Some(builtin_fn) = js_func.builtin_func {
@@ -95,7 +95,7 @@ fn to_number_with_valueof(ctx: &mut JSContext, value: &JSValue) -> f64 {
         return f64::NAN;
     }
     if value.is_object() {
-        let obj = value.as_object();
+        let obj = value.try_as_object().expect("object value");
         let value_of_atom = ctx.common_atoms.value_of;
         if let Some(func) = obj.get(value_of_atom) {
             if func.is_function() {
@@ -668,7 +668,7 @@ fn collect_iterable_values(
 ) -> Option<JSValue> {
     let iter_fn = {
         let sym_key = crate::runtime::atom::Atom(0x40000000 | sym_iter_val.get_symbol_id());
-        let obj = iterable.as_object();
+        let obj = iterable.try_as_object().expect("object value");
         obj.get(sym_key).unwrap()
     };
 
@@ -686,7 +686,7 @@ fn collect_iterable_values(
     let next_atom = ctx.intern("next");
     let next_fn = {
         let mut next_val = None;
-        let mut current = Some(iterator.as_object());
+        let mut current = Some(iterator.try_as_object().expect("object value"));
         while let Some(obj) = current {
             if let Some(v) = obj.get(next_atom) {
                 next_val = Some(v);
@@ -711,7 +711,7 @@ fn collect_iterable_values(
         if !result.is_object() {
             return Some(throw_type_error_math(ctx, "iterator result is not an object"));
         }
-        let result_obj = result.as_object();
+        let result_obj = result.try_as_object().expect("object value");
         let done_atom = ctx.intern("done");
         let value_atom = ctx.intern("value");
         let done = result_obj
@@ -727,7 +727,7 @@ fn collect_iterable_values(
 
         if value.is_object() || value.is_bigint() || value.is_symbol() || value.is_function() {
             let return_atom = ctx.intern("return");
-            let iter_obj = iterator.as_object();
+            let iter_obj = iterator.try_as_object().expect("object value");
             if let Some(ret_fn) = iter_obj.get(return_atom) {
                 if ret_fn.is_function() {
                     let _ = vm.call_function_with_this(ctx, ret_fn, iterator.clone(), &[]);
@@ -767,7 +767,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         crate::builtins::symbol::get_or_create_well_known_symbol(ctx, "Symbol.iterator");
     let has_iterator = iterable.is_object() && {
         let sym_key = crate::runtime::atom::Atom(0x40000000 | sym_iter_val.get_symbol_id());
-        let obj = iterable.as_object();
+        let obj = iterable.try_as_object().expect("object value");
         obj.get(sym_key).map_or(false, |v| v.is_function())
     };
 
@@ -780,7 +780,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             Some(Some(v)) => return v,
         }
     } else if iterable.is_object() {
-        let obj = iterable.as_object();
+        let obj = iterable.try_as_object().expect("object value");
         let length_prop = obj.get(ctx.common_atoms.length);
         let len = if let Some(v) = length_prop {
             if v.is_int() {

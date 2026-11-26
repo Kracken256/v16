@@ -342,7 +342,7 @@ fn regexp_get_flags(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut flags = String::new();
     for (name, letter) in entries {
         let atom = ctx.intern(name);
-        let value = this.as_object().get(atom).unwrap_or(JSValue::undefined());
+        let value = this.try_as_object().expect("object value").get(atom).unwrap_or(JSValue::undefined());
         if value.is_truthy() {
             flags.push(letter);
         }
@@ -865,7 +865,7 @@ pub fn regexp_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_string(ctx.intern("/(?:)/"));
     }
 
-    let regexp_obj = this.as_object();
+    let regexp_obj = this.try_as_object().expect("object value");
 
     let source_atom = ctx.common_atoms.source;
     let flags_atom = ctx.common_atoms.__flags__;

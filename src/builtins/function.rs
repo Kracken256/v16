@@ -289,7 +289,7 @@ fn throw_type_error_callee(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
 fn throw_type_error_caller_args(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_val = args.first().copied().unwrap_or_else(JSValue::undefined);
     if this_val.is_function() {
-        let js_func = this_val.as_function();
+        let js_func = this_val.try_as_function().expect("function value");
         if !js_func.is_strict()
             && !js_func.is_arrow()
             && !js_func.is_generator()
@@ -433,7 +433,7 @@ fn function_bind(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let is_bound = this_val.is_object() && !this_val.is_function();
     if is_bound {
-        let obj = this_val.as_object();
+        let obj = this_val.try_as_object().expect("object value");
         if obj.get(ctx.common_atoms.__boundFn).is_none() {
             let mut err = crate::object::object::JSObject::new_typed(
                 crate::object::object::ObjectType::Error,
@@ -485,9 +485,9 @@ fn function_bind(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     wrapper.set(ctx.common_atoms.__boundArgs, JSValue::new_object(args_ptr));
 
     let target_length = if this_val.is_function() {
-        this_val.as_function().arity as i64
+        this_val.try_as_function().expect("function value").arity as i64
     } else {
-        let obj = this_val.as_object();
+        let obj = this_val.try_as_object().expect("object value");
         if let Some(len) = obj.get(ctx.common_atoms.length) {
             if len.is_int() { len.get_int() } else { 0 }
         } else {
@@ -508,9 +508,9 @@ fn function_bind(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     );
 
     let target_name = if this_val.is_function() {
-        ctx.get_atom_str(this_val.as_function().name).to_string()
+        ctx.get_atom_str(this_val.try_as_function().expect("function value").name).to_string()
     } else {
-        let obj = this_val.as_object();
+        let obj = this_val.try_as_object().expect("object value");
         if let Some(n) = obj.get(ctx.common_atoms.name) {
             if n.is_string() {
                 ctx.get_atom_str(n.get_atom()).to_string()
@@ -637,7 +637,7 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let call_args: &[JSValue];
 
     if args.len() > 2 && args[2].is_object_like() {
-        let arr_obj = args[2].as_object();
+        let arr_obj = args[2].try_as_object().expect("object value");
         let length_atom = ctx.common_atoms.length;
 
         let len_val = arr_obj.get(length_atom);
@@ -766,7 +766,7 @@ fn function_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let this_val = &args[0];
     if this_val.is_function() {
-        let js_func = this_val.as_function();
+        let js_func = this_val.try_as_function().expect("function value");
 
         let func_name = ctx.get_atom_str(js_func.name).to_string();
         let arity = js_func.arity as usize;
@@ -810,7 +810,7 @@ fn function_length(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !this_val.is_function() {
         return JSValue::undefined();
     }
-    let js_func = this_val.as_function();
+    let js_func = this_val.try_as_function().expect("function value");
     JSValue::new_int(js_func.arity as i64)
 }
 
@@ -822,7 +822,7 @@ fn function_name(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if !this_val.is_function() {
         return JSValue::undefined();
     }
-    let js_func = this_val.as_function();
+    let js_func = this_val.try_as_function().expect("function value");
     let name_str = ctx.get_atom_str(js_func.name).to_string();
     JSValue::new_string(ctx.intern(&name_str))
 }

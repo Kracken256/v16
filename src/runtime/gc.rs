@@ -402,7 +402,7 @@ impl GcHeap {
     }
 
     pub fn untrack(&mut self, ptr: *mut JSObject) {
-        let idx = JSValue::new_object(ptr).as_object().gc_slot;
+        let idx = JSValue::new_object(ptr).try_as_object().expect("object value").gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
             if self.objects.get(idx) == Some(&ptr) {
@@ -502,12 +502,12 @@ impl GcHeap {
 
     #[inline(always)]
     pub fn is_array_ptr(&self, ptr: *mut JSObject) -> bool {
-        JSValue::new_object(ptr).as_object().is_dense_array()
+        JSValue::new_object(ptr).try_as_object().expect("object value").is_dense_array()
     }
 
     #[inline]
     pub fn mark(&mut self, ptr: *mut JSObject) -> bool {
-        let idx = JSValue::new_object(ptr).as_object().gc_slot;
+        let idx = JSValue::new_object(ptr).try_as_object().expect("object value").gc_slot;
         if idx == u32::MAX {
             return false;
         }
@@ -563,10 +563,10 @@ impl GcHeap {
             }
         } else if tag == TAG_FUNCTION {
             let func_value = JSValue::new_function(ptr.cast::<JSFunction>());
-            self.trace_function(func_value.as_function());
+            self.trace_function(func_value.try_as_function().expect("function value"));
         } else {
             let obj = JSValue::new_object(ptr);
-            let obj = obj.as_object();
+            let obj = obj.try_as_object().expect("object value");
             obj.for_each_property(|_atom, value, _attrs| {
                 self.mark_value(&value);
             });
@@ -774,7 +774,7 @@ impl GcHeap {
             format!("bigint(ptr={:#x})", value.get_ptr() as usize)
         } else if value.is_function() {
             let ptr = value.get_ptr();
-            let handle = value.as_object().gc_slot;
+            let handle = value.try_as_object().expect("object value").gc_slot;
             if handle != u32::MAX {
                 format!("function(handle={} ptr={:#x})", handle, ptr as usize)
             } else {
@@ -782,7 +782,7 @@ impl GcHeap {
             }
         } else if value.is_object() {
             let ptr = value.get_ptr();
-            let handle = value.as_object().gc_slot;
+            let handle = value.try_as_object().expect("object value").gc_slot;
             if handle != u32::MAX {
                 format!("object(handle={} ptr={:#x})", handle, ptr as usize)
             } else {
@@ -1186,7 +1186,7 @@ impl GcHeap {
     }
 
     pub fn write_barrier(&mut self, obj_ptr: *mut JSObject, new_value: &JSValue) {
-        let idx = JSValue::new_object(obj_ptr).as_object().gc_slot;
+        let idx = JSValue::new_object(obj_ptr).try_as_object().expect("object value").gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
             if self.marks[idx] == COLOR_BLACK {
@@ -1959,7 +1959,7 @@ mod tests {
         let mut heap = GcHeap::new();
         let ptr = heap.alloc_object().expect("nursery alloc should succeed");
         let handle = heap
-            .weak_handle(JSValue::new_object(ptr).as_object())
+            .weak_handle(JSValue::new_object(ptr).try_as_object().expect("object value"))
             .expect("nursery object should have a weak handle");
 
         assert_eq!(
@@ -1981,7 +1981,7 @@ mod tests {
         assert!(heap.resolve_weak(handle).is_none());
 
         let reused_handle = heap
-            .weak_handle(JSValue::new_object(reused).as_object())
+            .weak_handle(JSValue::new_object(reused).try_as_object().expect("object value"))
             .expect("reused nursery object should have a weak handle");
         assert_eq!(
             heap.resolve_weak(reused_handle)
@@ -1992,7 +1992,7 @@ mod tests {
         let func_ptr = Box::into_raw(Box::new(JSFunction::new()));
         heap.track_function(func_ptr);
         let func_handle = heap
-            .weak_handle(JSValue::new_function(func_ptr).as_object())
+            .weak_handle(JSValue::new_function(func_ptr).try_as_object().expect("object value"))
             .expect("function should have a weak handle");
         let resolved = heap
             .resolve_weak(func_handle)

@@ -125,13 +125,13 @@ pub fn init_error(ctx: &mut JSContext) {
 
     let global = ctx.global();
     if global.is_object() {
-        let error_ctor_val = global.as_object().get(error_atom);
+        let error_ctor_val = global.try_as_object().expect("object value").get(error_atom);
         if let Some(error_ctor) = error_ctor_val {
             if error_ctor.is_function() {
                 let error_ctor_ptr = error_ctor.get_ptr();
                 for name in ["TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "SuppressedError", "AggregateError"] {
                     let atom = ctx.intern(name);
-                    if let Some(ctor_val) = global.as_object().get(atom) {
+                    if let Some(ctor_val) = global.try_as_object().expect("object value").get(atom) {
                         if ctor_val.is_function() {
                             let ctor = ctor_val.as_function_mut();
                             ctor.base.set_prototype_raw(error_ctor_ptr);
@@ -641,7 +641,7 @@ fn build_error(
     if args.len() > 1 && args[1].is_object() {
         let cause_atom = ctx.intern("cause");
         let opts_this = args[1];
-        let opts = opts_this.as_object();
+        let opts = opts_this.try_as_object().expect("object value");
         let cause = get_property(ctx, opts, cause_atom, &opts_this);
         let _ = opts;
         if let Some(cause) = cause {
@@ -857,7 +857,7 @@ pub fn aggregate_error_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSV
         if opts.is_object() {
             let cause_atom = ctx.intern("cause");
             let opts_this = *opts;
-            let opts_obj = opts.as_object();
+            let opts_obj = opts.try_as_object().expect("object value");
             let cause = get_property(ctx, &opts_obj, cause_atom, &opts_this);
             let _ = opts_obj;
             if let Some(cause) = cause {
@@ -922,7 +922,7 @@ fn error_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let obj = this.as_object();
+    let obj = this.try_as_object().expect("object value");
     let name_atom = ctx.intern("name");
     let name_val = get_property(ctx, &obj, name_atom, this);
     let _ = obj;
@@ -946,7 +946,7 @@ fn error_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let obj2 = this.as_object();
+    let obj2 = this.try_as_object().expect("object value");
     let msg_atom = ctx.intern("message");
     let message_val = get_property(ctx, &obj2, msg_atom, this);
     let _ = obj2;
