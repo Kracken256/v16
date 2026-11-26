@@ -755,9 +755,8 @@ pub fn register_builtins(ctx: &mut JSContext) {
 pub fn fix_prototype_chain(ctx: &mut JSContext) {
     if let Some(sym_proto_ptr) = ctx.get_symbol_prototype() {
         if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
-            unsafe {
-                (*sym_proto_ptr).prototype = Some(obj_proto_ptr);
-            }
+            let sym_proto_val = JSValue::new_object(sym_proto_ptr as usize);
+            sym_proto_val.as_object_mut().prototype = Some(obj_proto_ptr);
         }
     }
 }
