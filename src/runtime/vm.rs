@@ -2774,7 +2774,7 @@ impl VM {
                         crate::object::object::PrivateKind::Field,
                     );
                 }
-            } else if this_val.is_object() && unsafe { this_val.as_object() }.is_proxy() {
+            } else if this_val.is_object() && this_val.as_object().is_proxy() {
                 let desc = crate::object::object::PropertyDescriptor {
                     value: Some(value),
                     writable: true,
@@ -3203,7 +3203,7 @@ impl VM {
                 .take()
                 .unwrap_or_else(JSValue::undefined));
         }
-        let is_proxy = with_value.is_object() && unsafe { with_value.as_object() }.is_proxy();
+        let is_proxy = with_value.is_object() && with_value.as_object().is_proxy();
         let mut keys: Vec<crate::runtime::atom::Atom> = Vec::new();
         if is_proxy {
             let own_keys = match self.proxy_own_keys(ctx, with_value) {
@@ -3327,7 +3327,7 @@ impl VM {
         }
         if kind == 0 {
             let arr_atom = ctx.common_atoms.__iter_arr__;
-            let has_fast_path = unsafe { iter_val.as_object() }.get(arr_atom).is_some();
+            let has_fast_path = iter_val.as_object().get(arr_atom).is_some();
             if has_fast_path {
                 match self.op_iterator_next(
                     ctx,
@@ -10196,7 +10196,7 @@ impl VM {
                         }
                         continue;
                     }
-                    if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+                    if obj_val.is_object() && obj_val.as_object().is_proxy() {
                         let Some(key) = self.canonical_property_key_value(ctx, key_val) else {
                             if let Some(exc) = self.take_pending_exception(ctx) {
                                 match self.dispatch_throw_value(ctx, exc) {
@@ -10710,7 +10710,7 @@ impl VM {
                             }
                             continue;
                         };
-                        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+                        if obj_val.is_object() && obj_val.as_object().is_proxy() {
                             let desc = crate::object::object::PropertyDescriptor {
                                 value: Some(value),
                                 writable: true,
@@ -11880,7 +11880,7 @@ impl VM {
                     let value = self.get_reg(val_reg);
                     if object.is_object_like() {
                         let is_proxy =
-                            object.is_object() && unsafe { object.as_object() }.is_proxy();
+                            object.is_object() && object.as_object().is_proxy();
                         match self.object_has_property_checked(ctx, object, atom) {
                             Some(true) => {
                                 self.set_named_prop(ctx, object, value, atom, usize::MAX);
@@ -14283,7 +14283,7 @@ impl VM {
         if src_val.is_null_or_undefined() {
             return Ok(());
         }
-        if src_val.is_object() && unsafe { src_val.as_object() }.is_proxy() {
+        if src_val.is_object() && src_val.as_object().is_proxy() {
             let keys = self.proxy_own_keys(ctx, src_val)?;
             for key in keys {
                 let atom = self.key_value_to_atom(ctx, key);
@@ -14383,11 +14383,11 @@ impl VM {
             }
             return Ok(JSValue::undefined());
         }
-        if obj.is_object() && unsafe { obj.as_object() }.is_proxy() {
+        if obj.is_object() && obj.as_object().is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             return self.proxy_get_internal(ctx, obj, key, obj);
         }
-        let js_obj = unsafe { obj.as_object() };
+        let js_obj = obj.as_object();
         if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
             if let Some(getter) = entry.get {
                 if getter.is_function() {
@@ -14496,7 +14496,7 @@ impl VM {
         ctx: &mut JSContext,
         proxy: JSValue,
     ) -> Result<(JSValue, JSValue), String> {
-        let obj = unsafe { proxy.as_object() };
+        let obj = proxy.as_object();
         match (obj.proxy_target(), obj.proxy_handler()) {
             (Some(target), Some(handler)) => Ok((target, handler)),
             _ => {
@@ -14584,7 +14584,7 @@ impl VM {
         let result = self.call_function_with_this(ctx, trap, handler, &args)?;
         let atom = self.key_value_to_atom(ctx, key);
         let target_desc = if target.is_object_like() {
-            unsafe { target.as_object() }.get_own_descriptor(atom)
+            target.as_object().get_own_descriptor(atom)
         } else {
             None
         };
@@ -14614,7 +14614,7 @@ impl VM {
         if !target.is_object_like() {
             return Ok(JSValue::undefined());
         }
-        if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+        if target.is_object() && target.as_object().is_proxy() {
             return self.proxy_get_internal(ctx, target, key, receiver);
         }
         let atom = self.key_value_to_atom(ctx, key);
@@ -14690,7 +14690,7 @@ impl VM {
         }
         let atom = self.key_value_to_atom(ctx, key);
         let target_desc = if target.is_object_like() {
-            unsafe { target.as_object() }.get_own_descriptor(atom)
+            target.as_object().get_own_descriptor(atom)
         } else {
             None
         };
@@ -14728,7 +14728,7 @@ impl VM {
         if !receiver.is_object_like() {
             return Ok(false);
         }
-        if receiver.is_object() && unsafe { receiver.as_object() }.is_proxy() {
+        if receiver.is_object() && receiver.as_object().is_proxy() {
             match self.proxy_get_own_descriptor(ctx, receiver, key)? {
                 Some(existing) => {
                     let is_accessor = existing.get.is_some() || existing.set.is_some();
@@ -14739,7 +14739,7 @@ impl VM {
                 None => {
                     let (target, _handler) = self.proxy_resolve(ctx, receiver)?;
                     let extensible =
-                        target.is_object_like() && unsafe { target.as_object() }.extensible();
+                        target.is_object_like() && target.as_object().extensible();
                     if !extensible {
                         return Ok(false);
                     }
@@ -14755,7 +14755,7 @@ impl VM {
             };
             return self.proxy_define_property_internal(ctx, receiver, key, desc);
         }
-        let obj = unsafe { receiver.as_object_mut() };
+        let obj = receiver.as_object_mut();
         if let Some(d) = obj.get_own_descriptor(atom) {
             if d.get.is_some() || d.set.is_some() || !d.writable {
                 return Ok(false);
@@ -14778,17 +14778,17 @@ impl VM {
         if !target.is_object_like() {
             return Ok(false);
         }
-        if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+        if target.is_object() && target.as_object().is_proxy() {
             return self.proxy_set_internal(ctx, target, key, value, receiver);
         }
         let atom = self.key_value_to_atom(ctx, key);
         let mut current = target;
         let mut depth = 0u32;
         while current.is_object_like() {
-            if current.is_object() && unsafe { current.as_object() }.is_proxy() {
+            if current.is_object() && current.as_object().is_proxy() {
                 return self.proxy_set_internal(ctx, current, key, value, receiver);
             }
-            let obj = unsafe { current.as_object() };
+            let obj = current.as_object();
             if let Some(entry) = obj.get_own_accessor_entry(atom) {
                 if let Some(setter) = entry.set {
                     if setter.is_function() {
@@ -14840,7 +14840,7 @@ impl VM {
         obj_val: JSValue,
         key: JSValue,
     ) -> Result<Option<crate::object::object::PropertyDescriptor>, String> {
-        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+        if obj_val.is_object() && obj_val.as_object().is_proxy() {
             return self.proxy_get_own_descriptor(ctx, obj_val, key);
         }
         if !obj_val.is_object_like() {
@@ -14874,7 +14874,7 @@ impl VM {
             return Ok(None);
         }
         let atom = self.key_value_to_atom(ctx, key);
-        let obj = unsafe { obj_val.as_object() };
+        let obj = obj_val.as_object();
         if let Some(array) = obj.as_dense_array() {
             if let Some(index) = ctx.atom_table().get_array_index(atom) {
                 if let Some(v) = array.elements.get(index).copied() {
@@ -14908,7 +14908,7 @@ impl VM {
         let trap_result = self.call_function_with_this(ctx, trap, handler, &args)?;
         let target_desc = self.ordinary_get_own_descriptor(ctx, target, key)?;
         let extensible_target =
-            target.is_object_like() && unsafe { target.as_object() }.extensible();
+            target.is_object_like() && target.as_object().extensible();
         if trap_result.is_undefined() {
             if let Some(td) = &target_desc {
                 if !td.configurable {
@@ -15051,7 +15051,7 @@ impl VM {
         if !target.is_object_like() {
             return Ok(true);
         }
-        let tobj = unsafe { target.as_object() };
+        let tobj = target.as_object();
         let target_desc = tobj.get_own_descriptor(atom);
         let target_extensible = tobj.extensible();
         let Some(existing) = target_desc else {
@@ -15123,11 +15123,11 @@ impl VM {
         if !target.is_object_like() {
             return Ok(false);
         }
-        if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+        if target.is_object() && target.as_object().is_proxy() {
             return self.proxy_define_property_internal(ctx, target, key, desc);
         }
         let atom = self.key_value_to_atom(ctx, key);
-        let ok = unsafe { target.as_object_mut() }.define_property(atom, desc);
+        let ok = target.as_object_mut().define_property(atom, desc);
         Ok(ok)
     }
 
@@ -15140,7 +15140,7 @@ impl VM {
         let trap_atom = ctx.intern("ownKeys");
         let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
         let Some(trap) = trap else {
-            let obj = unsafe { target.as_object() };
+            let obj = target.as_object();
             let mut keys: Vec<JSValue> = Vec::new();
             for atom in obj.keys() {
                 keys.push(self.atom_to_key_value(ctx, atom));
@@ -15189,8 +15189,8 @@ impl VM {
             }
             keys.push(key);
         }
-        if !unsafe { target.as_object() }.extensible() {
-            let target_obj = unsafe { target.as_object() };
+        if !target.as_object().extensible() {
+            let target_obj = target.as_object();
             let mut target_keys: Vec<JSValue> = Vec::new();
             for atom in target_obj.keys() {
                 target_keys.push(self.atom_to_key_value(ctx, atom));
@@ -15220,10 +15220,10 @@ impl VM {
         let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
         let Some(trap) = trap else {
             let atom = self.key_value_to_atom(ctx, key);
-            if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+            if target.is_object() && target.as_object().is_proxy() {
                 return self.proxy_has_internal(ctx, target, key);
             }
-            return Ok(unsafe { target.as_object() }.has_property(atom));
+            return Ok(target.as_object().has_property(atom));
         };
         let args = [target, key];
         let result = self.call_function_with_this(ctx, trap, handler, &args)?;
@@ -15231,7 +15231,7 @@ impl VM {
         if !trap_result {
             let atom = self.key_value_to_atom(ctx, key);
             if target.is_object_like() {
-                let tobj = unsafe { target.as_object() };
+                let tobj = target.as_object();
                 if !tobj.extensible() {
                     let target_has = tobj.get_own_descriptor(atom).is_some();
                     if target_has {
@@ -15632,7 +15632,7 @@ impl VM {
         object_val: JSValue,
         atom: crate::runtime::atom::Atom,
     ) -> Option<bool> {
-        if object_val.is_object() && unsafe { object_val.as_object() }.is_proxy() {
+        if object_val.is_object() && object_val.as_object().is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             match self.proxy_has_internal(ctx, object_val, key) {
                 Ok(found) => Some(found),
@@ -15897,7 +15897,7 @@ impl VM {
             self.set_pending_type_error(ctx, "Cannot read property of null or undefined");
             return None;
         }
-        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+        if obj_val.is_object() && obj_val.as_object().is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             match self.proxy_get_internal(ctx, obj_val, key, this_val) {
                 Ok(v) => {
@@ -16968,7 +16968,7 @@ impl VM {
             }
             return false;
         }
-        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+        if obj_val.is_object() && obj_val.as_object().is_proxy() {
             let key = self.atom_to_key_value(ctx, atom);
             match self.proxy_set_internal(ctx, obj_val, key, value, obj_val) {
                 Ok(true) => {}
