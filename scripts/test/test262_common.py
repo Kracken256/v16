@@ -128,36 +128,6 @@ EXCLUDED_FILENAMES = frozenset(
 #: ``flags`` entries that make the runner skip a test (``should_skip``).
 UNSUPPORTED_FLAGS = ("module", "raw")
 
-#: ``features`` entries that make the runner skip a test (``should_skip``).
-#: Matching is a substring test, exactly like the Rust code.
-UNSUPPORTED_FEATURES = (
-    "FinalizationRegistry",
-    "WeakRef",
-    "Top-level-await",
-    "import.meta",
-    "ExportDefault",
-    "ExportAllFrom",
-    "ImportAssertions",
-    "class-fields-private",
-    "RegExp Unicode Sets",
-    "symbols",
-    "Proxy",
-    "Temporal",
-    "Intl.DurationFormat",
-    "Intl.Segmenter",
-    "Intl.RelativeTimeFormat",
-    "Intl.DisplayNames",
-    "Intl.DateTimeFormat",
-    "Intl.NumberFormat",
-    "Intl.PluralRules",
-    "Intl.ListFormat",
-    "Intl.Collator",
-    "Intl.Locale",
-    "resizable-arraybuffer",
-    "Error.isError",
-    "error-stack-accessor",
-)
-
 #: Default per-test timeout passed to the runner (milliseconds).
 DEFAULT_TEST_TIMEOUT_MS = 10_000
 #: Per-category watchdog overrides.  ``harness/`` holds support-library files
@@ -404,13 +374,6 @@ def skip_reasons(meta: Optional[Dict[str, Any]]) -> List[str]:
     for flag in UNSUPPORTED_FLAGS:
         if flag in flags:
             reasons.append("flag: " + flag)
-
-    features = _as_str_list(meta.get("features"))
-    for feature in features:
-        for unsupported in UNSUPPORTED_FEATURES:
-            if unsupported in feature:
-                reasons.append("feature: " + feature)
-                break
 
     return reasons
 
