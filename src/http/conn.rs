@@ -33,6 +33,7 @@ impl Connection {
             } else {
                 libc::AF_INET
             };
+            // SAFETY: `socket` only receives constant flags and the returned descriptor is checked below.
             let sock = unsafe {
                 libc::socket(
                     domain,
@@ -44,18 +45,24 @@ impl Connection {
                 continue;
             }
 
-            let (addr_ptr, addr_len) = socket_addr_to_raw(&addr);
+            let raw_addr = RawSocketAddr::from(&addr);
+            let (addr_ptr, addr_len) = raw_addr.as_raw();
+            // SAFETY: `sock` is a live descriptor and `raw_addr` owns a matching sockaddr for the duration of the call.
             let ret = unsafe { libc::connect(sock, addr_ptr, addr_len) };
 
             if ret == 0 {
+                // SAFETY: on success the descriptor is uniquely owned and transferred to the TcpStream.
                 return Ok(unsafe { TcpStream::from_raw_fd(sock) });
             }
 
+            // SAFETY: `__errno_location` returns a valid pointer to the calling thread's errno.
             let errno = unsafe { *libc::__errno_location() };
             if errno == libc::EINPROGRESS {
+                // SAFETY: a nonblocking connect in progress transfers ownership of the descriptor to the TcpStream.
                 return Ok(unsafe { TcpStream::from_raw_fd(sock) });
             }
 
+            // SAFETY: the connection failed and this function still owns the descriptor.
             unsafe { libc::close(sock) };
         }
 
@@ -65,6 +72,7 @@ impl Connection {
     pub fn check_connect(stream: &TcpStream) -> Result<(), String> {
         let mut err: i32 = 0;
         let mut err_len: u32 = std::mem::size_of::<i32>() as u32;
+        // SAFETY: the socket is live, `err`/`err_len` are valid local buffers of the expected size.
         let ret = unsafe {
             libc::getsockopt(
                 stream.as_raw_fd(),
@@ -270,24 +278,23 @@ impl AsRawFd for Connection {
     }
 }
 
-fn socket_addr_to_raw(addr: &SocketAddr) -> (*const libc::sockaddr, u32) {
-    match addr {
-        SocketAddr::V4(v4) => {
-            let raw: libc::sockaddr_in = libc::sockaddr_in {
+enum RawSocketAddr {
+    V4(libc::sockaddr_in),
+    V6(libc::sockaddr_in6),
+}
+
+impl From<&SocketAddr> for RawSocketAddr {
+    fn from(addr: &SocketAddr) -> Self {
+        match addr {
+            SocketAddr::V4(v4) => RawSocketAddr::V4(libc::sockaddr_in {
                 sin_family: libc::AF_INET as u16,
                 sin_port: v4.port().to_be(),
                 sin_addr: libc::in_addr {
                     s_addr: u32::from_ne_bytes(v4.ip().octets()),
                 },
                 sin_zero: [0; 8],
-            };
-            (
-                &raw as *const _ as *const libc::sockaddr,
-                std::mem::size_of::<libc::sockaddr_in>() as u32,
-            )
-        }
-        SocketAddr::V6(v6) => {
-            let raw = libc::sockaddr_in6 {
+            }),
+            SocketAddr::V6(v6) => RawSocketAddr::V6(libc::sockaddr_in6 {
                 sin6_family: libc::AF_INET6 as u16,
                 sin6_port: v6.port().to_be(),
                 sin6_flowinfo: v6.flowinfo(),
@@ -295,11 +302,22 @@ fn socket_addr_to_raw(addr: &SocketAddr) -> (*const libc::sockaddr, u32) {
                     s6_addr: v6.ip().octets(),
                 },
                 sin6_scope_id: v6.scope_id(),
-            };
-            (
-                &raw as *const _ as *const libc::sockaddr,
+            }),
+        }
+    }
+}
+
+impl RawSocketAddr {
+    fn as_raw(&self) -> (*const libc::sockaddr, u32) {
+        match self {
+            RawSocketAddr::V4(addr) => (
+                addr as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as u32,
+            ),
+            RawSocketAddr::V6(addr) => (
+                addr as *const _ as *const libc::sockaddr,
                 std::mem::size_of::<libc::sockaddr_in6>() as u32,
-            )
+            ),
         }
     }
 }
