@@ -770,6 +770,8 @@ pub struct VM {
 
     eval_binding_frames: u32,
 
+    eval_binding_frame_indices: Vec<usize>,
+
     eval_direct_flags: u8,
 
     eval_direct_scope_start: u32,
@@ -871,6 +873,7 @@ impl VM {
             allocation_count: 0,
             caller_vm: None,
             eval_binding_frames: 0,
+            eval_binding_frame_indices: Vec::new(),
             eval_direct_flags: 0,
             eval_direct_scope_start: 0,
             eval_direct_scope_count: 0,
@@ -1605,17 +1608,24 @@ impl VM {
     #[inline(never)]
     fn scan_eval_bindings(
         frames: &[CallFrame],
+        binding_frames: &[usize],
         frame_index: usize,
         atom_id: u32,
     ) -> Option<JSValue> {
-        for fi in (0..=frame_index).rev() {
+        let mut best: Option<(usize, JSValue)> = None;
+        for &fi in binding_frames {
+            if fi > frame_index {
+                continue;
+            }
             if let Some(ref eb) = frames[fi].eval_bindings {
                 if let Some(val) = eb.get(&atom_id) {
-                    return Some(*val);
+                    if best.map_or(true, |(bfi, _)| fi > bfi) {
+                        best = Some((fi, *val));
+                    }
                 }
             }
         }
-        None
+        best.map(|(_, val)| val)
     }
 
     fn param_env_lookup(
@@ -1682,6 +1692,8 @@ impl VM {
         if self.eval_binding_frames > 0 && self.frames[self.frame_index].eval_bindings.is_some() {
             self.frames[self.frame_index].eval_bindings = None;
             self.eval_binding_frames -= 1;
+            let popped = self.frame_index;
+            self.eval_binding_frame_indices.retain(|&fi| fi != popped);
         }
         self.frames[self.frame_index].param_env = JSValue::undefined();
         self.frames[self.frame_index].param_env_own = false;
@@ -1965,6 +1977,7 @@ impl VM {
                         caller.frames[fi].eval_bindings =
                             Some(Box::new(std::collections::HashMap::new()));
                         caller.eval_binding_frames += 1;
+                        caller.eval_binding_frame_indices.push(fi);
                     }
                     caller.frames[fi]
                         .eval_bindings
@@ -2042,6 +2055,7 @@ impl VM {
                 caller.frames[fi].eval_bindings =
                     Some(Box::new(std::collections::HashMap::new()));
                 caller.eval_binding_frames += 1;
+                caller.eval_binding_frame_indices.push(fi);
             }
             caller.frames[fi]
                 .eval_bindings
@@ -7657,7 +7671,12 @@ impl VM {
                     let mut resolved = false;
                     if self.eval_binding_frames > 0 {
                         if let Some(val) =
-                            Self::scan_eval_bindings(&self.frames, self.frame_index, atom.0)
+                            Self::scan_eval_bindings(
+                                &self.frames,
+                                &self.eval_binding_frame_indices,
+                                self.frame_index,
+                                atom.0,
+                            )
                         {
                             self.set_reg(dst, val);
                             resolved = true;
@@ -12964,7 +12983,10 @@ impl VM {
                     let mut exists = false;
                     let has_eval = self.eval_binding_frames > 0 || self.caller_vm.is_some();
                     if has_eval {
-                        for fi in (0..=self.frame_index).rev() {
+                        for &fi in &self.eval_binding_frame_indices {
+                            if fi > self.frame_index {
+                                continue;
+                            }
                             if let Some(ref eb) = self.frames[fi].eval_bindings {
                                 if eb.contains_key(&atom.0) {
                                     exists = true;
