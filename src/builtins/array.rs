@@ -1200,12 +1200,8 @@ fn array_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     if let Some(f) = join_fn {
         if f.is_function() {
-            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                if let Ok(v) = vm.call_function_with_this(ctx, f, this, &[]) {
-                    return v;
-                }
-                return JSValue::undefined();
+            if let Some(result) = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, f, this, &[])) {
+                return result.unwrap_or_else(|_| JSValue::undefined());
             }
         }
     }
@@ -1470,8 +1466,7 @@ fn create_array_obj_from_ctor(ctx: &mut JSContext, ctor: JSValue, items: &[JSVal
         return create_array_obj(ctx, items);
     }
 
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    let constructed = ctx.with_vm(|vm, ctx| {
         match vm.construct(ctx, ctor, &[JSValue::new_int(items.len() as i64)]) {
             Ok(arr) => {
                 if arr.is_object_like() {
@@ -1482,10 +1477,13 @@ fn create_array_obj_from_ctor(ctx: &mut JSContext, ctor: JSValue, items: &[JSVal
                     }
                     arr_obj.set(ctx.common_atoms.length, JSValue::new_int(items.len() as i64));
                 }
-                return arr;
+                arr
             }
-            Err(_) => return JSValue::undefined(),
+            Err(_) => JSValue::undefined(),
         }
+    });
+    if let Some(arr) = constructed {
+        return arr;
     }
 
     create_array_obj(ctx, items)
@@ -1496,22 +1494,22 @@ fn create_array_obj_from_ctor_iter(ctx: &mut JSContext, ctor: JSValue, items: &[
         return create_array_obj(ctx, items);
     }
 
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        match vm.construct(ctx, ctor, &[]) {
-            Ok(arr) => {
-                if arr.is_object_like() {
-                    let arr_obj = arr.as_object_mut();
-                    for (i, &val) in items.iter().enumerate() {
-                        let key = ctx.int_atom_mut(i);
-                        arr_obj.set(key, val);
-                    }
-                    arr_obj.set(ctx.common_atoms.length, JSValue::new_int(items.len() as i64));
+    let constructed = ctx.with_vm(|vm, ctx| match vm.construct(ctx, ctor, &[]) {
+        Ok(arr) => {
+            if arr.is_object_like() {
+                let arr_obj = arr.as_object_mut();
+                for (i, &val) in items.iter().enumerate() {
+                    let key = ctx.int_atom_mut(i);
+                    arr_obj.set(key, val);
                 }
-                return arr;
+                arr_obj.set(ctx.common_atoms.length, JSValue::new_int(items.len() as i64));
             }
-            Err(_) => return JSValue::undefined(),
+            arr
         }
+        Err(_) => JSValue::undefined(),
+    });
+    if let Some(arr) = constructed {
+        return arr;
     }
 
     create_array_obj(ctx, items)
@@ -1553,11 +1551,9 @@ pub fn call_callback_with_this(
     this_value: JSValue,
     args: &[JSValue],
 ) -> Result<JSValue, String> {
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-        vm.call_function_with_this(ctx, callback, this_value, args)
-    } else {
-        Err("call_callback: VM not available".to_string())
+    match ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, callback, this_value, args)) {
+        Some(result) => result,
+        None => Err("call_callback: VM not available".to_string()),
     }
 }
 
