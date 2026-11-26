@@ -2518,6 +2518,7 @@ impl JSObject {
         if !self.extensible() {
             return false;
         }
+        self.shape_id_cache = usize::MAX;
         if desc.is_accessor() {
             let extra = self.ensure_extra();
             let accs = extra
