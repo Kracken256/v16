@@ -64,8 +64,6 @@ pub struct CallFrame {
     pub current_pc: usize,
     pub is_strict_frame: bool,
 
-    pub has_upvalues: bool,
-
     pub var_name_map: Option<std::rc::Rc<Vec<(u32, u16, u8)>>>,
     pub eval_bindings: Option<Box<std::collections::HashMap<u32, JSValue>>>,
     pub cached_arguments: Option<usize>,
@@ -106,7 +104,6 @@ impl CallFrame {
             uses_arguments: false,
             current_pc: 0,
             is_strict_frame: false,
-            has_upvalues: false,
             var_name_map: None,
             eval_bindings: None,
             cached_arguments: None,
@@ -743,10 +740,6 @@ pub struct VM {
 
     cached_ic_table_ptr: *mut crate::compiler::InlineCacheTable,
 
-    cached_upvalue_slot_ptr: *const std::rc::Rc<std::cell::Cell<JSValue>>,
-    cached_upvalue_atom_ptr: *const crate::runtime::atom::Atom,
-    cached_upvalues_len: usize,
-
     exception_handlers: Vec<ExceptionHandler>,
 
     pub(crate) pending_throw: Option<JSValue>,
@@ -855,9 +848,6 @@ impl VM {
             cached_has_upvalue_sync: false,
             cached_upvalue_sync_bitset: 0,
             cached_ic_table_ptr: std::ptr::null_mut(),
-            cached_upvalue_slot_ptr: std::ptr::null(),
-            cached_upvalue_atom_ptr: std::ptr::null(),
-            cached_upvalues_len: 0,
             exception_handlers: Vec::new(),
             pending_throw: None,
             last_caught_exception: None,
@@ -1226,31 +1216,6 @@ impl VM {
         self.cached_has_upvalue_sync = frame.upvalue_sync_map.is_some();
         self.cached_upvalue_sync_bitset = frame.upvalue_sync_bitset;
         self.cached_ic_table_ptr = frame.ic_table_ptr;
-
-        if frame.has_upvalues {
-            if let Some(func_ptr) = frame.function_ptr {
-                let func_val = JSValue::new_function(func_ptr);
-                let func = func_val.as_function();
-                if let Some(uv) = func.upvalues.as_ref() {
-                    let slots = &uv.upvalue_slots;
-                    self.cached_upvalue_slot_ptr = slots.as_ptr();
-                    self.cached_upvalue_atom_ptr = uv.upvalue_slot_atoms.as_ptr();
-                    self.cached_upvalues_len = slots.len();
-                } else {
-                    self.cached_upvalue_slot_ptr = std::ptr::null();
-                    self.cached_upvalue_atom_ptr = std::ptr::null();
-                    self.cached_upvalues_len = 0;
-                }
-            } else {
-                self.cached_upvalue_slot_ptr = std::ptr::null();
-                self.cached_upvalue_atom_ptr = std::ptr::null();
-                self.cached_upvalues_len = 0;
-            }
-        } else {
-            self.cached_upvalue_slot_ptr = std::ptr::null();
-            self.cached_upvalue_atom_ptr = std::ptr::null();
-            self.cached_upvalues_len = 0;
-        }
     }
 
     fn push_frame(
@@ -1372,14 +1337,9 @@ impl VM {
             let func = func.as_function();
             frame.is_strict_frame = func.is_strict();
             frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
-            frame.has_upvalues = func
-                .upvalues
-                .as_ref()
-                .map_or(false, |uv| !uv.upvalue_slots.is_empty());
         } else {
             frame.is_strict_frame = false;
             frame.var_name_map = None;
-            frame.has_upvalues = false;
         }
         frame.cached_arguments = None;
         frame.uses_arguments = save_args;
@@ -1401,30 +1361,6 @@ impl VM {
         self.cached_has_upvalue_sync = false;
         self.cached_upvalue_sync_bitset = 0;
         self.cached_ic_table_ptr = frame.ic_table_ptr;
-        if let Some(fptr) = function_ptr {
-            if frame.has_upvalues {
-                let func = JSValue::new_function(fptr);
-                let func = func.as_function();
-                if let Some(uv) = func.upvalues.as_ref() {
-                    let slots = &uv.upvalue_slots;
-                    self.cached_upvalue_slot_ptr = slots.as_ptr();
-                    self.cached_upvalue_atom_ptr = uv.upvalue_slot_atoms.as_ptr();
-                    self.cached_upvalues_len = slots.len();
-                } else {
-                    self.cached_upvalue_slot_ptr = std::ptr::null();
-                    self.cached_upvalue_atom_ptr = std::ptr::null();
-                    self.cached_upvalues_len = 0;
-                }
-            } else {
-                self.cached_upvalue_slot_ptr = std::ptr::null();
-                self.cached_upvalue_atom_ptr = std::ptr::null();
-                self.cached_upvalues_len = 0;
-            }
-        } else {
-            self.cached_upvalue_slot_ptr = std::ptr::null();
-            self.cached_upvalue_atom_ptr = std::ptr::null();
-            self.cached_upvalues_len = 0;
-        }
     }
 
     #[inline(always)]
@@ -1517,14 +1453,9 @@ impl VM {
             let func = func.as_function();
             frame.is_strict_frame = func.is_strict();
             frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
-            frame.has_upvalues = func
-                .upvalues
-                .as_ref()
-                .map_or(false, |uv| !uv.upvalue_slots.is_empty());
         } else {
             frame.is_strict_frame = false;
             frame.var_name_map = None;
-            frame.has_upvalues = false;
         }
         frame.cached_arguments = None;
         frame.uses_arguments = save_args;
@@ -1554,30 +1485,6 @@ impl VM {
         self.cached_has_upvalue_sync = false;
         self.cached_upvalue_sync_bitset = 0;
         self.cached_ic_table_ptr = ic_table_ptr;
-        if let Some(fptr) = function_ptr {
-            if frame.has_upvalues {
-                let func = JSValue::new_function(fptr);
-                let func = func.as_function();
-                if let Some(uv) = func.upvalues.as_ref() {
-                    let slots = &uv.upvalue_slots;
-                    self.cached_upvalue_slot_ptr = slots.as_ptr();
-                    self.cached_upvalue_atom_ptr = uv.upvalue_slot_atoms.as_ptr();
-                    self.cached_upvalues_len = slots.len();
-                } else {
-                    self.cached_upvalue_slot_ptr = std::ptr::null();
-                    self.cached_upvalue_atom_ptr = std::ptr::null();
-                    self.cached_upvalues_len = 0;
-                }
-            } else {
-                self.cached_upvalue_slot_ptr = std::ptr::null();
-                self.cached_upvalue_atom_ptr = std::ptr::null();
-                self.cached_upvalues_len = 0;
-            }
-        } else {
-            self.cached_upvalue_slot_ptr = std::ptr::null();
-            self.cached_upvalue_atom_ptr = std::ptr::null();
-            self.cached_upvalues_len = 0;
-        }
     }
 
     #[inline(never)]
@@ -2591,6 +2498,51 @@ impl VM {
             return JSValue::undefined();
         }
         unsafe { *self.cached_const_ptr.add(idx) }
+    }
+
+    #[inline(always)]
+    fn upvalue_get(&self, slot: usize) -> JSValue {
+        let Some(fptr) = self.frames[self.frame_index].function_ptr else {
+            return JSValue::undefined();
+        };
+        let func_val = JSValue::new_function(fptr);
+        let func = func_val.as_function();
+        match func
+            .upvalues
+            .as_ref()
+            .and_then(|uv| uv.upvalue_slots.get(slot))
+        {
+            Some(cell) => cell.get(),
+            None => JSValue::undefined(),
+        }
+    }
+
+    #[inline(always)]
+    fn upvalue_set(&self, slot: usize, val: JSValue) {
+        let Some(fptr) = self.frames[self.frame_index].function_ptr else {
+            return;
+        };
+        let func_val = JSValue::new_function(fptr);
+        let func = func_val.as_function();
+        if let Some(cell) = func
+            .upvalues
+            .as_ref()
+            .and_then(|uv| uv.upvalue_slots.get(slot))
+        {
+            cell.set(val);
+        }
+    }
+
+    #[inline(always)]
+    fn upvalue_atom(&self, slot: usize) -> Option<crate::runtime::atom::Atom> {
+        let fptr = self.frames[self.frame_index].function_ptr?;
+        let func_val = JSValue::new_function(fptr);
+        let func = func_val.as_function();
+        func.upvalues
+            .as_ref()?
+            .upvalue_slot_atoms
+            .get(slot)
+            .copied()
     }
 
     fn format_stack_trace(&self, ctx: &JSContext) -> String {
@@ -6102,16 +6054,6 @@ impl VM {
             frame.uses_arguments = false;
             frame.var_name_map = Some(bytecode.var_name_to_slot.clone());
             frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
-            frame.has_upvalues = match frame.function_ptr {
-                Some(ptr) => {
-                    let func = JSValue::new_function(ptr);
-                    let func = func.as_function();
-                    func.upvalues
-                        .as_ref()
-                        .map_or(false, |uv| !uv.upvalue_slots.is_empty())
-                }
-                None => false,
-            };
 
             self.frame_index = 0;
             self.exception_handlers = self.pending_handlers.take().unwrap_or_default();
@@ -8828,19 +8770,13 @@ impl VM {
                 Opcode::GetUpvalue => {
                     let dst = self.read_u16_pc();
                     let slot = self.read_u16_pc() as usize;
-                    let mut result = if !self.cached_upvalue_slot_ptr.is_null()
-                        && slot < self.cached_upvalues_len
-                    {
-                        let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-                        rc.get()
-                    } else {
-                        JSValue::undefined()
-                    };
-                    if self.eval_binding_frames > 0 && !self.cached_upvalue_atom_ptr.is_null() {
-                        if let Some(ref eb) = self.frames[self.frame_index].eval_bindings {
-                            let atom = unsafe { *self.cached_upvalue_atom_ptr.add(slot) };
-                            if let Some(value) = eb.get(&atom.0) {
-                                result = *value;
+                    let mut result = self.upvalue_get(slot);
+                    if self.eval_binding_frames > 0 {
+                        if let Some(atom) = self.upvalue_atom(slot) {
+                            if let Some(ref eb) = self.frames[self.frame_index].eval_bindings {
+                                if let Some(value) = eb.get(&atom.0) {
+                                    result = *value;
+                                }
                             }
                         }
                     }
@@ -8850,19 +8786,13 @@ impl VM {
                     let slot = self.read_u16_pc() as usize;
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
-                    if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
-                        let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-                        rc.set(val);
-                    }
+                    self.upvalue_set(slot, val);
                 }
                 Opcode::SetUpvalueDirect => {
                     let slot = self.read_u16_pc() as usize;
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
-                    if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
-                        let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-                        rc.set(val);
-                    }
+                    self.upvalue_set(slot, val);
                 }
 
                 Opcode::NewObject => {
@@ -15619,19 +15549,11 @@ impl VM {
     }
 
     fn with_upvalue_get(&self, slot: usize) -> JSValue {
-        if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
-            let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-            rc.get()
-        } else {
-            JSValue::undefined()
-        }
+        self.upvalue_get(slot)
     }
 
     fn with_upvalue_set(&mut self, slot: usize, val: JSValue) {
-        if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
-            let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-            rc.set(val);
-        }
+        self.upvalue_set(slot, val);
     }
 
     fn with_get_var(
