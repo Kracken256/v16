@@ -8900,7 +8900,7 @@ impl VM {
                         && slot < self.cached_upvalues_len
                     {
                         let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-                        unsafe { *(*std::rc::Rc::as_ptr(rc)).as_ptr() }
+                        rc.get()
                     } else {
                         JSValue::undefined()
                     };
@@ -8920,7 +8920,7 @@ impl VM {
                     let val = self.get_reg(src);
                     if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
                         let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-                        unsafe { (*std::rc::Rc::as_ptr(rc)).as_ptr().write(val) };
+                        rc.set(val);
                     }
                 }
                 Opcode::SetUpvalueDirect => {
@@ -8929,7 +8929,7 @@ impl VM {
                     let val = self.get_reg(src);
                     if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
                         let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-                        unsafe { (*std::rc::Rc::as_ptr(rc)).as_ptr().write(val) };
+                        rc.set(val);
                     }
                 }
 
@@ -9123,7 +9123,8 @@ impl VM {
                                 JSValue::undefined()
                             }
                         } else if let Some(proto_ptr) = ctx.get_string_prototype() {
-                            let proto_obj = unsafe { &*proto_ptr };
+                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_obj = proto_val.as_object();
                             proto_obj
                                 .get(key_val.get_atom())
                                 .unwrap_or(JSValue::undefined())
@@ -9215,7 +9216,8 @@ impl VM {
                         }
                     } else if obj_val.is_symbol() && key_val.is_string() {
                         if let Some(proto_ptr) = ctx.get_symbol_prototype() {
-                            let proto_obj = unsafe { &*proto_ptr };
+                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_obj = proto_val.as_object();
                             let atom = key_val.get_atom();
                             if let Some(getter) = proto_obj.get_own_accessor_value(atom) {
                                 if getter.is_function() {
@@ -9234,7 +9236,8 @@ impl VM {
                         }
                     } else if obj_val.is_symbol() && key_val.is_symbol() {
                         if let Some(proto_ptr) = ctx.get_symbol_prototype() {
-                            let proto_obj = unsafe { &*proto_ptr };
+                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_obj = proto_val.as_object();
                             let sym_key =
                                 crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
                             proto_obj.get(sym_key).unwrap_or(JSValue::undefined())
@@ -9243,7 +9246,8 @@ impl VM {
                         }
                     } else if obj_val.is_bigint() && key_val.is_string() {
                         if let Some(proto_ptr) = ctx.get_bigint_prototype() {
-                            let proto_obj = unsafe { &*proto_ptr };
+                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_obj = proto_val.as_object();
                             let atom = key_val.get_atom();
                             if let Some(getter) = proto_obj.get_own_accessor_value(atom) {
                                 if getter.is_function() {
@@ -9599,7 +9603,8 @@ impl VM {
                         let mut current = start_proto;
                         let mut found = false;
                         while let Some(ptr) = current {
-                            let pobj = unsafe { &*ptr };
+                            let pobj_val = JSValue::new_object(ptr as usize);
+                            let pobj = pobj_val.as_object();
                             if let Some(getter) = pobj.get_own_accessor_value(atom) {
                                 if getter.is_function() {
                                     let r = self
@@ -10276,11 +10281,7 @@ impl VM {
                             && !js_func.has_symbol_on_base()
                             && (obj_val.is_object() || obj_val.is_function())
                         {
-                            let obj_proto = unsafe {
-                                (*(obj_val.get_ptr()
-                                    as *const crate::object::object::JSObject))
-                                    .prototype
-                            };
+                            let obj_proto = obj_val.as_object().prototype;
                             let obj_proto_key = obj_proto.map(|p| p as usize).unwrap_or(0);
                             let ctor_ptr = ctor_val.get_ptr();
                             if self.instanceof_cache_ctor == ctor_ptr
@@ -10298,7 +10299,8 @@ impl VM {
                                     found = true;
                                     break;
                                 }
-                                proto_opt = unsafe { (*proto_ptr).prototype };
+                                let proto_val = JSValue::new_object(proto_ptr as usize);
+                                proto_opt = proto_val.as_object().prototype;
                                 limit += 1;
                                 if limit > 1000 {
                                     break;
@@ -13685,7 +13687,8 @@ impl VM {
                         if sym_iter_atom.0 != 0 {
                             let iter_fn = ctx
                                 .get_array_prototype()
-                                .and_then(|p| unsafe { (*p).get(sym_iter_atom) });
+                                .map(|p| JSValue::new_object(p as usize))
+                                .and_then(|proto_val| proto_val.as_object().get(sym_iter_atom));
                             if let Some(f) = iter_fn {
                                 args_obj.define_property(
                                     sym_iter_atom,
@@ -14366,7 +14369,8 @@ impl VM {
                     ctx.get_bool_prototype()
                 };
                 while let Some(ptr) = current {
-                    let proto = unsafe { &*ptr };
+                    let proto_val = JSValue::new_object(ptr as usize);
+                    let proto = proto_val.as_object();
                     if let Some(entry) = proto.get_own_accessor_entry(atom) {
                         if let Some(getter) = entry.get {
                             if getter.is_function() {
@@ -15730,7 +15734,7 @@ impl VM {
     fn with_upvalue_get(&self, slot: usize) -> JSValue {
         if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
             let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-            unsafe { *(*std::rc::Rc::as_ptr(rc)).as_ptr() }
+            rc.get()
         } else {
             JSValue::undefined()
         }
@@ -15739,7 +15743,7 @@ impl VM {
     fn with_upvalue_set(&mut self, slot: usize, val: JSValue) {
         if !self.cached_upvalue_slot_ptr.is_null() && slot < self.cached_upvalues_len {
             let rc = unsafe { &*self.cached_upvalue_slot_ptr.add(slot) };
-            unsafe { (*std::rc::Rc::as_ptr(rc)).as_ptr().write(val) };
+            rc.set(val);
         }
     }
 
@@ -15937,7 +15941,8 @@ impl VM {
             };
             let mut current = start_proto;
             while let Some(ptr) = current {
-                let pobj = unsafe { &*ptr };
+                let pobj_val = JSValue::new_object(ptr as usize);
+                let pobj = pobj_val.as_object();
                 if let Some(getter) = pobj.get_own_accessor_value(atom) {
                     if getter.is_function() {
                         let js_func = getter.as_function();
@@ -16136,14 +16141,15 @@ impl VM {
                                     break;
                                 }
                                 depth += 1;
-                                unsafe {
-                                    let proto = &*proto_ptr;
-                                    if let Some(offset) = proto.find_offset(atom) {
-                                        let v = proto
-                                            .get_by_offset(offset)
-                                            .unwrap_or(JSValue::undefined());
-                                        self.set_reg(dst, v);
-                                        if !ic_table_ptr.is_null() {
+                                let proto_val = JSValue::new_object(proto_ptr as usize);
+                                let proto = proto_val.as_object();
+                                if let Some(offset) = proto.find_offset(atom) {
+                                    let v = proto
+                                        .get_by_offset(offset)
+                                        .unwrap_or(JSValue::undefined());
+                                    self.set_reg(dst, v);
+                                    if !ic_table_ptr.is_null() {
+                                        unsafe {
                                             (*ic_table_ptr).ensure_capacity(pc + 1);
                                             if let Some(ic) = (*ic_table_ptr).get_mut(pc) {
                                                 ic.insert(
@@ -16153,42 +16159,43 @@ impl VM {
                                                 );
                                             }
                                         }
-                                        found = true;
-                                        break;
                                     }
-                                    if let Some(getter) = proto.get_own_accessor_value(atom) {
-                                        if getter.is_function() {
-                                            match self.call_function_with_this(
-                                                ctx,
-                                                getter,
-                                                this_val,
-                                                &[],
-                                            ) {
-                                                Ok(ret) => {
-                                                    self.set_reg(dst, ret);
-                                                }
-                                                Err(_msg) => {
-                                                    self.rethrow_last_caught(ctx);
-                                                    return None;
-                                                }
-                                            }
-                                        } else if getter.is_undefined() {
-                                            self.set_reg(dst, JSValue::undefined());
-                                        } else {
-                                            self.set_pending_type_error(
-                                                ctx,
-                                                "Property getter is not a function",
-                                            );
-                                        }
-                                        found = true;
-                                        break;
-                                    }
-                                    current = proto.prototype;
+                                    found = true;
+                                    break;
                                 }
+                                if let Some(getter) = proto.get_own_accessor_value(atom) {
+                                    if getter.is_function() {
+                                        match self.call_function_with_this(
+                                            ctx,
+                                            getter,
+                                            this_val,
+                                            &[],
+                                        ) {
+                                            Ok(ret) => {
+                                                self.set_reg(dst, ret);
+                                            }
+                                            Err(_msg) => {
+                                                self.rethrow_last_caught(ctx);
+                                                return None;
+                                            }
+                                        }
+                                    } else if getter.is_undefined() {
+                                        self.set_reg(dst, JSValue::undefined());
+                                    } else {
+                                        self.set_pending_type_error(
+                                            ctx,
+                                            "Property getter is not a function",
+                                        );
+                                    }
+                                    found = true;
+                                    break;
+                                }
+                                current = proto.prototype;
                             }
                             if !found && obj_val.is_function() && js_obj.prototype.is_none() {
                                 if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
-                                    let fn_proto = unsafe { &*fn_proto_ptr };
+                                    let fn_proto_val = JSValue::new_object(fn_proto_ptr as usize);
+                                    let fn_proto = fn_proto_val.as_object();
                                     if let Some(offset) = fn_proto.find_offset(atom) {
                                         let v = fn_proto
                                             .get_by_offset(offset)
@@ -16289,48 +16296,42 @@ impl VM {
                                 break;
                             }
                             depth += 1;
-                            unsafe {
-                                let proto = &*proto_ptr;
-                                if let Some(offset) = proto.find_offset(atom) {
-                                    value =
-                                        proto.get_by_offset(offset).unwrap_or(JSValue::undefined());
-                                    found = true;
-                                    break;
-                                }
-                                if let Some(getter) = proto.get_own_accessor_value(atom) {
-                                    value = if getter.is_function() {
-                                        match self.call_function_with_this(
-                                            ctx,
-                                            getter,
-                                            this_val,
-                                            &[],
-                                        ) {
-                                            Ok(ret) => ret,
-                                            Err(_) => {
-                                                self.rethrow_last_caught(ctx);
-                                                return None;
-                                            }
-                                        }
-                                    } else if getter.is_undefined() {
-                                        JSValue::undefined()
-                                    } else {
-                                        self.set_pending_type_error(
-                                            ctx,
-                                            "Property getter is not a function",
-                                        );
-                                        JSValue::undefined()
-                                    };
-                                    found = true;
-                                    break;
-                                }
-                                current = proto.prototype;
+                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto = proto_val.as_object();
+                            if let Some(offset) = proto.find_offset(atom) {
+                                value = proto.get_by_offset(offset).unwrap_or(JSValue::undefined());
+                                found = true;
+                                break;
                             }
+                            if let Some(getter) = proto.get_own_accessor_value(atom) {
+                                value = if getter.is_function() {
+                                    match self.call_function_with_this(ctx, getter, this_val, &[]) {
+                                        Ok(ret) => ret,
+                                        Err(_) => {
+                                            self.rethrow_last_caught(ctx);
+                                            return None;
+                                        }
+                                    }
+                                } else if getter.is_undefined() {
+                                    JSValue::undefined()
+                                } else {
+                                    self.set_pending_type_error(
+                                        ctx,
+                                        "Property getter is not a function",
+                                    );
+                                    JSValue::undefined()
+                                };
+                                found = true;
+                                break;
+                            }
+                            current = proto.prototype;
                         }
                     }
 
                     if !found && obj_val.is_function() && js_obj.prototype.is_none() {
                         if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
-                            let fn_proto = unsafe { &*fn_proto_ptr };
+                            let fn_proto_val = JSValue::new_object(fn_proto_ptr as usize);
+                            let fn_proto = fn_proto_val.as_object();
                             if let Some(offset) = fn_proto.find_offset(atom) {
                                 value = fn_proto
                                     .get_by_offset(offset)
@@ -16374,21 +16375,24 @@ impl VM {
                     ctx.string_code_unit_count(obj_val.get_atom()) as i64
                 ))
             } else if let Some(proto_ptr) = ctx.get_string_prototype() {
-                let proto_obj = unsafe { &*proto_ptr };
+                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto_obj = proto_val.as_object();
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
             }
         } else if obj_val.is_int() || obj_val.is_float() {
             if let Some(proto_ptr) = ctx.get_number_prototype() {
-                let proto_obj = unsafe { &*proto_ptr };
+                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto_obj = proto_val.as_object();
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
             }
         } else if obj_val.is_bool() {
             if let Some(proto_ptr) = ctx.get_bool_prototype() {
-                let proto_obj = unsafe { &*proto_ptr };
+                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto_obj = proto_val.as_object();
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
@@ -16403,7 +16407,8 @@ impl VM {
                     Some(JSValue::new_string(desc_atom))
                 }
             } else if let Some(proto_ptr) = ctx.get_symbol_prototype() {
-                let proto = unsafe { &*proto_ptr };
+                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto = proto_val.as_object();
                 Some(proto.get(atom).unwrap_or(JSValue::undefined()))
             } else {
                 Some(JSValue::undefined())
@@ -17417,12 +17422,12 @@ impl VM {
         let has_own_tp = self.get_symbol_to_primitive_atom(ctx).map_or(false, |a| {
             let mut cur: Option<*mut crate::object::object::JSObject> = Some(v.get_ptr() as *mut _);
             while let Some(p) = cur {
-                unsafe {
-                    if let Some(v) = (*p).get_own_value(a) {
-                        return v.is_function();
-                    }
-                    cur = (*p).prototype;
+                let p_val = JSValue::new_object(p as usize);
+                let pobj = p_val.as_object();
+                if let Some(v) = pobj.get_own_value(a) {
+                    return v.is_function();
                 }
+                cur = pobj.prototype;
             }
             false
         });
@@ -17443,18 +17448,15 @@ impl VM {
                     .or_else(|| {
                         let mut current = obj.prototype;
                         while let Some(proto_ptr) = current {
-                            unsafe {
-                                let proto = &*proto_ptr;
-                                if let Some(desc) = proto.get_own_descriptor(tp_atom) {
-                                    if let Some(getter) = desc.get {
-                                        return self
-                                            .call_function_with_this(ctx, getter, *v, &[])
-                                            .ok();
-                                    }
-                                    return desc.value;
+                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto = proto_val.as_object();
+                            if let Some(desc) = proto.get_own_descriptor(tp_atom) {
+                                if let Some(getter) = desc.get {
+                                    return self.call_function_with_this(ctx, getter, *v, &[]).ok();
                                 }
-                                current = proto.prototype;
+                                return desc.value;
                             }
+                            current = proto.prototype;
                         }
                         None
                     });
@@ -17504,20 +17506,18 @@ impl VM {
 
                 let mut current = obj.prototype;
                 while let Some(proto_ptr) = current {
-                    unsafe {
-                        let proto = &*proto_ptr;
-                        if let Some(desc) = proto.get_own_descriptor(tp_atom) {
-                            if let Some(getter) = desc.get {
-                                let saved = std::mem::take(&mut self.exception_handlers);
-                                let result =
-                                    self.call_function_with_this(ctx, getter, *v, &[]).ok();
-                                self.exception_handlers = saved;
-                                return result;
-                            }
-                            return desc.value;
+                    let proto_val = JSValue::new_object(proto_ptr as usize);
+                    let proto = proto_val.as_object();
+                    if let Some(desc) = proto.get_own_descriptor(tp_atom) {
+                        if let Some(getter) = desc.get {
+                            let saved = std::mem::take(&mut self.exception_handlers);
+                            let result = self.call_function_with_this(ctx, getter, *v, &[]).ok();
+                            self.exception_handlers = saved;
+                            return result;
                         }
-                        current = proto.prototype;
+                        return desc.value;
                     }
+                    current = proto.prototype;
                 }
                 None
             })();
@@ -17686,11 +17686,11 @@ impl VM {
         }
 
         let obj_proto = if let Some(p) = ctx.get_object_prototype() {
-            p
+            JSValue::new_object(p as usize)
         } else {
             return Self::js_to_string(v, ctx);
         };
-        let to_str = unsafe { (*obj_proto).get(to_str_atom) };
+        let to_str = obj_proto.as_object().get(to_str_atom);
         if let Some(f) = to_str {
             if f.is_function() {
                 match self.call_function_with_this(ctx, f, *v, &[]) {
