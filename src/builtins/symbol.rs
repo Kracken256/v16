@@ -63,7 +63,7 @@ fn symbol_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     create_symbol(ctx, desc)
 }
 
-fn to_string_via_vm(ctx: &mut JSContext, value: JSValue) -> Option<Atom> {
+pub(crate) fn to_string_via_vm(ctx: &mut JSContext, value: JSValue) -> Option<Atom> {
     if value.is_string() { return Some(value.get_atom()); }
     if value.is_int() { return Some(ctx.intern(&value.get_int().to_string())); }
     if value.is_float() { return Some(ctx.intern(&value.get_float().to_string())); }

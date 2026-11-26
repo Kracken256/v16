@@ -158,14 +158,17 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
 }
 
 pub fn regexp_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let pattern = if args.is_empty() {
+    let pattern = if args.is_empty() || args[0].is_undefined() {
         String::new()
     } else if args[0].is_string() {
         ctx.get_atom_str(args[0].get_atom()).to_string()
     } else if args[0].is_object() {
         return args[0].clone();
     } else {
-        String::new()
+        match crate::builtins::symbol::to_string_via_vm(ctx, args[0]) {
+            Some(atom) => ctx.get_atom_str(atom).to_string(),
+            None => return JSValue::undefined(),
+        }
     };
 
     let flags = if args.len() > 1 && args[1].is_string() {
