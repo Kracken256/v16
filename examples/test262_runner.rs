@@ -159,7 +159,7 @@ fn test262_create_realm(ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue 
     // SAFETY: `ctx.runtime_mut()` returns the live runtime that owns this context.
     let runtime_ptr = ctx.runtime_mut() as *mut v16::JSRuntime;
     // SAFETY: the runtime outlives the context created here and is not otherwise borrowed during construction.
-    let new_ctx = Box::into_raw(Box::new(v16::JSContext::new(unsafe { &mut *runtime_ptr })));
+    let new_ctx = Box::into_raw(v16::JSContext::new(unsafe { &mut *runtime_ptr }));
     // SAFETY: `new_ctx` was just allocated by `Box::into_raw` and is uniquely owned here.
     let new_ctx_ref = unsafe { &mut *new_ctx };
     new_ctx_ref.refresh_builtin_realm();

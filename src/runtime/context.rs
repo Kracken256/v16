@@ -353,13 +353,13 @@ pub struct PendingCallback {
 impl JSContext {
     const INTERRUPT_THRESHOLD: i32 = 1000;
 
-    pub fn new(runtime: &mut JSRuntime) -> Self {
+    pub fn new(runtime: &mut JSRuntime) -> Box<Self> {
         let global = JSObject::new_global();
         let global_ptr = Box::into_raw(Box::new(global));
         runtime.gc_heap_mut().track(global_ptr);
         let global_value = JSValue::new_object(global_ptr);
 
-        let mut ctx = JSContext {
+        let mut ctx = Box::new(JSContext {
             runtime: runtime as *mut JSRuntime,
             global_object: global_value,
             interrupt_counter: Self::INTERRUPT_THRESHOLD,
@@ -432,7 +432,7 @@ impl JSContext {
                 arr
             },
             args_length_shape: None,
-        };
+        });
 
         builtins::init_globals(&mut ctx);
 
@@ -1298,5 +1298,26 @@ impl JSContext {
         drop(owned_vm.take());
         self.register_vm_ptr = saved_register_vm_ptr;
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_context_realm_pointer_is_stable_after_new_context() {
+        let mut runtime = JSRuntime::new();
+        let mut ctx = runtime.new_context();
+        let ctx_ptr = (&mut *ctx) as *mut JSContext;
+        let parse_int = ctx.intern("parseInt");
+        let func = ctx
+            .global()
+            .as_object()
+            .get(parse_int)
+            .expect("parseInt should be installed on the global object");
+        assert!(func.is_function());
+        assert_eq!(func.as_function().realm_context, ctx_ptr);
+        assert!(func.as_function().realm_global.is_object_like());
     }
 }
