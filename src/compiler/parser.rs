@@ -2893,7 +2893,7 @@ impl Parser {
         }
 
         if self.cur_type() == Some(TokenType::BigInt) {
-            let val = self.cur_value().to_string();
+            let val = self.cur_value().to_string().replace('_', "");
             self.advance();
             return Ok(Expression::Literal(Literal::BigInt(val)));
         }
