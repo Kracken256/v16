@@ -10659,12 +10659,23 @@ impl VM {
                     let key_reg = self.read_u16_pc();
                     let owner_reg = self.read_u16_pc();
                     let obj_val = self.get_reg(obj_reg);
+                    if !obj_val.is_object_like() {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Right-hand side of 'in' must be an object",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
                     let key_val = self.get_reg(key_reg);
                     let owner_val = self.get_reg(owner_reg);
-                    let result = if obj_val.is_object_like()
-                        && key_val.is_string()
-                        && owner_val.is_object_like()
-                    {
+                    let result = if key_val.is_string() && owner_val.is_object_like() {
                         let atom = key_val.get_atom();
                         let owner_ptr = owner_val.get_ptr();
                         let owner_obj = owner_val.as_object();
