@@ -37,9 +37,9 @@ pub fn global_parseint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let mut threw_error = false;
         if let Some(to_str) = obj.get(ctx.intern("toString")) {
             if to_str.is_function() {
-                if let Some(ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                    match vm.call_function_with_this(ctx, to_str, *input_val, &[]) {
+                let result = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, to_str, *input_val, &[]));
+                if let Some(result) = result {
+                    match result {
                         Ok(result) if result.is_string() => {
                             prim = Some(Some(ctx.get_atom_str(result.get_atom()).to_string()));
                         }
@@ -66,9 +66,9 @@ pub fn global_parseint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         } else {
             if let Some(val_of) = obj.get(ctx.intern("valueOf")) {
                 if val_of.is_function() {
-                    if let Some(ptr) = ctx.get_register_vm_ptr() {
-                        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                        match vm.call_function_with_this(ctx, val_of, *input_val, &[]) {
+                    let result = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, val_of, *input_val, &[]));
+                    if let Some(result) = result {
+                        match result {
                             Ok(result) if result.is_string() => {
                                 prim = Some(Some(ctx.get_atom_str(result.get_atom()).to_string()));
                             }
@@ -137,30 +137,35 @@ pub fn global_parseint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let mut radix_num = None;
             if let Some(val_of) = obj.get(ctx.intern("valueOf")) {
                 if val_of.is_function() {
-                    if let Some(ptr) = ctx.get_register_vm_ptr() {
-                        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                        match vm.call_function_with_this(ctx, val_of, *ra, &[]) {
-                            Ok(result) if result.is_int() => {
-                                radix_num = Some(result.get_int() as f64)
+                    let early = ctx
+                        .with_vm(|vm, ctx| {
+                            match vm.call_function_with_this(ctx, val_of, *ra, &[]) {
+                                Ok(result) if result.is_int() => {
+                                    radix_num = Some(result.get_int() as f64)
+                                }
+                                Ok(result) if result.is_float() => radix_num = Some(result.get_float()),
+                                Ok(result) if result.is_bool() => {
+                                    radix_num = Some(if result.get_bool() { 1.0 } else { 0.0 });
+                                }
+                                _ => {}
                             }
-                            Ok(result) if result.is_float() => radix_num = Some(result.get_float()),
-                            Ok(result) if result.is_bool() => {
-                                radix_num = Some(if result.get_bool() { 1.0 } else { 0.0 });
+                            if ctx.pending_exception.is_some() {
+                                return Some(JSValue::undefined());
                             }
-                            _ => {}
-                        }
-                        if ctx.pending_exception.is_some() {
-                            return JSValue::undefined();
-                        }
+                            None
+                        })
+                        .flatten();
+                    if let Some(v) = early {
+                        return v;
                     }
                 }
             }
             if radix_num.is_none() {
                 if let Some(to_str) = obj.get(ctx.intern("toString")) {
                     if to_str.is_function() {
-                        if let Some(ptr) = ctx.get_register_vm_ptr() {
-                            let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                            match vm.call_function_with_this(ctx, to_str, *ra, &[]) {
+                        let result = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, to_str, *ra, &[]));
+                        if let Some(result) = result {
+                            match result {
                                 Ok(result) if result.is_string() => {
                                     let s = ctx.get_atom_str(result.get_atom());
                                     if let Ok(v) = s.trim().parse::<f64>() {
@@ -256,11 +261,10 @@ pub fn global_parsefloat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let input = &args[0];
 
     if input.is_symbol() {
-        if let Some(ptr) = ctx.get_register_vm_ptr() {
-            let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-            let msg_atom = ctx.intern("TypeError: Cannot convert Symbol to string");
+        let msg_atom = ctx.intern("TypeError: Cannot convert Symbol to string");
+        ctx.with_vm(|vm, _ctx| {
             vm.pending_throw = Some(JSValue::new_string(msg_atom));
-        }
+        });
         return JSValue::undefined();
     }
 
@@ -283,9 +287,9 @@ pub fn global_parsefloat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let mut threw_error = false;
         if let Some(to_str) = obj.get(ctx.intern("toString")) {
             if to_str.is_function() {
-                if let Some(ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                    match vm.call_function_with_this(ctx, to_str, *input, &[]) {
+                let result = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, to_str, *input, &[]));
+                if let Some(result) = result {
+                    match result {
                         Ok(result) => {
                             if result.is_string() {
                                 result_str = Some(ctx.get_atom_str(result.get_atom()).to_string());
@@ -308,9 +312,9 @@ pub fn global_parsefloat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if result_str.is_none() {
             if let Some(value_of) = obj.get(ctx.intern("valueOf")) {
                 if value_of.is_function() {
-                    if let Some(ptr) = ctx.get_register_vm_ptr() {
-                        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                        match vm.call_function_with_this(ctx, value_of, *input, &[]) {
+                    let result = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, value_of, *input, &[]));
+                    if let Some(result) = result {
+                        match result {
                             Ok(result) => {
                                 if result.is_string() {
                                     result_str =
@@ -330,8 +334,7 @@ pub fn global_parsefloat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         match result_str {
             Some(s) => s,
             None => {
-                if let Some(ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+                ctx.with_vm(|vm, ctx| {
                     let mut err = crate::object::object::JSObject::new_typed(
                         crate::object::object::ObjectType::Error,
                     );
@@ -349,7 +352,7 @@ pub fn global_parsefloat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     let err_ptr = Box::into_raw(Box::new(err)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track(err_ptr);
                     vm.pending_throw = Some(JSValue::new_object(err_ptr));
-                }
+                });
                 return JSValue::undefined();
             }
         }
