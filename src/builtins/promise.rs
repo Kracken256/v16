@@ -1068,14 +1068,19 @@ fn create_resolve_reject_fns(ctx: &mut JSContext, promise_val: JSValue) -> (JSVa
 fn promise_executor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let executor_fn = args.get(0).copied().unwrap_or(JSValue::undefined());
     if !executor_fn.is_function() {
-        let mut promise = create_promise(ctx);
-        let ptr = Box::into_raw(Box::new(promise)) as usize;
+        let mut err = JSObject::new();
+        err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
+        err.set(
+            ctx.common_atoms.message,
+            JSValue::new_string(ctx.intern("Promise resolver is not a function")),
+        );
+        if let Some(proto) = ctx.get_type_error_prototype() {
+            err.prototype = Some(proto);
+        }
+        let ptr = Box::into_raw(Box::new(err)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(ptr);
-        let promise_val = JSValue::new_object(ptr);
-        let rp = promise_val.as_object_mut();
-        let msg = JSValue::new_string(ctx.intern("TypeError: Promise resolver undefined is not a function"));
-        reject_promise(ctx, rp, msg);
-        return promise_val;
+        ctx.pending_exception = Some(JSValue::new_object(ptr));
+        return JSValue::undefined();
     }
 
     let mut promise = create_promise(ctx);
