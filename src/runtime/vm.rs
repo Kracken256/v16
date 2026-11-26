@@ -6,7 +6,6 @@ use crate::util::FxHashMap;
 use crate::value::JSValue;
 
 const GC_CHECK_INTERVAL: u64 = 16384;
-const INTERRUPT_POLL_EVERY_MASK: usize = 0xFFF;
 
 thread_local! {
     static RUST_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -6065,9 +6064,7 @@ impl VM {
                     }
                 }
             }
-            if (self.pc & INTERRUPT_POLL_EVERY_MASK) == 0 {
-                ctx.check_interrupt()?;
-            }
+            ctx.check_interrupt()?;
             if self.pc >= self.cached_code_len {
                 return Ok(ExecutionOutcome::Complete(JSValue::undefined()));
             }
