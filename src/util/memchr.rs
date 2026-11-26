@@ -72,10 +72,8 @@ unsafe fn memchr_sse2(needle: u8, haystack: &[u8]) -> Option<usize> {
     }
 
     while i < len {
-        unsafe {
-            if *ptr.add(i) == needle {
-                return Some(i);
-            }
+        if haystack[i] == needle {
+            return Some(i);
         }
         i += 1;
     }
@@ -106,10 +104,8 @@ unsafe fn memchr_avx2(needle: u8, haystack: &[u8]) -> Option<usize> {
     }
 
     while i < len {
-        unsafe {
-            if *ptr.add(i) == needle {
-                return Some(i);
-            }
+        if haystack[i] == needle {
+            return Some(i);
         }
         i += 1;
     }
@@ -200,7 +196,7 @@ unsafe fn memchr2_sse2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
     }
 
     while i < len {
-        let b = unsafe { *ptr.add(i) };
+        let b = haystack[i];
         if b == n1 || b == n2 {
             return Some(i);
         }
@@ -234,7 +230,7 @@ unsafe fn memchr2_avx2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
     }
 
     while i < len {
-        let b = unsafe { *ptr.add(i) };
+        let b = haystack[i];
         if b == n1 || b == n2 {
             return Some(i);
         }
