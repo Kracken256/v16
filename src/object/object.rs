@@ -2,7 +2,6 @@ use super::shape::{Shape, ShapeCache};
 use crate::runtime::atom::Atom;
 use crate::util::{FxHashMap, FxHashSet};
 use crate::value::JSValue;
-use std::mem::MaybeUninit;
 
 pub struct GeneratorState {
     pub bytecode: Box<crate::compiler::opcode::Bytecode>,
@@ -458,8 +457,15 @@ impl PropSlot {
 
 pub const INLINE_PROPS: usize = 6;
 
+const EMPTY_PROP_SLOT: PropSlot = PropSlot {
+    value: JSValue::undefined(),
+    atom: Atom(0),
+    attrs: 0,
+    _pad: [0; 3],
+};
+
 pub struct SmallPropVec {
-    inline: [MaybeUninit<PropSlot>; INLINE_PROPS],
+    inline: [PropSlot; INLINE_PROPS],
     len: u8,
     heap: Option<Vec<PropSlot>>,
 }
@@ -468,7 +474,7 @@ impl SmallPropVec {
     #[inline(always)]
     pub fn new() -> Self {
         SmallPropVec {
-            inline: unsafe { MaybeUninit::uninit().assume_init() },
+            inline: [EMPTY_PROP_SLOT; INLINE_PROPS],
             len: 0,
             heap: None,
         }
@@ -487,7 +493,7 @@ impl SmallPropVec {
     #[inline(always)]
     pub fn push(&mut self, slot: PropSlot) {
         if (self.len as usize) < INLINE_PROPS {
-            self.inline[self.len as usize].write(slot);
+            self.inline[self.len as usize] = slot;
             self.len += 1;
         } else if let Some(ref mut v) = self.heap {
             v.push(slot);
@@ -523,19 +529,19 @@ impl SmallPropVec {
     #[inline(always)]
     pub fn inline_ref(&self, idx: usize) -> &PropSlot {
         debug_assert!(idx < self.len as usize);
-        unsafe { self.inline[idx].assume_init_ref() }
+        &self.inline[idx]
     }
 
     #[inline(always)]
     pub fn inline_mut(&mut self, idx: usize) -> &mut PropSlot {
         debug_assert!(idx < self.len as usize);
-        unsafe { self.inline[idx].assume_init_mut() }
+        &mut self.inline[idx]
     }
 
     #[inline(always)]
     pub fn inline_read(&mut self, idx: usize) -> PropSlot {
         debug_assert!(idx < self.len as usize);
-        unsafe { self.inline[idx].assume_init_read() }
+        self.inline[idx].clone()
     }
 
     #[inline(always)]
@@ -545,11 +551,14 @@ impl SmallPropVec {
 
     #[inline(always)]
     pub fn iter_mut(&mut self) -> SmallPropIterMut<'_> {
-        let len = self.len();
+        let inline_len = self.len as usize;
+        let inline = &mut self.inline[..inline_len];
+        let heap: &mut [PropSlot] = match self.heap.as_mut() {
+            Some(v) => v.as_mut_slice(),
+            None => &mut [],
+        };
         SmallPropIterMut {
-            vec: self,
-            idx: 0,
-            len,
+            inner: inline.iter_mut().chain(heap.iter_mut()),
         }
     }
 
@@ -561,7 +570,7 @@ impl SmallPropVec {
             if keep {
                 if write != read {
                     let val = self.inline_read(read);
-                    self.inline[write].write(val);
+                    self.inline[write] = val;
                 }
                 write += 1;
             }
@@ -620,7 +629,7 @@ impl SmallPropVec {
             let mut s = SmallPropVec::new();
             let mut it = v.into_iter();
             for i in 0..INLINE_PROPS {
-                s.inline[i].write(it.next().unwrap());
+                s.inline[i] = it.next().unwrap();
             }
             s.len = INLINE_PROPS as u8;
             s.heap = Some(it.collect());
@@ -640,7 +649,7 @@ impl Clone for SmallPropVec {
         let mut new = SmallPropVec::new();
         new.len = self.len;
         for i in 0..self.len as usize {
-            new.inline[i].write(self.inline_ref(i).clone());
+            new.inline[i] = self.inline_ref(i).clone();
         }
         new.heap = self.heap.clone();
         new
@@ -666,24 +675,19 @@ impl<'a> Iterator for SmallPropIter<'a> {
 }
 
 pub struct SmallPropIterMut<'a> {
-    vec: &'a mut SmallPropVec,
-    idx: usize,
-    len: usize,
+    inner: std::iter::Chain<
+        std::slice::IterMut<'a, PropSlot>,
+        std::slice::IterMut<'a, PropSlot>,
+    >,
 }
 
 impl<'a> Iterator for SmallPropIterMut<'a> {
     type Item = &'a mut PropSlot;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= self.len {
-            return None;
-        }
-        let idx = self.idx;
-        self.idx += 1;
-
-        unsafe {
-            let ptr = self.vec.get_mut(idx)? as *mut PropSlot;
-            Some(&mut *ptr)
-        }
+        self.inner.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
 
