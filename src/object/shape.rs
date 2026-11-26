@@ -124,13 +124,16 @@ impl std::fmt::Debug for Shape {
 
 pub struct ShapeCache {
     root_shape: Rc<Shape>,
+    shapes: Vec<Rc<Shape>>,
     next_id: Cell<usize>,
 }
 
 impl ShapeCache {
     pub fn new() -> Self {
+        let root = Rc::new(Shape::root());
         ShapeCache {
-            root_shape: Rc::new(Shape::root()),
+            root_shape: Rc::clone(&root),
+            shapes: vec![root],
             next_id: Cell::new(1),
         }
     }
@@ -147,7 +150,6 @@ impl ShapeCache {
 
     pub fn transition(&mut self, parent: &Rc<Shape>, property: Atom) -> Rc<Shape> {
         let mut children = parent.children.borrow_mut();
-        children.retain(|(_, child)| child.strong_count() > 0);
         if let Some(child) = children.iter().find_map(|(atom, child)| {
             if *atom == property {
                 child.upgrade()
@@ -161,6 +163,7 @@ impl ShapeCache {
         let child_id = self.alloc_id();
         let child = parent.add_property(property, child_id);
         children.push((property, Rc::downgrade(&child)));
+        self.shapes.push(Rc::clone(&child));
         child
     }
 
@@ -227,6 +230,20 @@ mod tests {
         let shape2 = cache.transition(&root, foo);
 
         assert!(Rc::ptr_eq(&shape1, &shape2));
+    }
+
+    #[test]
+    fn test_shape_caching_survives_dropped_handles() {
+        let mut atoms = AtomTable::new();
+        let foo = atoms.intern("foo");
+
+        let mut cache = ShapeCache::new();
+        let root = cache.root_shape();
+
+        let first_id = cache.transition(&root, foo).id;
+        let second = cache.transition(&root, foo);
+
+        assert_eq!(second.id, first_id);
     }
 
     #[test]
