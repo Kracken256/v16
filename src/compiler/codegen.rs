@@ -11288,10 +11288,16 @@ impl CodeGenerator {
                             let val =
                                 self.gen_property_function_value(value, *method, Some(name), ctx)?;
                             let atom = ctx.intern(name);
-                            self.emit(Opcode::SetNamedProp);
+                            let key_reg = self.alloc_register();
+                            let idx = self.add_constant(JSValue::new_string(atom));
+                            self.emit(Opcode::LoadConst);
+                            self.emit_u16(key_reg);
+                            self.emit_u32(idx);
+                            self.emit(Opcode::DefineField);
                             self.emit_u16(dst);
+                            self.emit_u16(key_reg);
                             self.emit_u16(val);
-                            self.emit_u32(atom.0);
+                            self.free_register(key_reg);
                             if *method {
                                 self.emit(Opcode::SetHomeObject);
                                 self.emit_u16(val);
@@ -11341,7 +11347,7 @@ impl CodeGenerator {
                                 self.emit_u16(val);
                                 self.emit_u16(key_reg);
                             }
-                            self.emit(Opcode::SetField);
+                            self.emit(Opcode::DefineField);
                             self.emit_u16(dst);
                             self.emit_u16(key_reg);
                             self.emit_u16(val);
