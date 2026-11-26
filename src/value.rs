@@ -317,28 +317,6 @@ impl JSValue {
     }
 
     #[inline(always)]
-    pub unsafe fn object_from_ptr(ptr: usize) -> &'static crate::object::object::JSObject {
-        unsafe { &*(ptr as *const crate::object::object::JSObject) }
-    }
-
-    #[inline(always)]
-    pub unsafe fn object_from_ptr_mut(ptr: usize) -> &'static mut crate::object::object::JSObject {
-        unsafe { &mut *(ptr as *mut crate::object::object::JSObject) }
-    }
-
-    #[inline(always)]
-    pub unsafe fn function_from_ptr(ptr: usize) -> &'static crate::object::function::JSFunction {
-        unsafe { &*(ptr as *const crate::object::function::JSFunction) }
-    }
-
-    #[inline(always)]
-    pub unsafe fn function_from_ptr_mut(
-        ptr: usize,
-    ) -> &'static mut crate::object::function::JSFunction {
-        unsafe { &mut *(ptr as *mut crate::object::function::JSFunction) }
-    }
-
-    #[inline(always)]
     pub fn as_object(&self) -> &crate::object::object::JSObject {
         unsafe { &*(self.get_ptr() as *const crate::object::object::JSObject) }
     }
