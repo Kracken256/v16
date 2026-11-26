@@ -115,6 +115,22 @@ pub enum TypedArrayKind {
 }
 
 impl TypedArrayKind {
+    pub fn kind_index(&self) -> usize {
+        match self {
+            TypedArrayKind::Int8 => 0,
+            TypedArrayKind::Uint8 => 1,
+            TypedArrayKind::Uint8Clamped => 2,
+            TypedArrayKind::Int16 => 3,
+            TypedArrayKind::Uint16 => 4,
+            TypedArrayKind::Int32 => 5,
+            TypedArrayKind::Uint32 => 6,
+            TypedArrayKind::Float32 => 7,
+            TypedArrayKind::Float64 => 8,
+            TypedArrayKind::BigInt64 => 9,
+            TypedArrayKind::BigUint64 => 10,
+        }
+    }
+
     pub fn bytes_per_element(&self) -> usize {
         match self {
             TypedArrayKind::Int8 | TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => 1,

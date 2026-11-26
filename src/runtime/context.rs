@@ -282,6 +282,7 @@ pub struct JSContext {
     weakset_prototype: Option<usize>,
     dataview_prototype: Option<usize>,
     typed_array_prototype: Option<usize>,
+    typed_array_prototypes: [Option<usize>; 11],
     typed_array_iterator_prototype: Option<usize>,
     array_buffer_prototype: Option<usize>,
     error_prototype: Option<usize>,
@@ -380,6 +381,7 @@ impl JSContext {
             weakset_prototype: None,
             dataview_prototype: None,
             typed_array_prototype: None,
+            typed_array_prototypes: [None; 11],
             typed_array_iterator_prototype: None,
             array_buffer_prototype: None,
             error_prototype: None,
@@ -607,6 +609,10 @@ impl JSContext {
         std::mem::swap(
             &mut self.typed_array_prototype,
             &mut other.typed_array_prototype,
+        );
+        std::mem::swap(
+            &mut self.typed_array_prototypes,
+            &mut other.typed_array_prototypes,
         );
         std::mem::swap(
             &mut self.typed_array_iterator_prototype,
@@ -959,6 +965,20 @@ impl JSContext {
 
     pub fn set_typed_array_prototype(&mut self, ptr: usize) {
         self.typed_array_prototype = Some(ptr);
+    }
+
+    pub fn set_typed_array_prototype_for_kind(&mut self, kind_index: usize, ptr: usize) {
+        if let Some(slot) = self.typed_array_prototypes.get_mut(kind_index) {
+            *slot = Some(ptr);
+        }
+    }
+
+    pub fn get_typed_array_prototype_for_kind(&self, kind_index: usize) -> Option<*mut JSObject> {
+        self.typed_array_prototypes
+            .get(kind_index)
+            .copied()
+            .flatten()
+            .map(|p| p as *mut JSObject)
     }
 
     pub fn set_typed_array_iterator_prototype(&mut self, ptr: usize) {

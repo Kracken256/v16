@@ -1,5 +1,5 @@
 use crate::host::HostFunction;
-use crate::object::object::{JSObject, ObjectType, TypedArrayKind};
+use crate::object::object::{JSObject, ObjectType, PropertyDescriptor, TypedArrayKind};
 use crate::runtime::context::JSContext;
 use crate::value::JSValue;
 
@@ -68,7 +68,9 @@ fn create_typed_array(
 
     let mut obj = JSObject::new_typed(ObjectType::TypedArray);
     obj.set_typed_array_kind(kind);
-    if let Some(ta_proto_ptr) = ctx.get_typed_array_prototype() {
+    if let Some(ta_proto_ptr) = ctx.get_typed_array_prototype_for_kind(kind.kind_index()) {
+        obj.prototype = Some(ta_proto_ptr);
+    } else if let Some(ta_proto_ptr) = ctx.get_typed_array_prototype() {
         obj.prototype = Some(ta_proto_ptr);
     }
 
@@ -2238,6 +2240,15 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     let ta_values_fn = create_builtin_function(ctx, "ta_values");
     ta_proto.set(ctx.intern("values"), ta_values_fn);
     ta_proto.set(ta_sym_iter, ta_values_fn);
+    for (name, builtin) in [
+        ("buffer", "typedarray_buffer"),
+        ("byteLength", "typedarray_byteLength"),
+        ("byteOffset", "typedarray_byteOffset"),
+        ("length", "typedarray_length"),
+    ] {
+        let getter = create_builtin_function(ctx, builtin);
+        ta_proto.define_accessor_flags(ctx.intern(name), Some(getter), None, false, true);
+    }
     ta_proto.set(ctx.intern("keys"), create_builtin_function(ctx, "ta_keys"));
     ta_proto.set(ctx.intern("entries"), create_builtin_function(ctx, "ta_entries"));
     ta_proto.set(ctx.intern("toString"), create_builtin_function(ctx, "ta_toString"));
@@ -2290,26 +2301,88 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     ctx.set_typed_array_iterator_prototype(ta_iter_proto_ptr);
 
     let ta_names = [
-        "Int8Array", "Uint8Array", "Uint8ClampedArray",
-        "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
-        "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+        ("Int8Array", TypedArrayKind::Int8),
+        ("Uint8Array", TypedArrayKind::Uint8),
+        ("Uint8ClampedArray", TypedArrayKind::Uint8Clamped),
+        ("Int16Array", TypedArrayKind::Int16),
+        ("Uint16Array", TypedArrayKind::Uint16),
+        ("Int32Array", TypedArrayKind::Int32),
+        ("Uint32Array", TypedArrayKind::Uint32),
+        ("Float32Array", TypedArrayKind::Float32),
+        ("Float64Array", TypedArrayKind::Float64),
+        ("BigInt64Array", TypedArrayKind::BigInt64),
+        ("BigUint64Array", TypedArrayKind::BigUint64),
     ];
-    for name in &ta_names {
+    for (name, kind) in ta_names {
         let atom = ctx.intern(name);
-        if let Some(ctor_val) = global_obj.get(atom) {
-            if ctor_val.is_function() {
-                let ctor_obj = ctor_val.as_object_mut();
-                ctor_obj.set(ctx.intern("prototype"), JSValue::new_object(ta_proto_ptr));
-                ctor_obj.set(ctx.intern("from"), create_builtin_function(ctx, "typedarray_from"));
-                ctor_obj.set(ctx.intern("of"), create_builtin_function(ctx, "typedarray_of"));
-                ctor_obj.set(ctx.intern("name"), JSValue::new_string(ctx.intern(name)));
-                ctor_obj.set(ctx.intern("length"), JSValue::new_int(1));
-                let species_fn = create_builtin_function(ctx, "typedarray_species_get");
-                let species_sym = crate::builtins::symbol::get_symbol_species(ctx);
-                if !species_sym.is_undefined() {
-                    ctor_obj.set(species_sym.get_atom(), species_fn);
-                }
-            }
+        let ctor_val = match global_obj.get(atom) {
+            Some(v) if v.is_function() => v,
+            _ => continue,
+        };
+
+        let mut proto = JSObject::new();
+        proto.prototype = Some(ta_proto_ptr as *mut JSObject);
+        proto.define_property(
+            ctx.intern("BYTES_PER_ELEMENT"),
+            PropertyDescriptor {
+                value: Some(JSValue::new_int(kind.bytes_per_element() as i64)),
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                get: None,
+                set: None,
+            },
+        );
+        crate::builtins::global::set_non_enumerable(
+            &mut proto,
+            ctx.intern("constructor"),
+            ctor_val,
+        );
+        let proto_ptr = Box::into_raw(Box::new(proto)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
+        ctx.set_typed_array_prototype_for_kind(kind.kind_index(), proto_ptr);
+
+        let ctor_obj = ctor_val.as_object_mut();
+        ctor_obj.define_property(
+            ctx.intern("prototype"),
+            PropertyDescriptor {
+                value: Some(JSValue::new_object(proto_ptr)),
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                get: None,
+                set: None,
+            },
+        );
+        ctor_obj.define_property(
+            ctx.intern("BYTES_PER_ELEMENT"),
+            PropertyDescriptor {
+                value: Some(JSValue::new_int(kind.bytes_per_element() as i64)),
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                get: None,
+                set: None,
+            },
+        );
+        crate::builtins::global::set_non_enumerable(
+            ctor_obj,
+            ctx.intern("from"),
+            create_builtin_function(ctx, "typedarray_from"),
+        );
+        crate::builtins::global::set_non_enumerable(
+            ctor_obj,
+            ctx.intern("of"),
+            create_builtin_function(ctx, "typedarray_of"),
+        );
+        let species_fn = create_builtin_function(ctx, "typedarray_species_get");
+        let species_sym = crate::builtins::symbol::get_symbol_species(ctx);
+        if !species_sym.is_undefined() {
+            crate::builtins::global::set_non_enumerable(
+                ctor_obj,
+                species_sym.get_atom(),
+                species_fn,
+            );
         }
     }
 }
