@@ -5717,6 +5717,14 @@ impl VM {
             (allow_property, allow_call)
         };
         let caller_vm_ptr = self as *mut VM;
+        let caller_this = {
+            let frame = &self.frames[self.frame_index];
+            let mut this_val = frame.this_value;
+            if !frame.is_strict_frame && (this_val.is_undefined() || this_val.is_null()) {
+                this_val = ctx.global();
+            }
+            this_val
+        };
         let mut allow_new_target = false;
         {
             let mut vm_ptr = self as *mut VM;
@@ -5826,6 +5834,7 @@ impl VM {
             allow_super_call,
             in_field_initializer,
             allow_new_target,
+            caller_this,
         );
         ctx.eval_private_names = saved_eval_private_names;
         match eval_result {

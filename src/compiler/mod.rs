@@ -319,6 +319,7 @@ fn eval_bytecode_with_caller(
     ctx: &mut JSContext,
     rb: &Bytecode,
     caller_vm: Option<*mut crate::runtime::vm::VM>,
+    caller_this: JSValue,
 ) -> Result<JSValue, String> {
     use crate::runtime::vm::{ExecutionOutcome, VM};
 
@@ -329,18 +330,6 @@ fn eval_bytecode_with_caller(
     ctx.set_register_vm_ptr(Some(vm_ptr));
 
     let caller_ptr = caller_vm.map(|p| p as usize);
-
-    let caller_this = if let Some(ptr) = caller_vm {
-        let caller = unsafe { &*ptr };
-        let caller_frame = &caller.frames[caller.frame_index];
-        let mut this_val = caller_frame.this_value;
-        if !caller_frame.is_strict_frame && (this_val.is_undefined() || this_val.is_null()) {
-            this_val = ctx.global();
-        }
-        this_val
-    } else {
-        ctx.global()
-    };
 
     let result = match vm.execute_eval(ctx, rb, caller_this, caller_ptr) {
         Ok(ExecutionOutcome::Complete(v)) => Ok(v),
@@ -366,7 +355,8 @@ pub fn eval_code_as_eval(
         false,
         true,
     )?;
-    eval_bytecode_with_caller(ctx, &rb, None)
+    let caller_this = ctx.global();
+    eval_bytecode_with_caller(ctx, &rb, None, caller_this)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -380,6 +370,7 @@ pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
     allow_super_call: bool,
     in_field_initializer: bool,
     allow_new_target: bool,
+    caller_this: JSValue,
 ) -> Result<JSValue, String> {
     let rb = compile_script_to_bytecode_with_opt_level_and_super_new_target(
         ctx,
@@ -392,7 +383,7 @@ pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
         in_field_initializer,
         allow_new_target,
     )?;
-    eval_bytecode_with_caller(ctx, &rb, Some(caller_vm))
+    eval_bytecode_with_caller(ctx, &rb, Some(caller_vm), caller_this)
 }
 
 pub fn eval_code_via_ast_with_opt_level(
