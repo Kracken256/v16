@@ -16,7 +16,7 @@ fn is_callable_target(ctx: &mut JSContext, target: JSValue) -> bool {
             return true;
         }
         if let Some(function_prototype) = ctx.get_function_prototype() {
-            return target.get_ptr() as *mut JSObject == function_prototype;
+            return target.get_ptr() == function_prototype;
         }
     }
     false
@@ -66,7 +66,7 @@ pub fn create_proxy(
     let mut proxy_obj = JSObject::new_typed(ObjectType::Proxy);
     proxy_obj.prototype = None;
     proxy_obj.set_proxy_slots(target, handler, callable, constructable);
-    let ptr = Box::into_raw(Box::new(proxy_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(proxy_obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     Ok(JSValue::new_object(ptr))
 }
@@ -110,7 +110,7 @@ fn proxy_revocable(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             set: None,
         },
     );
-    let revoke_ptr = Box::into_raw(Box::new(revoke_func)) as usize;
+    let revoke_ptr = Box::into_raw(Box::new(revoke_func));
     ctx.runtime_mut().gc_heap_mut().track_function(revoke_ptr);
     let revoke = JSValue::new_function(revoke_ptr);
 
@@ -118,7 +118,7 @@ fn proxy_revocable(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     result.prototype = ctx.get_object_prototype();
     result.set(ctx.intern("proxy"), proxy);
     result.set(ctx.intern("revoke"), revoke);
-    let result_ptr = Box::into_raw(Box::new(result)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result));
     ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     JSValue::new_object(result_ptr)
 }
@@ -166,7 +166,7 @@ pub fn init_proxy(ctx: &mut JSContext) {
         ctx.intern("revocable"),
         crate::builtins::global::create_builtin_function(ctx, "proxy_revocable"),
     );
-    let proxy_ptr = Box::into_raw(Box::new(proxy_func)) as usize;
+    let proxy_ptr = Box::into_raw(Box::new(proxy_func));
     ctx.runtime_mut().gc_heap_mut().track_function(proxy_ptr);
     let proxy_value = JSValue::new_function(proxy_ptr);
 

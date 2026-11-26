@@ -11,7 +11,7 @@ fn throw_uri_error(ctx: &mut JSContext, msg: &str) {
     if !msg.is_empty() {
         err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -90,7 +90,7 @@ fn coerce_uri_input(ctx: &mut JSContext, args: &[JSValue]) -> Result<String, ()>
         if let Some(proto) = ctx.get_type_error_prototype() { err.prototype = Some(proto); }
         err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
         err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("Cannot convert object to primitive value")));
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         Err(())

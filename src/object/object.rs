@@ -18,7 +18,7 @@ pub struct GeneratorState {
 
     pub saved_args: Vec<JSValue>,
 
-    pub func_ptr: Option<usize>,
+    pub func_ptr: Option<*mut crate::object::function::JSFunction>,
 
     pub handlers: Vec<crate::runtime::vm::ExceptionHandler>,
 
@@ -44,7 +44,7 @@ pub struct AsyncState {
 
     pub saved_args: Vec<JSValue>,
 
-    pub func_ptr: Option<usize>,
+    pub func_ptr: Option<*mut crate::object::function::JSFunction>,
 
     pub handlers: Vec<crate::runtime::vm::ExceptionHandler>,
 
@@ -723,7 +723,7 @@ impl<'a> IntoIterator for &'a mut SmallPropVec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PrivateKey {
-    pub owner: usize,
+    pub owner: *mut JSObject,
     pub name: Atom,
 }
 
@@ -740,7 +740,7 @@ pub struct ObjectExtra {
     pub private_accessors: Option<Box<FxHashMap<PrivateKey, AccessorEntry>>>,
     pub private_methods: Option<Box<FxHashMap<PrivateKey, JSValue>>>,
     pub private_kinds: Option<Box<FxHashMap<PrivateKey, PrivateKind>>>,
-    pub private_brands: Option<Box<FxHashSet<usize>>>,
+    pub private_brands: Option<Box<FxHashSet<*mut JSObject>>>,
     pub array_elements: Option<Box<Vec<JSValue>>>,
 
     pub property_map: Option<Box<FxHashMap<Atom, u32>>>,
@@ -1400,7 +1400,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn get_private_field(&self, owner: usize, atom: Atom) -> Option<JSValue> {
+    pub fn get_private_field(&self, owner: *mut JSObject, atom: Atom) -> Option<JSValue> {
         self.extra
             .as_ref()
             .and_then(|e| e.private_fields.as_ref())
@@ -1408,7 +1408,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn has_private_field(&self, owner: usize, atom: Atom) -> bool {
+    pub fn has_private_field(&self, owner: *mut JSObject, atom: Atom) -> bool {
         self.extra
             .as_ref()
             .and_then(|e| e.private_fields.as_ref())
@@ -1417,7 +1417,7 @@ impl JSObject {
             })
     }
 
-    pub fn set_private_field(&mut self, owner: usize, atom: Atom, value: JSValue) {
+    pub fn set_private_field(&mut self, owner: *mut JSObject, atom: Atom, value: JSValue) {
         self.ensure_extra()
             .private_fields
             .get_or_insert_with(|| Box::new(FxHashMap::default()))
@@ -1435,7 +1435,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn add_private_brand(&mut self, owner: usize) {
+    pub fn add_private_brand(&mut self, owner: *mut JSObject) {
         self.ensure_extra()
             .private_brands
             .get_or_insert_with(|| Box::new(FxHashSet::default()))
@@ -1443,7 +1443,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn has_private_brand(&self, owner: usize) -> bool {
+    pub fn has_private_brand(&self, owner: *mut JSObject) -> bool {
         self.extra
             .as_ref()
             .and_then(|e| e.private_brands.as_ref())
@@ -1451,7 +1451,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn define_private_method(&mut self, owner: usize, name: Atom, value: JSValue) {
+    pub fn define_private_method(&mut self, owner: *mut JSObject, name: Atom, value: JSValue) {
         self.ensure_extra()
             .private_methods
             .get_or_insert_with(|| Box::new(FxHashMap::default()))
@@ -1459,7 +1459,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn get_private_method(&self, owner: usize, name: Atom) -> Option<JSValue> {
+    pub fn get_private_method(&self, owner: *mut JSObject, name: Atom) -> Option<JSValue> {
         self.extra
             .as_ref()
             .and_then(|e| e.private_methods.as_ref())
@@ -1467,7 +1467,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn has_private_method(&self, owner: usize, name: Atom) -> bool {
+    pub fn has_private_method(&self, owner: *mut JSObject, name: Atom) -> bool {
         self.extra
             .as_ref()
             .and_then(|e| e.private_methods.as_ref())
@@ -1477,7 +1477,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn define_private_kind(&mut self, owner: usize, name: Atom, kind: PrivateKind) {
+    pub fn define_private_kind(&mut self, owner: *mut JSObject, name: Atom, kind: PrivateKind) {
         self.ensure_extra()
             .private_kinds
             .get_or_insert_with(|| Box::new(FxHashMap::default()))
@@ -1485,7 +1485,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn get_private_kind(&self, owner: usize, name: Atom) -> Option<PrivateKind> {
+    pub fn get_private_kind(&self, owner: *mut JSObject, name: Atom) -> Option<PrivateKind> {
         self.extra
             .as_ref()
             .and_then(|e| e.private_kinds.as_ref())
@@ -1493,7 +1493,7 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn has_private_kind(&self, owner: usize, name: Atom) -> bool {
+    pub fn has_private_kind(&self, owner: *mut JSObject, name: Atom) -> bool {
         self.extra
             .as_ref()
             .and_then(|e| e.private_kinds.as_ref())
@@ -1870,7 +1870,7 @@ impl JSObject {
 
     pub fn get_own_private_accessor_entry(
         &self,
-        owner: usize,
+        owner: *mut JSObject,
         prop: Atom,
     ) -> Option<&AccessorEntry> {
         self.extra
@@ -1882,7 +1882,7 @@ impl JSObject {
 
     pub fn define_private_accessor(
         &mut self,
-        owner: usize,
+        owner: *mut JSObject,
         prop: Atom,
         getter: Option<JSValue>,
         setter: Option<JSValue>,
@@ -3687,12 +3687,13 @@ mod tests {
     #[test]
     fn test_object_private_fields() {
         let mut obj = JSObject::new();
-        assert!(!obj.has_private_field(0, Atom(1)));
-        assert!(obj.get_private_field(0, Atom(1)).is_none());
+        let owner = std::ptr::null_mut();
+        assert!(!obj.has_private_field(owner, Atom(1)));
+        assert!(obj.get_private_field(owner, Atom(1)).is_none());
 
-        obj.set_private_field(0, Atom(1), JSValue::new_int(42));
-        assert!(obj.has_private_field(0, Atom(1)));
-        assert_eq!(obj.get_private_field(0, Atom(1)).unwrap().get_int(), 42);
+        obj.set_private_field(owner, Atom(1), JSValue::new_int(42));
+        assert!(obj.has_private_field(owner, Atom(1)));
+        assert_eq!(obj.get_private_field(owner, Atom(1)).unwrap().get_int(), 42);
     }
 
     #[test]
@@ -3701,7 +3702,7 @@ mod tests {
         let mut parent_obj = JSObject::new();
         parent_obj.set(Atom(1), JSValue::new_int(42));
 
-        let parent_ptr = Box::into_raw(Box::new(parent_obj)) as *mut JSObject;
+        let parent_ptr = Box::into_raw(Box::new(parent_obj));
         child_obj.prototype = Some(parent_ptr);
 
         assert_eq!(child_obj.get(Atom(1)).unwrap().get_int(), 42);
@@ -3720,7 +3721,7 @@ mod tests {
         let mut parent_obj = JSObject::new();
         parent_obj.set(Atom(1), JSValue::new_int(42));
 
-        let parent_ptr = Box::into_raw(Box::new(parent_obj)) as *mut JSObject;
+        let parent_ptr = Box::into_raw(Box::new(parent_obj));
         child_obj.prototype = Some(parent_ptr);
 
         assert!(child_obj.has_property(Atom(1)));

@@ -1,3 +1,4 @@
+use std::fs;
 use v16::host::HostFunction;
 use v16::object::function::JSFunction;
 use v16::object::object::JSObject;
@@ -5,7 +6,6 @@ use v16::runtime::context::JSContext;
 use v16::{
     JSRuntime, JSValue, OptLevel, compile_to_bytecode_with_opt_level, eval, eval_with_opt_level,
 };
-use std::fs;
 
 #[cfg(feature = "repl")]
 use rustyline::error::ReadlineError;
@@ -97,7 +97,7 @@ fn setup_context(ctx: &mut JSContext) {
     let print_fn_val = {
         let mut func = JSFunction::new_builtin(ctx.intern("print"), 1);
         func.set_builtin_marker(ctx, "print");
-        let ptr = Box::into_raw(Box::new(func)) as usize;
+        let ptr = Box::into_raw(Box::new(func));
         JSValue::new_function(ptr)
     };
     global_obj.set(ctx.intern("print"), print_fn_val);
@@ -105,7 +105,7 @@ fn setup_context(ctx: &mut JSContext) {
     let load_fn_val = {
         let mut func = JSFunction::new_builtin(ctx.intern("v16_load"), 1);
         func.set_builtin_marker(ctx, "v16_load");
-        let ptr = Box::into_raw(Box::new(func)) as usize;
+        let ptr = Box::into_raw(Box::new(func));
         JSValue::new_function(ptr)
     };
     global_obj.set(ctx.intern("load"), load_fn_val);
@@ -466,7 +466,7 @@ fn eval_repl(ctx: &mut JSContext, code: &str) -> Result<JSValue, String> {
 
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
     let mut vm = VM::new();
-    let vm_ptr = &mut vm as *mut _ as usize;
+    let vm_ptr = &mut vm as *mut _;
     ctx.set_register_vm_ptr(Some(vm_ptr));
 
     let result = match vm.execute_preserving_registers(ctx, &rb) {

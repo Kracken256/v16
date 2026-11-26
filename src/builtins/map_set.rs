@@ -11,7 +11,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
 fn create_builtin_fn(ctx: &mut JSContext, name: &str, arity: u32) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -85,7 +85,7 @@ fn make_accessor_getter(ctx: &mut JSContext, display_name: &str, builtin_name: &
         set: None,
     };
     f.base.define_property(ctx.common_atoms.length, length_desc);
-    let ptr = Box::into_raw(Box::new(f)) as usize;
+    let ptr = Box::into_raw(Box::new(f));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -126,7 +126,7 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
     }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -263,7 +263,7 @@ fn make_array(ctx: &mut JSContext, items: Vec<JSValue>) -> JSValue {
         arr.set(key, v);
     }
     arr.set(ctx.common_atoms.length, JSValue::new_int(len as i64));
-    JSValue::new_object(Box::into_raw(Box::new(arr)) as usize)
+    JSValue::new_object(Box::into_raw(Box::new(arr)))
 }
 
 pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
@@ -551,7 +551,7 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let size_atom = ctx.intern("__map_size__");
     obj.set(size_atom, JSValue::new_int(0));
 
-    let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)) as usize);
+    let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)));
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -844,7 +844,7 @@ fn map_get_or_insert_computed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
         Err(e) => {
             let mut err = JSObject::new();
             err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(&e)));
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -911,7 +911,7 @@ fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let size_atom = ctx.intern("__map_size__");
     result_map.set(size_atom, JSValue::new_int(0));
-    let result_ptr = Box::into_raw(Box::new(result_map)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result_map));
     ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     let result_val = JSValue::new_object(result_ptr);
 
@@ -1158,7 +1158,7 @@ fn create_live_iter(
     ctx: &mut JSContext,
     collection: JSValue,
     kind: &str,
-    proto: Option<usize>,
+    proto: Option<*mut crate::object::object::JSObject>,
 ) -> JSValue {
     let mut iter_obj = JSObject::new();
     let map_atom = ctx.intern("__iter_map__");
@@ -1168,9 +1168,9 @@ fn create_live_iter(
     iter_obj.set(kind_atom, JSValue::new_string(ctx.intern(kind)));
     iter_obj.set(idx_atom, JSValue::new_int(0));
     if let Some(proto_ptr) = proto {
-        iter_obj.prototype = Some(proto_ptr as *mut JSObject);
+        iter_obj.prototype = Some(proto_ptr);
     }
-    let ptr = Box::into_raw(Box::new(iter_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(iter_obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -1219,14 +1219,14 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let mut result = JSObject::new();
             result.set(value_atom, value);
             result.set(done_atom, JSValue::bool(false));
-            let ptr = Box::into_raw(Box::new(result)) as usize;
+            let ptr = Box::into_raw(Box::new(result));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             return JSValue::new_object(ptr);
         }
         let mut result = JSObject::new();
         result.set(value_atom, JSValue::undefined());
         result.set(done_atom, JSValue::bool(true));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
@@ -1249,14 +1249,14 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let mut result = JSObject::new();
         result.set(value_atom, value);
         result.set(done_atom, JSValue::bool(false));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     } else {
         let mut result = JSObject::new();
         result.set(value_atom, JSValue::undefined());
         result.set(done_atom, JSValue::bool(true));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     }
@@ -1290,7 +1290,7 @@ fn weakmap_constructor(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     }
     let size_atom = ctx.intern("__weakmap_size__");
     obj.set(size_atom, JSValue::new_int(0));
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     JSValue::new_object(ptr)
 }
 
@@ -1442,7 +1442,7 @@ fn weakset_constructor(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     }
     let size_atom = ctx.intern("__weakset_size__");
     obj.set(size_atom, JSValue::new_int(0));
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     JSValue::new_object(ptr)
 }
 
@@ -1560,7 +1560,7 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let size_atom = ctx.intern("__set_size__");
     obj.set(size_atom, JSValue::new_int(0));
 
-    let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)) as usize);
+    let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)));
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -1823,7 +1823,7 @@ fn throw_range_error(ctx: &mut JSContext, msg: &str) {
         ctx.common_atoms.message,
         JSValue::new_string(ctx.intern(msg)),
     );
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -1834,7 +1834,7 @@ fn create_empty_set(ctx: &mut JSContext) -> JSValue {
         obj.prototype = Some(proto_ptr);
     }
     obj.set(ctx.intern("__set_size__"), JSValue::new_int(0));
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -2243,7 +2243,7 @@ pub fn init_map_set(ctx: &mut JSContext) {
         map_proto.prototype = Some(obj_proto_ptr);
     }
 
-    let map_proto_ptr = Box::into_raw(Box::new(map_proto)) as usize;
+    let map_proto_ptr = Box::into_raw(Box::new(map_proto));
     ctx.runtime_mut().gc_heap_mut().track(map_proto_ptr);
     ctx.set_map_prototype(map_proto_ptr);
 
@@ -2278,7 +2278,7 @@ pub fn init_map_set(ctx: &mut JSContext) {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         map_iter_proto.prototype = Some(obj_proto_ptr);
     }
-    let map_iter_proto_ptr = Box::into_raw(Box::new(map_iter_proto)) as usize;
+    let map_iter_proto_ptr = Box::into_raw(Box::new(map_iter_proto));
     ctx.runtime_mut().gc_heap_mut().track(map_iter_proto_ptr);
     ctx.set_map_iterator_prototype(map_iter_proto_ptr);
 
@@ -2362,7 +2362,7 @@ pub fn init_map_set(ctx: &mut JSContext) {
         set_proto.prototype = Some(obj_proto_ptr);
     }
 
-    let set_proto_ptr = Box::into_raw(Box::new(set_proto)) as usize;
+    let set_proto_ptr = Box::into_raw(Box::new(set_proto));
     ctx.runtime_mut().gc_heap_mut().track(set_proto_ptr);
     ctx.set_set_prototype(set_proto_ptr);
 
@@ -2395,7 +2395,7 @@ pub fn init_map_set(ctx: &mut JSContext) {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         set_iter_proto.prototype = Some(obj_proto_ptr);
     }
-    let set_iter_proto_ptr = Box::into_raw(Box::new(set_iter_proto)) as usize;
+    let set_iter_proto_ptr = Box::into_raw(Box::new(set_iter_proto));
     ctx.runtime_mut().gc_heap_mut().track(set_iter_proto_ptr);
     ctx.set_set_iterator_prototype(set_iter_proto_ptr);
 
@@ -2429,7 +2429,7 @@ pub fn init_map_set(ctx: &mut JSContext) {
         weakmap_proto.prototype = Some(obj_proto_ptr);
     }
 
-    let weakmap_proto_ptr = Box::into_raw(Box::new(weakmap_proto)) as usize;
+    let weakmap_proto_ptr = Box::into_raw(Box::new(weakmap_proto));
     ctx.runtime_mut().gc_heap_mut().track(weakmap_proto_ptr);
     ctx.set_weakmap_prototype(weakmap_proto_ptr);
 
@@ -2474,7 +2474,7 @@ pub fn init_map_set(ctx: &mut JSContext) {
         weakset_proto.prototype = Some(obj_proto_ptr);
     }
 
-    let weakset_proto_ptr = Box::into_raw(Box::new(weakset_proto)) as usize;
+    let weakset_proto_ptr = Box::into_raw(Box::new(weakset_proto));
     ctx.runtime_mut().gc_heap_mut().track(weakset_proto_ptr);
     ctx.set_weakset_prototype(weakset_proto_ptr);
 

@@ -117,7 +117,7 @@ pub fn init_regexp(ctx: &mut JSContext) {
         proto_obj.prototype = Some(obj_proto_ptr);
     }
 
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
 
     ctx.set_regexp_prototype(proto_ptr);
@@ -152,7 +152,7 @@ pub fn init_regexp(ctx: &mut JSContext) {
 fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern(name), 1);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -265,7 +265,7 @@ fn create_regexp_object(ctx: &mut JSContext, pattern: &str, flags: &str) -> JSVa
 
     hide_regexp_internal_props(&mut regexp_obj, ctx);
 
-    let ptr = Box::into_raw(Box::new(regexp_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(regexp_obj));
     JSValue::new_object(ptr)
 }
 
@@ -317,7 +317,7 @@ pub fn create_regexp_object_precompiled(
 
     hide_regexp_internal_props(&mut regexp_obj, ctx);
 
-    let ptr = Box::into_raw(Box::new(regexp_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(regexp_obj));
     JSValue::new_object(ptr)
 }
 
@@ -505,7 +505,7 @@ pub fn regexp_exec(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result_array.set(input_atom, JSValue::new_string(ctx.intern(&test_str)));
         result_array.set(length_atom, JSValue::new_int(1));
 
-        let result_ptr = Box::into_raw(Box::new(result_array)) as usize;
+        let result_ptr = Box::into_raw(Box::new(result_array));
         JSValue::new_object(result_ptr)
     } else {
         regexp_obj.set(last_index_atom, JSValue::new_int(0));

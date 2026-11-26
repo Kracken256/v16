@@ -38,7 +38,7 @@ fn create_array_buffer_with_max(
     );
 
     obj.set_array_buffer_data(data);
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     JSValue::new_object(ptr)
 }
 
@@ -118,7 +118,7 @@ fn create_typed_array(
         JSValue::new_int(element_length as i64),
     );
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     Ok(JSValue::new_object(ptr))
 }
 
@@ -258,7 +258,7 @@ fn array_buffer_range_error(ctx: &mut JSContext, msg: &str) {
         ctx.common_atoms.message,
         JSValue::new_string(ctx.intern(msg)),
     );
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -360,7 +360,7 @@ fn data_view_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     JSValue::new_object(ptr)
 }
 
@@ -774,7 +774,7 @@ fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctor.as_object().get(ctx.intern("prototype")) {
                 if proto.is_object_like() {
                     result.as_object_mut().prototype =
-                        Some(proto.get_ptr() as *mut JSObject);
+                        Some(proto.get_ptr());
                 }
             }
         }
@@ -904,7 +904,7 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
     }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -916,7 +916,7 @@ fn throw_range_error(ctx: &mut JSContext, msg: &str) {
     }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("RangeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -1169,7 +1169,7 @@ fn data_view_get_bigint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let val = i64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
             let mut obj = crate::object::object::JSObject::new_bigint();
             obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(obj)) as usize)
+            JSValue::new_bigint(Box::into_raw(Box::new(obj)))
         }
         None => JSValue::undefined(),
     }
@@ -1181,7 +1181,7 @@ fn data_view_get_biguint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let val = u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
             let mut obj = crate::object::object::JSObject::new_bigint();
             obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(obj)) as usize)
+            JSValue::new_bigint(Box::into_raw(Box::new(obj)))
         }
         None => JSValue::undefined(),
     }
@@ -1217,7 +1217,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -1341,13 +1341,13 @@ pub fn ta_get_element(ctx: &mut JSContext, obj: &JSObject, index: usize) -> Opti
             let val = i64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
             let mut bi_obj = crate::object::object::JSObject::new_bigint();
             bi_obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(bi_obj)) as usize)
+            JSValue::new_bigint(Box::into_raw(Box::new(bi_obj)))
         }
         TypedArrayKind::BigUint64 => {
             let val = u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
             let mut bi_obj = crate::object::object::JSObject::new_bigint();
             bi_obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(bi_obj)) as usize)
+            JSValue::new_bigint(Box::into_raw(Box::new(bi_obj)))
         }
     })
 }
@@ -1946,7 +1946,7 @@ fn create_ta_iterator(ctx: &mut JSContext, this_val: JSValue, kind: i64) -> JSVa
     if let Some(proto) = ctx.get_typed_array_iterator_prototype() {
         iter_obj.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(iter_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(iter_obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -1957,7 +1957,7 @@ fn ta_make_iter_result(ctx: &mut JSContext, value: JSValue, done: bool) -> JSVal
     let value_atom = ctx.intern("value");
     result.set(value_atom, value);
     result.set(done_atom, JSValue::bool(done));
-    let ptr = Box::into_raw(Box::new(result)) as usize;
+    let ptr = Box::into_raw(Box::new(result));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -2275,7 +2275,7 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         ab_proto.prototype = Some(obj_proto_ptr);
     }
-    let ab_proto_ptr = Box::into_raw(Box::new(ab_proto)) as usize;
+    let ab_proto_ptr = Box::into_raw(Box::new(ab_proto));
     ctx.runtime_mut().gc_heap_mut().track(ab_proto_ptr);
     ctx.set_array_buffer_prototype(ab_proto_ptr);
     if ab_func.is_function() {
@@ -2310,7 +2310,7 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         sab_proto.prototype = Some(obj_proto_ptr);
     }
-    let sab_proto_ptr = Box::into_raw(Box::new(sab_proto)) as usize;
+    let sab_proto_ptr = Box::into_raw(Box::new(sab_proto));
     ctx.runtime_mut().gc_heap_mut().track(sab_proto_ptr);
     if sab_func.is_function() {
         sab_func.as_function_mut().base.set(
@@ -2431,7 +2431,7 @@ pub fn init_typed_array(ctx: &mut JSContext) {
         dv_proto.prototype = Some(obj_proto_ptr);
     }
 
-    let dv_proto_ptr = Box::into_raw(Box::new(dv_proto)) as usize;
+    let dv_proto_ptr = Box::into_raw(Box::new(dv_proto));
     ctx.runtime_mut().gc_heap_mut().track(dv_proto_ptr);
     ctx.set_dataview_prototype(dv_proto_ptr);
 
@@ -2563,15 +2563,15 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         ta_parent.prototype = Some(obj_proto_ptr);
     }
-    let ta_parent_ptr = Box::into_raw(Box::new(ta_parent)) as usize;
+    let ta_parent_ptr = Box::into_raw(Box::new(ta_parent));
     ctx.runtime_mut().gc_heap_mut().track(ta_parent_ptr);
-    ta_proto.prototype = Some(ta_parent_ptr as *mut JSObject);
+    ta_proto.prototype = Some(ta_parent_ptr);
 
     let to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
     let to_string_tag_getter = create_builtin_function(ctx, "typedarray_to_string_tag");
     ta_proto.define_accessor_flags(to_string_tag_key, Some(to_string_tag_getter), None, false, true);
 
-    let ta_proto_ptr = Box::into_raw(Box::new(ta_proto)) as usize;
+    let ta_proto_ptr = Box::into_raw(Box::new(ta_proto));
     ctx.runtime_mut().gc_heap_mut().track(ta_proto_ptr);
     ctx.set_typed_array_prototype(ta_proto_ptr);
 
@@ -2587,7 +2587,7 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         ta_iter_proto.prototype = Some(obj_proto_ptr);
     }
-    let ta_iter_proto_ptr = Box::into_raw(Box::new(ta_iter_proto)) as usize;
+    let ta_iter_proto_ptr = Box::into_raw(Box::new(ta_iter_proto));
     ctx.runtime_mut().gc_heap_mut().track(ta_iter_proto_ptr);
     ctx.set_typed_array_iterator_prototype(ta_iter_proto_ptr);
 
@@ -2612,7 +2612,7 @@ pub fn init_typed_array(ctx: &mut JSContext) {
         };
 
         let mut proto = JSObject::new();
-        proto.prototype = Some(ta_proto_ptr as *mut JSObject);
+        proto.prototype = Some(ta_proto_ptr);
         proto.define_property(
             ctx.intern("BYTES_PER_ELEMENT"),
             PropertyDescriptor {
@@ -2629,7 +2629,7 @@ pub fn init_typed_array(ctx: &mut JSContext) {
             ctx.intern("constructor"),
             ctor_val,
         );
-        let proto_ptr = Box::into_raw(Box::new(proto)) as usize;
+        let proto_ptr = Box::into_raw(Box::new(proto));
         ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
         ctx.set_typed_array_prototype_for_kind(kind.kind_index(), proto_ptr);
 

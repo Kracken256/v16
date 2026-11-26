@@ -183,7 +183,7 @@ impl Nursery {
 }
 
 pub struct GcHeap {
-    objects: Vec<usize>,
+    objects: Vec<*mut JSObject>,
     marks: Vec<u8>,
     tags: Vec<u8>,
     free_list: Vec<usize>,
@@ -245,7 +245,7 @@ impl GcHeap {
         }
     }
 
-    fn track_tenured(&mut self, ptr: usize, tag: u8) -> usize {
+    fn track_tenured(&mut self, ptr: *mut JSObject, tag: u8) -> usize {
         let idx = if let Some(idx) = self.free_list.pop() {
             self.objects[idx] = ptr;
             self.marks[idx] = 0;
@@ -269,11 +269,11 @@ impl GcHeap {
         };
         self.total_allocated += size;
         self.live_count += 1;
-        self.debug_alloc(idx, ptr, tag, false);
+        self.debug_alloc(idx, ptr as usize, tag, false);
         idx
     }
 
-    fn track_nursery(&mut self, ptr: usize, tag: u8) -> usize {
+    fn track_nursery(&mut self, ptr: *mut JSObject, tag: u8) -> usize {
         let idx = if let Some(idx) = self.free_list.pop() {
             self.objects[idx] = ptr;
             self.marks[idx] = 0;
@@ -289,20 +289,20 @@ impl GcHeap {
 
         JSValue::new_object(ptr).as_object_mut().gc_slot = idx as u32;
         self.nursery_indices.push(idx);
-        self.debug_alloc(idx, ptr, tag, true);
+        self.debug_alloc(idx, ptr as usize, tag, true);
         idx
     }
 
-    pub fn track(&mut self, ptr: usize) -> usize {
+    pub fn track(&mut self, ptr: *mut JSObject) -> usize {
         self.track_tenured(ptr, TAG_OBJECT)
     }
 
-    pub fn track_array(&mut self, ptr: usize) -> usize {
-        self.track_tenured(ptr, TAG_ARRAY)
+    pub fn track_array(&mut self, ptr: *mut JSArrayObject) -> usize {
+        self.track_tenured(ptr.cast::<JSObject>(), TAG_ARRAY)
     }
 
-    pub fn track_function(&mut self, ptr: usize) -> usize {
-        self.track_tenured(ptr, TAG_FUNCTION)
+    pub fn track_function(&mut self, ptr: *mut JSFunction) -> usize {
+        self.track_tenured(ptr.cast::<JSObject>(), TAG_FUNCTION)
     }
 
     #[inline]
@@ -321,7 +321,7 @@ impl GcHeap {
                 props,
             ))
             .map(|ptr| {
-                self.track_nursery(ptr as usize, TAG_OBJECT);
+                self.track_nursery(ptr, TAG_OBJECT);
                 ptr
             })
     }
@@ -331,7 +331,7 @@ impl GcHeap {
             return None;
         }
         self.nursery.alloc(obj).map(|ptr| {
-            self.track_nursery(ptr as usize, TAG_OBJECT);
+            self.track_nursery(ptr, TAG_OBJECT);
             ptr
         })
     }
@@ -351,7 +351,7 @@ impl GcHeap {
             return None;
         }
         self.nursery.alloc(JSArrayObject::new()).map(|ptr| {
-            self.track_nursery(ptr as usize, TAG_ARRAY);
+            self.track_nursery(ptr.cast::<JSObject>(), TAG_ARRAY);
             ptr
         })
     }
@@ -361,7 +361,7 @@ impl GcHeap {
             return None;
         }
         self.nursery.alloc(arr).map(|ptr| {
-            self.track_nursery(ptr as usize, TAG_ARRAY);
+            self.track_nursery(ptr.cast::<JSObject>(), TAG_ARRAY);
             ptr
         })
     }
@@ -386,12 +386,12 @@ impl GcHeap {
         }
     }
 
-    pub fn untrack(&mut self, ptr: usize) {
+    pub fn untrack(&mut self, ptr: *mut JSObject) {
         let idx = JSValue::new_object(ptr).as_object().gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
             if self.objects.get(idx) == Some(&ptr) {
-                self.objects[idx] = 0;
+                self.objects[idx] = std::ptr::null_mut();
                 self.marks[idx] = 0;
                 self.tags[idx] = TAG_OBJECT;
                 self.free_list.push(idx);
@@ -438,7 +438,7 @@ impl GcHeap {
         });
 
         if let Some(proto_ptr) = func.base.prototype {
-            self.mark(proto_ptr as usize);
+            self.mark(proto_ptr);
         }
 
         if let Some(ref env) = func.with_env {
@@ -470,12 +470,12 @@ impl GcHeap {
     }
 
     #[inline(always)]
-    pub fn is_array_ptr(&self, ptr: usize) -> bool {
+    pub fn is_array_ptr(&self, ptr: *mut JSObject) -> bool {
         JSValue::new_object(ptr).as_object().is_dense_array()
     }
 
     #[inline]
-    pub fn mark(&mut self, ptr: usize) -> bool {
+    pub fn mark(&mut self, ptr: *mut JSObject) -> bool {
         let idx = JSValue::new_object(ptr).as_object().gc_slot;
         if idx == u32::MAX {
             return false;
@@ -491,15 +491,15 @@ impl GcHeap {
         true
     }
 
-    fn trace_object(&mut self, idx: usize, ptr: usize) {
-        if ptr == 0 {
+    fn trace_object(&mut self, idx: usize, ptr: *mut JSObject) {
+        if ptr.is_null() {
             return;
         }
         self.marks[idx] = COLOR_BLACK;
         let tag = self.tags[idx];
 
         if tag == TAG_ARRAY {
-            let arr = unsafe { &*(ptr as *const JSArrayObject) };
+            let arr = unsafe { &*ptr.cast::<JSArrayObject>() };
             arr.for_each_element(|value| {
                 self.mark_value(value);
             });
@@ -527,10 +527,10 @@ impl GcHeap {
                 self.mark_value(&value);
             });
             if let Some(proto_ptr) = arr.header.prototype {
-                self.mark(proto_ptr as usize);
+                self.mark(proto_ptr);
             }
         } else if tag == TAG_FUNCTION {
-            let func_value = JSValue::new_function(ptr);
+            let func_value = JSValue::new_function(ptr.cast::<JSFunction>());
             self.trace_function(func_value.as_function());
         } else {
             let obj = JSValue::new_object(ptr);
@@ -582,7 +582,7 @@ impl GcHeap {
                 }
             }
             if let Some(proto_ptr) = obj.prototype {
-                self.mark(proto_ptr as usize);
+                self.mark(proto_ptr);
             }
 
             if let Some(target) = obj.proxy_target() {
@@ -633,35 +633,35 @@ impl GcHeap {
     }
 
     #[inline(always)]
-    unsafe fn drop_tracked(ptr: usize, tag: u8) {
+    unsafe fn drop_tracked(ptr: *mut JSObject, tag: u8) {
         if tag == TAG_ARRAY {
             unsafe {
-                let _ = Box::from_raw(ptr as *mut JSArrayObject);
+                let _ = Box::from_raw(ptr.cast::<JSArrayObject>());
             }
         } else if tag == TAG_FUNCTION {
             unsafe {
-                let _ = Box::from_raw(ptr as *mut JSFunction);
+                let _ = Box::from_raw(ptr.cast::<JSFunction>());
             }
         } else {
             unsafe {
-                let _ = Box::from_raw(ptr as *mut JSObject);
+                let _ = Box::from_raw(ptr);
             }
         }
     }
 
     #[inline(always)]
-    unsafe fn drop_in_place_tracked(ptr: usize, tag: u8) {
+    unsafe fn drop_in_place_tracked(ptr: *mut JSObject, tag: u8) {
         if tag == TAG_ARRAY {
             unsafe {
-                std::ptr::drop_in_place(ptr as *mut JSArrayObject);
+                std::ptr::drop_in_place(ptr.cast::<JSArrayObject>());
             }
         } else if tag == TAG_FUNCTION {
             unsafe {
-                std::ptr::drop_in_place(ptr as *mut JSFunction);
+                std::ptr::drop_in_place(ptr.cast::<JSFunction>());
             }
         } else {
             unsafe {
-                std::ptr::drop_in_place(ptr as *mut JSObject);
+                std::ptr::drop_in_place(ptr);
             }
         }
     }
@@ -713,22 +713,22 @@ impl GcHeap {
         } else if value.is_symbol() {
             format!("symbol(atom={})", value.get_atom().0)
         } else if value.is_bigint() {
-            format!("bigint(ptr={:#x})", value.get_ptr())
+            format!("bigint(ptr={:#x})", value.get_ptr() as usize)
         } else if value.is_function() {
             let ptr = value.get_ptr();
             let handle = value.as_object().gc_slot;
             if handle != u32::MAX {
-                format!("function(handle={} ptr={:#x})", handle, ptr)
+                format!("function(handle={} ptr={:#x})", handle, ptr as usize)
             } else {
-                format!("function(ptr={:#x})", ptr)
+                format!("function(ptr={:#x})", ptr as usize)
             }
         } else if value.is_object() {
             let ptr = value.get_ptr();
             let handle = value.as_object().gc_slot;
             if handle != u32::MAX {
-                format!("object(handle={} ptr={:#x})", handle, ptr)
+                format!("object(handle={} ptr={:#x})", handle, ptr as usize)
             } else {
-                format!("object(ptr={:#x})", ptr)
+                format!("object(ptr={:#x})", ptr as usize)
             }
         } else if value.is_tdz() {
             "tdz".to_string()
@@ -742,13 +742,13 @@ impl GcHeap {
             .iter()
             .take(self.debug.limit)
             .filter_map(|&idx| {
-                let ptr = self.objects.get(idx).copied().unwrap_or(0);
-                if ptr == 0 {
+                let ptr = self.objects.get(idx).copied().unwrap_or(std::ptr::null_mut());
+                if ptr.is_null() {
                     return None;
                 }
                 Some(GcDebugEntry {
                     handle: idx,
-                    ptr,
+                    ptr: ptr as usize,
                     tag: self.tags[idx],
                     in_nursery: self.nursery.contains(ptr as *const u8),
                 })
@@ -759,12 +759,12 @@ impl GcHeap {
     fn collect_live_entries(&self) -> Vec<GcDebugEntry> {
         let mut entries = Vec::new();
         for (idx, &ptr) in self.objects.iter().enumerate() {
-            if ptr == 0 {
+            if ptr.is_null() {
                 continue;
             }
             entries.push(GcDebugEntry {
                 handle: idx,
-                ptr,
+                ptr: ptr as usize,
                 tag: self.tags[idx],
                 in_nursery: self.nursery.contains(ptr as *const u8),
             });
@@ -976,7 +976,7 @@ impl GcHeap {
             }
             unsafe {
                 if tag == TAG_OBJECT {
-                    std::ptr::drop_in_place(ptr as *mut JSObject);
+                    std::ptr::drop_in_place(ptr);
                 } else {
                     Self::drop_in_place_tracked(ptr, tag);
                 }
@@ -986,7 +986,7 @@ impl GcHeap {
                     self.prop_pool.push(props);
                 }
             }
-            self.objects[idx] = 0;
+            self.objects[idx] = std::ptr::null_mut();
             self.marks[idx] = 0;
             self.tags[idx] = TAG_OBJECT;
             self.free_list.push(idx);
@@ -1025,7 +1025,7 @@ impl GcHeap {
 
         let mut to_free: Vec<usize> = Vec::new();
         for (idx, &ptr) in self.objects.iter().enumerate() {
-            if ptr != 0 && self.marks[idx] == COLOR_WHITE {
+            if !ptr.is_null() && self.marks[idx] == COLOR_WHITE {
                 to_free.push(idx);
             }
         }
@@ -1059,9 +1059,9 @@ impl GcHeap {
             unsafe {
                 if tag == TAG_OBJECT {
                     if in_nursery {
-                        std::ptr::drop_in_place(ptr as *mut JSObject);
+                        std::ptr::drop_in_place(ptr);
                     } else {
-                        let _ = Box::from_raw(ptr as *mut JSObject);
+                        let _ = Box::from_raw(ptr);
                     }
                 } else if in_nursery {
                     Self::drop_in_place_tracked(ptr, tag);
@@ -1074,7 +1074,7 @@ impl GcHeap {
                     self.prop_pool.push(props);
                 }
             }
-            self.objects[idx] = 0;
+            self.objects[idx] = std::ptr::null_mut();
             self.marks[idx] = 0;
             self.tags[idx] = TAG_OBJECT;
             self.free_list.push(idx);
@@ -1083,7 +1083,7 @@ impl GcHeap {
         }
 
         for &idx in &self.nursery_indices {
-            if self.objects[idx] != 0 {
+            if ! self.objects[idx].is_null() {
                 live_nursery_indices.push(idx);
             }
         }
@@ -1123,7 +1123,7 @@ impl GcHeap {
         !self.gray_stack.is_empty()
     }
 
-    pub fn write_barrier(&mut self, obj_ptr: usize, new_value: &JSValue) {
+    pub fn write_barrier(&mut self, obj_ptr: *mut JSObject, new_value: &JSValue) {
         let idx = JSValue::new_object(obj_ptr).as_object().gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
@@ -1143,7 +1143,7 @@ impl GcHeap {
 
         let mut to_free: Vec<usize> = Vec::new();
         for (idx, &ptr) in self.objects.iter().enumerate() {
-            if ptr != 0 && self.marks[idx] == COLOR_WHITE {
+            if !ptr.is_null() && self.marks[idx] == COLOR_WHITE {
                 to_free.push(idx);
             }
         }
@@ -1160,7 +1160,7 @@ impl GcHeap {
                     Self::drop_tracked(ptr, tag);
                 }
             }
-            self.objects[idx] = 0;
+            self.objects[idx] = std::ptr::null_mut();
             self.marks[idx] = 0;
             self.tags[idx] = TAG_OBJECT;
             self.free_list.push(idx);
@@ -1176,25 +1176,25 @@ impl GcHeap {
         freed
     }
 
-    pub fn for_each_live_object(&self, mut f: impl FnMut(usize, u8)) {
+    pub fn for_each_live_object(&self, mut f: impl FnMut(*mut JSObject, u8)) {
         for (idx, &ptr) in self.objects.iter().enumerate() {
-            if ptr != 0 && self.marks[idx] != COLOR_WHITE {
+            if !ptr.is_null() && self.marks[idx] != COLOR_WHITE {
                 f(ptr, self.tags[idx]);
             }
         }
     }
 
     pub fn object_count(&self) -> usize {
-        self.objects.iter().filter(|&&p| p != 0).count()
+        self.objects.iter().filter(|&&p| !p.is_null()).count()
     }
 
     #[inline]
-    pub fn tracked_ptr_at(&self, idx: usize) -> Option<usize> {
-        self.objects.get(idx).copied().filter(|&p| p != 0)
+    pub fn tracked_ptr_at(&self, idx: usize) -> Option<*mut JSObject> {
+        self.objects.get(idx).copied().filter(|&p| !p.is_null())
     }
 
     #[inline]
-    pub fn is_ptr_alive(&self, ptr: usize) -> bool {
+    pub fn is_ptr_alive(&self, ptr: *mut JSObject) -> bool {
         let slot = JSValue::new_object(ptr).as_object().gc_slot;
         if slot == u32::MAX {
             return true;
@@ -1252,7 +1252,7 @@ mod tests {
     fn test_gc_track_untrack() {
         let mut heap = GcHeap::new();
         let obj = JSObject::new();
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
 
         heap.track(ptr);
         assert_eq!(heap.object_count(), 1);
@@ -1261,7 +1261,7 @@ mod tests {
         assert_eq!(heap.object_count(), 0);
 
         unsafe {
-            let _ = Box::from_raw(ptr as *mut JSObject);
+            let _ = Box::from_raw(ptr);
         }
     }
 
@@ -1269,7 +1269,7 @@ mod tests {
     fn test_gc_mark_value() {
         let mut heap = GcHeap::new();
         let obj = JSObject::new();
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
 
         heap.track(ptr);
 
@@ -1280,7 +1280,7 @@ mod tests {
         assert_eq!(heap.marks[idx], 1);
 
         unsafe {
-            let _ = Box::from_raw(ptr as *mut JSObject);
+            let _ = Box::from_raw(ptr);
         }
     }
 
@@ -1289,11 +1289,11 @@ mod tests {
         let mut heap = GcHeap::new();
 
         let reachable_obj = JSObject::new();
-        let reachable_ptr = Box::into_raw(Box::new(reachable_obj)) as usize;
+        let reachable_ptr = Box::into_raw(Box::new(reachable_obj));
         heap.track(reachable_ptr);
 
         let unreachable_obj = JSObject::new();
-        let unreachable_ptr = Box::into_raw(Box::new(unreachable_obj)) as usize;
+        let unreachable_ptr = Box::into_raw(Box::new(unreachable_obj));
         heap.track(unreachable_ptr);
 
         assert_eq!(heap.object_count(), 2);
@@ -1308,7 +1308,7 @@ mod tests {
         assert!(!heap.objects.contains(&unreachable_ptr));
 
         unsafe {
-            let _ = Box::from_raw(reachable_ptr as *mut JSObject);
+            let _ = Box::from_raw(reachable_ptr);
         }
     }
 
@@ -1317,12 +1317,12 @@ mod tests {
         let mut heap = GcHeap::new();
 
         let child_obj = JSObject::new();
-        let child_ptr = Box::into_raw(Box::new(child_obj)) as usize;
+        let child_ptr = Box::into_raw(Box::new(child_obj));
         heap.track(child_ptr);
 
         let mut parent_obj = JSObject::new();
         parent_obj.set(Atom(0), JSValue::new_object(child_ptr));
-        let parent_ptr = Box::into_raw(Box::new(parent_obj)) as usize;
+        let parent_ptr = Box::into_raw(Box::new(parent_obj));
         heap.track(parent_ptr);
 
         let roots = vec![JSValue::new_object(parent_ptr)];
@@ -1333,8 +1333,8 @@ mod tests {
         assert_eq!(heap.object_count(), 2);
 
         unsafe {
-            let _ = Box::from_raw(parent_ptr as *mut JSObject);
-            let _ = Box::from_raw(child_ptr as *mut JSObject);
+            let _ = Box::from_raw(parent_ptr);
+            let _ = Box::from_raw(child_ptr);
         }
     }
 
@@ -1343,17 +1343,17 @@ mod tests {
         let mut heap = GcHeap::new();
 
         let grandchild = JSObject::new();
-        let grandchild_ptr = Box::into_raw(Box::new(grandchild)) as usize;
+        let grandchild_ptr = Box::into_raw(Box::new(grandchild));
         heap.track(grandchild_ptr);
 
         let mut child = JSObject::new();
         child.set(Atom(0), JSValue::new_object(grandchild_ptr));
-        let child_ptr = Box::into_raw(Box::new(child)) as usize;
+        let child_ptr = Box::into_raw(Box::new(child));
         heap.track(child_ptr);
 
         let mut parent = JSObject::new();
         parent.set(Atom(0), JSValue::new_object(child_ptr));
-        let parent_ptr = Box::into_raw(Box::new(parent)) as usize;
+        let parent_ptr = Box::into_raw(Box::new(parent));
         heap.track(parent_ptr);
 
         let roots = vec![JSValue::new_object(parent_ptr)];
@@ -1364,9 +1364,9 @@ mod tests {
         assert_eq!(heap.object_count(), 3);
 
         unsafe {
-            let _ = Box::from_raw(parent_ptr as *mut JSObject);
-            let _ = Box::from_raw(child_ptr as *mut JSObject);
-            let _ = Box::from_raw(grandchild_ptr as *mut JSObject);
+            let _ = Box::from_raw(parent_ptr);
+            let _ = Box::from_raw(child_ptr);
+            let _ = Box::from_raw(grandchild_ptr);
         }
     }
 
@@ -1389,7 +1389,7 @@ mod tests {
         assert!(obj.get(b).is_none());
         assert_eq!(obj.get(c).unwrap().get_int(), 30);
 
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         heap.track(ptr);
 
         let roots = vec![JSValue::new_object(ptr)];
@@ -1399,7 +1399,7 @@ mod tests {
 
         heap.for_each_live_object(|live_ptr, tag| unsafe {
             if tag == TAG_OBJECT {
-                let obj_ref = &mut *(live_ptr as *mut JSObject);
+                let obj_ref = &mut *live_ptr;
                 obj_ref.compact_props(&mut cache);
             }
         });
@@ -1414,7 +1414,7 @@ mod tests {
         assert_eq!(count, 2);
 
         unsafe {
-            let _ = Box::from_raw(ptr as *mut JSObject);
+            let _ = Box::from_raw(ptr);
         }
     }
 
@@ -1477,7 +1477,7 @@ mod tests {
             (*ptr).set(Atom(1), JSValue::new_int(99));
         }
 
-        let roots = vec![JSValue::new_object(ptr as usize)];
+        let roots = vec![JSValue::new_object(ptr)];
         let freed = heap.minor_gc(&roots);
         assert_eq!(freed, 0);
         assert_eq!(heap.object_count(), 1);
@@ -1490,7 +1490,7 @@ mod tests {
         assert_eq!(obj_ref.get(Atom(1)).unwrap().get_int(), 99);
 
         unsafe {
-            std::ptr::drop_in_place(new_ptr as *mut JSObject);
+            std::ptr::drop_in_place(new_ptr);
         }
     }
 
@@ -1500,7 +1500,7 @@ mod tests {
         let reachable = heap.alloc_object().expect("alloc should succeed");
         let _unreachable = heap.alloc_object().expect("alloc should succeed");
 
-        let roots = vec![JSValue::new_object(reachable as usize)];
+        let roots = vec![JSValue::new_object(reachable)];
         let freed = heap.minor_gc(&roots);
         assert_eq!(freed, 1);
         assert_eq!(heap.object_count(), 1);
@@ -1512,7 +1512,7 @@ mod tests {
         let idx = unsafe { (*(reachable as *const JSObject)).gc_slot } as usize;
         let new_ptr = heap.objects[idx];
         unsafe {
-            std::ptr::drop_in_place(new_ptr as *mut JSObject);
+            std::ptr::drop_in_place(new_ptr);
         }
     }
 
@@ -1527,7 +1527,7 @@ mod tests {
             (*arr_ptr).set(1, JSValue::new_int(2));
         }
 
-        let roots = vec![JSValue::new_object(arr_ptr as usize)];
+        let roots = vec![JSValue::new_object(arr_ptr.cast())];
         let freed = heap.minor_gc(&roots);
         assert_eq!(freed, 0);
         assert_eq!(heap.object_count(), 1);
@@ -1550,11 +1550,11 @@ mod tests {
         let mut heap = GcHeap::new();
 
         let reachable_obj = JSObject::new();
-        let reachable_ptr = Box::into_raw(Box::new(reachable_obj)) as usize;
+        let reachable_ptr = Box::into_raw(Box::new(reachable_obj));
         heap.track(reachable_ptr);
 
         let unreachable_obj = JSObject::new();
-        let unreachable_ptr = Box::into_raw(Box::new(unreachable_obj)) as usize;
+        let unreachable_ptr = Box::into_raw(Box::new(unreachable_obj));
         heap.track(unreachable_ptr);
 
         let roots = vec![JSValue::new_object(reachable_ptr)];
@@ -1572,7 +1572,7 @@ mod tests {
         assert!(!heap.objects.contains(&unreachable_ptr));
 
         unsafe {
-            let _ = Box::from_raw(reachable_ptr as *mut JSObject);
+            let _ = Box::from_raw(reachable_ptr);
         }
     }
 
@@ -1581,11 +1581,11 @@ mod tests {
         let mut heap = GcHeap::new();
 
         let parent = JSObject::new();
-        let parent_ptr = Box::into_raw(Box::new(parent)) as usize;
+        let parent_ptr = Box::into_raw(Box::new(parent));
         heap.track(parent_ptr);
 
         let child = JSObject::new();
-        let child_ptr = Box::into_raw(Box::new(child)) as usize;
+        let child_ptr = Box::into_raw(Box::new(child));
         heap.track(child_ptr);
 
         let roots = vec![JSValue::new_object(parent_ptr)];
@@ -1607,8 +1607,8 @@ mod tests {
         assert_eq!(heap.object_count(), 2);
 
         unsafe {
-            let _ = Box::from_raw(parent_ptr as *mut JSObject);
-            let _ = Box::from_raw(child_ptr as *mut JSObject);
+            let _ = Box::from_raw(parent_ptr);
+            let _ = Box::from_raw(child_ptr);
         }
     }
 
@@ -1617,7 +1617,7 @@ mod tests {
         let mut heap = GcHeap::new();
         for _ in 0..10 {
             let obj = JSObject::new();
-            let ptr = Box::into_raw(Box::new(obj)) as usize;
+            let ptr = Box::into_raw(Box::new(obj));
             heap.track(ptr);
         }
 

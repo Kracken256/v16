@@ -17,7 +17,7 @@ fn create_builtin_function(
         func.base.set_prototype_raw(fn_proto_ptr);
     }
     define_name_length(ctx, &mut func.base, display_name, arity as i64);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -53,9 +53,9 @@ fn create_array_from_locale_list(ctx: &mut JSContext, list: &[&str]) -> JSValue 
     }
     arr.header
         .set(ctx.common_atoms.length, JSValue::new_int(list.len() as i64));
-    let ptr = Box::into_raw(Box::new(arr)) as usize;
+    let ptr = Box::into_raw(Box::new(arr));
     ctx.runtime_mut().gc_heap_mut().track_array(ptr);
-    JSValue::new_object(ptr)
+    JSValue::new_object(ptr.cast())
 }
 
 fn get_locale_from_first_arg(ctx: &mut JSContext, args: &[JSValue]) -> AtomOrDefault {
@@ -108,7 +108,7 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
         ctx.common_atoms.message,
         JSValue::new_string(ctx.intern(msg)),
     );
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -123,7 +123,7 @@ fn throw_range_error(ctx: &mut JSContext, msg: &str) {
         ctx.common_atoms.message,
         JSValue::new_string(ctx.intern(msg)),
     );
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -531,7 +531,7 @@ fn intl_collator_compare_getter(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
     define_name_length(ctx, &mut fn_obj.base, "", 2);
     fn_obj.base.set_native_data(Box::new(state));
 
-    let ptr = Box::into_raw(Box::new(fn_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(fn_obj));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -631,7 +631,7 @@ fn build_resolved_options(ctx: &mut JSContext, locale: crate::runtime::atom::Ato
         options.prototype = Some(obj_proto_ptr);
     }
     options.set(ctx.intern("locale"), JSValue::new_string(locale));
-    let ptr = Box::into_raw(Box::new(options)) as usize;
+    let ptr = Box::into_raw(Box::new(options));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -734,7 +734,7 @@ pub fn init_intl(ctx: &mut JSContext) {
         .base
         .set(ctx.intern("DateTimeFormat"), date_time_format_ctor);
 
-    let intl_ptr = Box::into_raw(Box::new(intl_obj)) as usize;
+    let intl_ptr = Box::into_raw(Box::new(intl_obj));
     ctx.runtime_mut().gc_heap_mut().track_function(intl_ptr);
     let intl_value = JSValue::new_function(intl_ptr);
 
@@ -766,7 +766,7 @@ fn init_collator(ctx: &mut JSContext) -> JSValue {
         ctx.intern("resolvedOptions"),
         create_builtin_function(ctx, "intl_collator_resolved_options", "resolvedOptions", 0),
     );
-    let proto_ptr = Box::into_raw(Box::new(proto)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_val = JSValue::new_object(proto_ptr);
 
@@ -787,7 +787,7 @@ fn init_collator(ctx: &mut JSContext) -> JSValue {
             set: None,
         },
     );
-    ctor.cached_prototype_ptr = proto_ptr as *mut JSObject;
+    ctor.cached_prototype_ptr = proto_ptr;
     ctor.base.set(
         ctx.intern("supportedLocalesOf"),
         create_builtin_function(
@@ -798,7 +798,7 @@ fn init_collator(ctx: &mut JSContext) -> JSValue {
         ),
     );
 
-    let ptr = Box::into_raw(Box::new(ctor)) as usize;
+    let ptr = Box::into_raw(Box::new(ctor));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let ctor_val = JSValue::new_function(ptr);
     let proto_binding = JSValue::new_object(proto_ptr);
@@ -821,7 +821,7 @@ fn init_number_format(ctx: &mut JSContext) -> JSValue {
             0,
         ),
     );
-    let proto_ptr = Box::into_raw(Box::new(proto)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_val = JSValue::new_object(proto_ptr);
 
@@ -831,7 +831,7 @@ fn init_number_format(ctx: &mut JSContext) -> JSValue {
         ctor.base.set_prototype_raw(fn_proto_ptr);
     }
     define_name_length(ctx, &mut ctor.base, "NumberFormat", 0);
-    ctor.cached_prototype_ptr = proto_ptr as *mut JSObject;
+    ctor.cached_prototype_ptr = proto_ptr;
     ctor.base.set(ctx.common_atoms.prototype, proto_val);
     ctor.base.set(
         ctx.intern("supportedLocalesOf"),
@@ -843,7 +843,7 @@ fn init_number_format(ctx: &mut JSContext) -> JSValue {
         ),
     );
 
-    let ptr = Box::into_raw(Box::new(ctor)) as usize;
+    let ptr = Box::into_raw(Box::new(ctor));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -862,7 +862,7 @@ fn init_date_time_format(ctx: &mut JSContext) -> JSValue {
             0,
         ),
     );
-    let proto_ptr = Box::into_raw(Box::new(proto)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_val = JSValue::new_object(proto_ptr);
 
@@ -872,7 +872,7 @@ fn init_date_time_format(ctx: &mut JSContext) -> JSValue {
         ctor.base.set_prototype_raw(fn_proto_ptr);
     }
     define_name_length(ctx, &mut ctor.base, "DateTimeFormat", 0);
-    ctor.cached_prototype_ptr = proto_ptr as *mut JSObject;
+    ctor.cached_prototype_ptr = proto_ptr;
     ctor.base.set(ctx.common_atoms.prototype, proto_val);
     ctor.base.set(
         ctx.intern("supportedLocalesOf"),
@@ -884,7 +884,7 @@ fn init_date_time_format(ctx: &mut JSContext) -> JSValue {
         ),
     );
 
-    let ptr = Box::into_raw(Box::new(ctor)) as usize;
+    let ptr = Box::into_raw(Box::new(ctor));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -914,7 +914,7 @@ fn intl_collator_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     set_collator_state(ctx, &mut obj, state);
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -940,7 +940,7 @@ fn intl_numberformat_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
     }
     set_locale_slot(ctx, &mut obj, locale);
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -966,7 +966,7 @@ fn intl_datetimeformat_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSV
     }
     set_locale_slot(ctx, &mut obj, locale);
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -1076,7 +1076,7 @@ fn intl_collator_resolved_options(ctx: &mut JSContext, args: &[JSValue]) -> JSVa
         );
     }
 
-    let ptr = Box::into_raw(Box::new(options)) as usize;
+    let ptr = Box::into_raw(Box::new(options));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }

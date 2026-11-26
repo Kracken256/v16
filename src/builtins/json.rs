@@ -13,10 +13,10 @@ fn unwrap_wrapper_object(ctx: &mut JSContext, obj: &JSObject) -> Option<JSValue>
             let proto = obj.prototype;
             if let Some(pp) = proto {
                 if let Some(ntp) = ctx.get_number_prototype() {
-                    if pp == ntp as usize as *mut JSObject {
+                    if pp == ntp {
                         if let Some(value_of_fn) = obj.get(ctx.common_atoms.value_of) {
                             if value_of_fn.is_function() {
-                                let obj_ptr = obj as *const _ as usize;
+                                let obj_ptr = obj as *const _ as *mut crate::object::object::JSObject;
                                 let obj_val = JSValue::new_object(obj_ptr);
                                 let called = ctx.with_vm(|vm, ctx| {
                                     vm.call_function_with_this(ctx, value_of_fn, obj_val, &[]).ok()
@@ -33,10 +33,10 @@ fn unwrap_wrapper_object(ctx: &mut JSContext, obj: &JSObject) -> Option<JSValue>
             let proto = obj.prototype;
             if let Some(pp) = proto {
                 if let Some(stp) = ctx.get_string_prototype() {
-                    if pp == stp as usize as *mut JSObject {
+                    if pp == stp {
                         if let Some(to_str_fn) = obj.get(ctx.common_atoms.to_string) {
                             if to_str_fn.is_function() {
-                                let obj_ptr = obj as *const _ as usize;
+                                let obj_ptr = obj as *const _ as *mut crate::object::object::JSObject;
                                 let obj_val = JSValue::new_object(obj_ptr);
                                 let called = ctx.with_vm(|vm, ctx| {
                                     vm.call_function_with_this(ctx, to_str_fn, obj_val, &[]).ok()
@@ -83,7 +83,7 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             ctx.common_atoms.message,
             JSValue::new_string(ctx.intern("Cannot convert a Symbol value to a string")),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -117,8 +117,8 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                 }
                             }
                         }
-                    }
                 }
+                    }
                 if got_primitive.is_none() {
                     let value_of_fn = obj.get(ctx.common_atoms.value_of);
                     if let Some(f) = value_of_fn {
@@ -140,8 +140,8 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                 }
                             }
                         }
-                    }
                 }
+                    }
                 if let Some(s) = got_primitive {
                     match super::json_parser::JsonParser::new(&s).parse_root(ctx) {
                         Ok(v) => return Some(v),
@@ -149,7 +149,7 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                             let mut err = crate::object::object::JSObject::new_typed(crate::object::object::ObjectType::Error);
                             if let Some(proto) = ctx.get_syntax_error_prototype() { err.prototype = Some(proto); }
                             err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("JSON.parse: unexpected character")));
-                            let ptr = Box::into_raw(Box::new(err)) as usize;
+                            let ptr = Box::into_raw(Box::new(err));
                             ctx.runtime_mut().gc_heap_mut().track(ptr);
                             ctx.pending_exception = Some(JSValue::new_object(ptr));
                             return Some(JSValue::undefined());
@@ -167,7 +167,7 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() { err.prototype = Some(proto); }
         err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
         err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("Cannot convert object to primitive value")));
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -185,7 +185,7 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                         wrapper.prototype = Some(obj_proto);
                     }
                     wrapper.set(ctx.common_atoms.empty, root_val);
-                    let wptr = Box::into_raw(Box::new(wrapper)) as usize;
+                    let wptr = Box::into_raw(Box::new(wrapper));
                     ctx.runtime_mut().gc_heap_mut().track(wptr);
                     let wrapper_val = JSValue::new_object(wptr);
                     // Walk the wrapper with reviver
@@ -205,7 +205,7 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 ctx.common_atoms.message,
                 JSValue::new_string(ctx.intern("JSON.parse: unexpected character")),
             );
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             JSValue::undefined()
@@ -285,7 +285,7 @@ pub fn json_raw_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             set: None,
         },
     );
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -300,7 +300,7 @@ fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
         ctx.common_atoms.message,
         JSValue::new_string(ctx.intern(msg)),
     );
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -329,7 +329,7 @@ fn get_to_json(ctx: &mut JSContext, val: JSValue) -> Option<JSValue> {
     }
     if val.is_bigint() {
         if let Some(bigint_proto) = ctx.get_bigint_prototype() {
-            let proto_val = JSValue::new_object(bigint_proto as usize);
+            let proto_val = JSValue::new_object(bigint_proto);
             return proto_val.as_object().get(ctx.intern("toJSON"));
         }
     }
@@ -341,7 +341,7 @@ fn jsvalue_to_json_with_options(
     value: &JSValue,
     replacer: Option<&JSValue>,
     space: Option<&JSValue>,
-    seen: &mut Vec<usize>,
+    seen: &mut Vec<*mut crate::object::object::JSObject>,
 ) -> Option<String> {
     let mut val = *value;
     // Apply toJSON
@@ -358,7 +358,7 @@ fn jsvalue_to_json_with_options(
                         wrapper_obj.prototype = Some(proto_ptr);
                     }
                     wrapper_obj.set(ctx.common_atoms.empty, *value);
-                    let wrapper_ptr = Box::into_raw(Box::new(wrapper_obj)) as usize;
+                    let wrapper_ptr = Box::into_raw(Box::new(wrapper_obj));
                     ctx.runtime_mut().gc_heap_mut().track(wrapper_ptr);
                     let wrapper_val = JSValue::new_object(wrapper_ptr);
                     vm.call_function_with_this(ctx, *repl, wrapper_val, &args).ok()
@@ -639,7 +639,7 @@ fn jsvalue_to_json_internal(
     ctx: &mut JSContext,
     value: &JSValue,
     replacer: Option<&JSValue>,
-    seen: &mut Vec<usize>,
+    seen: &mut Vec<*mut crate::object::object::JSObject>,
     key: crate::runtime::atom::Atom,
 ) -> Option<String> {
     if value.is_object() && value.as_object().is_raw_json() {
@@ -690,7 +690,7 @@ fn jsvalue_to_json_internal(
             ctx.common_atoms.message,
             JSValue::new_string(ctx.intern("BigInt value cannot be serialized in JSON")),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return Some(String::new());
@@ -704,7 +704,7 @@ fn jsvalue_to_json_internal(
             return jsvalue_to_json_internal(ctx, &unwrapped.unwrap(), replacer, seen, key);
         }
 
-        let ptr = value.get_ptr() as usize;
+        let ptr = value.get_ptr();
 
         if seen.contains(&ptr) {
             let mut err = crate::object::object::JSObject::new_typed(
@@ -717,7 +717,7 @@ fn jsvalue_to_json_internal(
                 ctx.common_atoms.message,
                 JSValue::new_string(ctx.intern("Converting circular structure to JSON")),
             );
-            let eptr = Box::into_raw(Box::new(err)) as usize;
+            let eptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(eptr);
             ctx.pending_exception = Some(JSValue::new_object(eptr));
             return Some(String::new());
@@ -744,7 +744,7 @@ fn array_to_json(
     ctx: &mut JSContext,
     arr: &JSObject,
     replacer: Option<&JSValue>,
-    seen: &mut Vec<usize>,
+    seen: &mut Vec<*mut crate::object::object::JSObject>,
 ) -> String {
     let len_atom = ctx.common_atoms.length;
     let len = arr.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
@@ -768,7 +768,7 @@ fn array_to_json(
                 if repl.is_function() {
                     ctx.with_vm(|vm, ctx| {
                         let args = vec![JSValue::new_string(ctx.intern(&i.to_string())), val];
-                        let arr_val = JSValue::new_object(arr as *const _ as usize);
+                        let arr_val = JSValue::new_object(arr as *const _ as *mut crate::object::object::JSObject);
                         vm.call_function_with_this(ctx, *repl, arr_val, &args).unwrap_or(val)
                     })
                     .unwrap_or(val)
@@ -790,7 +790,7 @@ fn object_to_json(
     ctx: &mut JSContext,
     obj: &JSObject,
     replacer: Option<&JSValue>,
-    seen: &mut Vec<usize>,
+    seen: &mut Vec<*mut crate::object::object::JSObject>,
 ) -> String {
     let mut pairs = Vec::new();
 
@@ -900,7 +900,7 @@ fn object_to_json(
         let val = if let Some(v) = obj.get_own_value(key) {
             if v.is_function() {
                 // Accessor property: call the getter
-                let obj_ptr = obj as *const _ as usize;
+                let obj_ptr = obj as *const _ as *mut crate::object::object::JSObject;
                 let obj_val = JSValue::new_object(obj_ptr);
                 let called = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, v, obj_val, &[]));
                 match called {
@@ -924,7 +924,7 @@ fn object_to_json(
             if repl.is_function() {
                 ctx.with_vm(|vm, ctx| {
                     let args = vec![JSValue::new_string(ctx.intern(&key_str)), val];
-                    let obj_ptr = obj as *const _ as usize;
+                    let obj_ptr = obj as *const _ as *mut crate::object::object::JSObject;
                     let obj_val = JSValue::new_object(obj_ptr);
                     vm.call_function_with_this(ctx, *repl, obj_val, &args).unwrap_or(val)
                 })

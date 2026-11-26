@@ -653,7 +653,7 @@ fn throw_type_error_math(ctx: &mut JSContext, msg: &str) -> JSValue {
     if let Some(proto) = ctx.get_type_error_prototype() {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
     JSValue::undefined()
@@ -755,7 +755,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();

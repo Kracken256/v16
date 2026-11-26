@@ -12,7 +12,7 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
     }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -24,7 +24,7 @@ fn throw_range_error(ctx: &mut JSContext, msg: &str) {
     }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("RangeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -93,7 +93,7 @@ fn safe_array_len_with_ctx(obj: &JSObject, len_atom: crate::runtime::atom::Atom,
     match &val {
         Some(v) => {
             let actual = if v.is_function() {
-                let this_val = JSValue::new_object(obj as *const _ as usize);
+                let this_val = JSValue::new_object(obj as *const _ as *mut crate::object::object::JSObject);
                 match call_callback_with_this(ctx, *v, this_val, &[]) {
                     Ok(result) => result,
                     Err(_) => return 0,
@@ -148,7 +148,7 @@ fn init_array_length(obj: &mut JSObject, len: i64, ctx: &mut JSContext) {
 fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), 1);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
     debug_assert_ne!(
@@ -200,7 +200,7 @@ pub fn init_array(ctx: &mut JSContext) {
         create_builtin_function(ctx, "array_fromAsync"),
     );
 
-    let array_ptr = Box::into_raw(Box::new(array_func)) as usize;
+    let array_ptr = Box::into_raw(Box::new(array_func));
     ctx.runtime_mut().gc_heap_mut().track_function(array_ptr);
     let array_value = JSValue::new_function(array_ptr);
     let global = ctx.global();
@@ -411,7 +411,7 @@ pub fn init_array(ctx: &mut JSContext) {
         proto_obj.prototype = Some(obj_proto_ptr);
     }
 
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
 
     ctx.set_array_prototype(proto_ptr);
@@ -440,7 +440,7 @@ pub fn init_array(ctx: &mut JSContext) {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         iter_proto.prototype = Some(obj_proto_ptr);
     }
-    let iter_proto_ptr = Box::into_raw(Box::new(iter_proto)) as usize;
+    let iter_proto_ptr = Box::into_raw(Box::new(iter_proto));
     ctx.runtime_mut().gc_heap_mut().track(iter_proto_ptr);
     ctx.set_array_iterator_prototype(iter_proto_ptr);
 }
@@ -454,9 +454,9 @@ fn create_array_iterator(ctx: &mut JSContext, this_val: JSValue, kind: i64) -> J
     iter_obj.set(idx_atom, JSValue::new_int(0));
     iter_obj.set(kind_atom, JSValue::new_int(kind));
     if let Some(proto) = ctx.get_array_iterator_prototype() {
-        iter_obj.prototype = Some(proto as *mut JSObject);
+        iter_obj.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(iter_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(iter_obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -537,7 +537,7 @@ fn array_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let value_atom = ctx.intern("value");
         result.set(value_atom, result_value);
         result.set(done_atom, JSValue::bool(false));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     } else {
@@ -546,7 +546,7 @@ fn array_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let value_atom = ctx.intern("value");
         result.set(value_atom, JSValue::undefined());
         result.set(done_atom, JSValue::bool(true));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     }
@@ -694,9 +694,9 @@ fn new_jsarray_with_proto(ctx: &mut JSContext) -> JSArrayObject {
 }
 
 fn alloc_jsarray(arr: JSArrayObject, ctx: &mut JSContext) -> JSValue {
-    let ptr = Box::into_raw(Box::new(arr)) as usize;
+    let ptr = Box::into_raw(Box::new(arr));
     ctx.runtime_mut().gc_heap_mut().track_array(ptr);
-    JSValue::new_object(ptr)
+    JSValue::new_object(ptr.cast())
 }
 
 pub fn array_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1532,7 +1532,7 @@ fn create_array_obj(ctx: &mut JSContext, items: &[JSValue]) -> JSValue {
     }
     let len_atom = ctx.common_atoms.length;
     arr_obj.set(len_atom, JSValue::new_int(items.len() as i64));
-    let ptr = Box::into_raw(Box::new(arr_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(arr_obj));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -2894,6 +2894,6 @@ fn create_thenable_result(ctx: &mut JSContext, elements: Vec<JSValue>) -> JSValu
     let reactions_atom = ctx.intern("__promise_reactions__");
     promise.set(reactions_atom, JSValue::null());
 
-    let promise_ptr = Box::into_raw(Box::new(promise)) as usize;
+    let promise_ptr = Box::into_raw(Box::new(promise));
     JSValue::new_object(promise_ptr)
 }

@@ -19,7 +19,7 @@ fn throw_type_error(ctx: &mut JSContext, message: &str) {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let err_ptr = Box::into_raw(Box::new(err)) as usize;
+        let err_ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(err_ptr);
         vm.pending_throw = Some(JSValue::new_object(err_ptr));
     });
@@ -55,7 +55,7 @@ fn create_builtin_method(
         func.base
             .define_property_ext(ctx.common_atoms.name, desc, true, true, true);
     }
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -140,7 +140,7 @@ pub fn init_function(ctx: &mut JSContext) {
     let throw_type_error_fn = {
         let mut f = JSFunction::new_builtin(ctx.intern("ThrowTypeError"), 0);
         f.set_builtin_marker(ctx, "throw_type_error_caller");
-        let ptr = Box::into_raw(Box::new(f)) as usize;
+        let ptr = Box::into_raw(Box::new(f));
         ctx.runtime_mut().gc_heap_mut().track_function(ptr);
         JSValue::new_function(ptr)
     };
@@ -175,7 +175,7 @@ pub fn init_function(ctx: &mut JSContext) {
         proto_obj.prototype = Some(obj_proto_ptr);
     }
 
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
 
@@ -192,7 +192,7 @@ pub fn init_function(ctx: &mut JSContext) {
         if let Some(v) = proto_obj_mut.get(atom) {
             if v.is_function() {
                 let f = v.as_function_mut();
-                f.base.set_prototype_raw(proto_ptr as *mut JSObject);
+                f.base.set_prototype_raw(proto_ptr);
             }
         }
     }
@@ -200,17 +200,17 @@ pub fn init_function(ctx: &mut JSContext) {
     let global = ctx.global();
     if global.is_object() {
         let global_obj = global.as_object_mut();
-        patch_function_values_with_function_prototype(global_obj, proto_ptr as *mut JSObject);
+        patch_function_values_with_function_prototype(global_obj, proto_ptr);
     }
 
     let mut function_ctor = JSFunction::new_builtin(ctx.common_atoms.function, 1);
     function_ctor.set_builtin_marker(ctx, "function_constructor");
-    function_ctor.base.prototype = Some(proto_ptr as *mut JSObject);
+    function_ctor.base.prototype = Some(proto_ptr);
     function_ctor
         .base
         .set(ctx.common_atoms.prototype, proto_value.clone());
 
-    let function_ptr = Box::into_raw(Box::new(function_ctor)) as usize;
+    let function_ptr = Box::into_raw(Box::new(function_ctor));
     ctx.runtime_mut().gc_heap_mut().track_function(function_ptr);
     let function_value = JSValue::new_function(function_ptr);
 
@@ -401,7 +401,7 @@ fn function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_syntax_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             JSValue::undefined()
@@ -425,7 +425,7 @@ fn function_bind(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             ctx.common_atoms.message,
             JSValue::new_string(ctx.intern("this is not a function")),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -445,7 +445,7 @@ fn function_bind(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 ctx.common_atoms.message,
                 JSValue::new_string(ctx.intern("this is not a function")),
             );
-            let eptr = Box::into_raw(Box::new(err)) as usize;
+            let eptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(eptr);
             ctx.pending_exception = Some(JSValue::new_object(eptr));
             return JSValue::undefined();
@@ -480,7 +480,7 @@ fn function_bind(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         idx += 1;
     }
     let boxed_args_arr = Box::new(args_arr);
-    let args_ptr = Box::into_raw(boxed_args_arr) as usize;
+    let args_ptr = Box::into_raw(boxed_args_arr);
     ctx.runtime_mut().gc_heap_mut().track(args_ptr);
     wrapper.set(ctx.common_atoms.__boundArgs, JSValue::new_object(args_ptr));
 
@@ -535,7 +535,7 @@ fn function_bind(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     );
 
     let boxed_wrapper = Box::new(wrapper);
-    let ptr = Box::into_raw(boxed_wrapper) as usize;
+    let ptr = Box::into_raw(boxed_wrapper);
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -604,7 +604,7 @@ fn function_call(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                 err.prototype = Some(proto);
                             }
                         }
-                        let err_ptr = Box::into_raw(Box::new(err)) as usize;
+                        let err_ptr = Box::into_raw(Box::new(err));
                         ctx.runtime_mut().gc_heap_mut().track(err_ptr);
                         JSValue::new_object(err_ptr)
                     });

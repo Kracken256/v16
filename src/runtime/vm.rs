@@ -43,7 +43,7 @@ pub struct CallFrame {
     pub bytecode_len: usize,
     pub constants_ptr: *const JSValue,
     pub constants_len: usize,
-    pub function_ptr: Option<usize>,
+    pub function_ptr: Option<*mut crate::object::function::JSFunction>,
     pub ic_table: Option<std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>>,
     pub this_value: JSValue,
     pub saved_args: Vec<JSValue>,
@@ -66,7 +66,7 @@ pub struct CallFrame {
 
     pub var_name_map: Option<std::rc::Rc<Vec<(u32, u16, u8)>>>,
     pub eval_bindings: Option<Box<std::collections::HashMap<u32, JSValue>>>,
-    pub cached_arguments: Option<usize>,
+    pub cached_arguments: Option<*mut crate::object::object::JSObject>,
     pub with_env: Option<JSValue>,
     pub in_parameter_initializer: bool,
     pub param_env_has_arguments: bool,
@@ -173,7 +173,7 @@ fn boxed_sloppy_this(ctx: &mut JSContext, this_val: JSValue) -> JSValue {
 pub fn start_async_call(
     ctx: &mut JSContext,
     js_func: &crate::object::function::JSFunction,
-    func_ptr: usize,
+    func_ptr: *mut crate::object::function::JSFunction,
     this_val: JSValue,
     args: &[JSValue],
 ) -> Result<JSValue, String> {
@@ -227,7 +227,7 @@ pub fn start_async_call(
         param_env: js_func.param_env,
         param_env_own: false,
     });
-    let holder_ptr = Box::into_raw(Box::new(holder)) as usize;
+    let holder_ptr = Box::into_raw(Box::new(holder));
     ctx.runtime_mut().gc_heap_mut().track(holder_ptr);
     let holder_val = JSValue::new_object(holder_ptr);
 
@@ -389,7 +389,7 @@ fn generator_iterator_result(ctx: &mut JSContext, value: JSValue, done: bool) ->
     if let Some(proto_ptr) = ctx.get_object_prototype() {
         result.prototype = Some(proto_ptr);
     }
-    let ptr = Box::into_raw(Box::new(result)) as usize;
+    let ptr = Box::into_raw(Box::new(result));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -719,7 +719,7 @@ fn make_async_error(ctx: &mut JSContext, msg: &str) -> JSValue {
     if let Some(proto) = ctx.get_error_prototype() {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -757,7 +757,7 @@ pub struct VM {
 
     allocation_count: u64,
 
-    caller_vm: Option<usize>,
+    caller_vm: Option<*mut VM>,
 
     eval_binding_frames: u32,
 
@@ -769,15 +769,15 @@ pub struct VM {
 
     eval_direct_scope_count: u16,
 
-    pending_instance_elements: Option<(JSValue, usize)>,
+    pending_instance_elements: Option<(JSValue, *mut crate::object::function::JSFunction)>,
 
     pending_super_rebind_error: bool,
 
     cached_has_instance_atom: crate::runtime::atom::Atom,
 
-    instanceof_cache_ctor: usize,
-    instanceof_cache_proto: usize,
-    instanceof_cache_ctor_proto: usize,
+    instanceof_cache_ctor: *mut crate::object::object::JSObject,
+    instanceof_cache_proto: *mut crate::object::object::JSObject,
+    instanceof_cache_ctor_proto: *mut crate::object::object::JSObject,
     instanceof_cache_result: bool,
 
     regex_lit_cache: std::collections::HashMap<usize, crate::regexp::Regex>,
@@ -792,7 +792,7 @@ pub struct VM {
 
     pub pending_saved_args: Option<Vec<JSValue>>,
 
-    pub pending_function_ptr: Option<usize>,
+    pub pending_function_ptr: Option<*mut crate::object::function::JSFunction>,
 
     pub pending_this: Option<JSValue>,
 
@@ -868,9 +868,9 @@ impl VM {
             pending_instance_elements: None,
             pending_super_rebind_error: false,
             cached_has_instance_atom: crate::runtime::atom::Atom(0),
-            instanceof_cache_ctor: 0,
-            instanceof_cache_proto: 0,
-            instanceof_cache_ctor_proto: 0,
+            instanceof_cache_ctor: std::ptr::null_mut(),
+            instanceof_cache_proto: std::ptr::null_mut(),
+            instanceof_cache_ctor_proto: std::ptr::null_mut(),
             instanceof_cache_result: false,
             regex_lit_cache: std::collections::HashMap::new(),
             last_yield_src: None,
@@ -907,12 +907,12 @@ impl VM {
 
     #[inline(always)]
     fn caller_vm_ref(&self) -> Option<&VM> {
-        self.caller_vm.map(|ptr| unsafe { &*(ptr as *const VM) })
+        self.caller_vm.map(|ptr| unsafe { &*ptr })
     }
 
     #[inline(always)]
     fn caller_vm_mut(&mut self) -> Option<&mut VM> {
-        self.caller_vm.map(|ptr| unsafe { &mut *(ptr as *mut VM) })
+        self.caller_vm.map(|ptr| unsafe { &mut *ptr })
     }
 
     fn cleanup_handlers_for_frame(&mut self) {
@@ -991,7 +991,7 @@ impl VM {
         if let Some(proto) = ctx.get_reference_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.pending_throw = Some(JSValue::new_object(ptr));
         None
@@ -1003,8 +1003,8 @@ impl VM {
             Some(caller) => {
                 caller.frame_index == 0 && caller.frames[0].function_ptr.is_none()
             }
-        }
     }
+        }
 
     fn raise_named_error(
         &mut self,
@@ -1032,7 +1032,7 @@ impl VM {
         if let Some(proto) = proto {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.pending_throw = Some(JSValue::new_object(ptr));
         let exc = self.pending_throw.take().unwrap();
@@ -1068,7 +1068,7 @@ impl VM {
         let idx_atom = ctx.common_atoms.__iter_idx__;
         iter_obj.set_cached(arr_atom, iterable, ctx.shape_cache_mut());
         iter_obj.set_cached(idx_atom, JSValue::new_int(0), ctx.shape_cache_mut());
-        let iter_ptr = Box::into_raw(Box::new(iter_obj)) as usize;
+        let iter_ptr = Box::into_raw(Box::new(iter_obj));
         ctx.runtime_mut().gc_heap_mut().track(iter_ptr);
         self.allocation_count += 1;
         JSValue::new_object(iter_ptr)
@@ -1090,7 +1090,7 @@ impl VM {
         if async_from_sync {
             record.set_cached(async_atom, JSValue::bool(true), ctx.shape_cache_mut());
         }
-        let ptr = Box::into_raw(Box::new(record)) as usize;
+        let ptr = Box::into_raw(Box::new(record));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.allocation_count += 1;
         JSValue::new_object(ptr)
@@ -1231,7 +1231,7 @@ impl VM {
         &mut self,
         bytecode: &Bytecode,
         return_pc: usize,
-        function_ptr: Option<usize>,
+        function_ptr: Option<*mut crate::object::function::JSFunction>,
         this_value: JSValue,
         dst_reg: u16,
         arg_count: u16,
@@ -1266,7 +1266,7 @@ impl VM {
         constants_ptr: *const JSValue,
         constants_len: usize,
         return_pc: usize,
-        function_ptr: Option<usize>,
+        function_ptr: Option<*mut crate::object::function::JSFunction>,
         this_value: JSValue,
         dst_reg: u16,
         arg_count: u16,
@@ -1380,7 +1380,7 @@ impl VM {
         constants_ptr: *const JSValue,
         constants_len: usize,
         return_pc: usize,
-        function_ptr: Option<usize>,
+        function_ptr: Option<*mut crate::object::function::JSFunction>,
         ic_table: Option<std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>>,
         this_value: JSValue,
         dst_reg: u16,
@@ -1527,7 +1527,7 @@ impl VM {
                 return Some(value);
             }
             match obj.prototype {
-                Some(ptr) => env = JSValue::new_object(ptr as usize),
+                Some(ptr) => env = JSValue::new_object(ptr),
                 None => break,
             }
         }
@@ -1546,7 +1546,7 @@ impl VM {
                 return true;
             }
             match env.as_object().prototype {
-                Some(ptr) => env = JSValue::new_object(ptr as usize),
+                Some(ptr) => env = JSValue::new_object(ptr),
                 None => break,
             }
         }
@@ -1561,9 +1561,9 @@ impl VM {
         let parent = self.frames[fi].param_env;
         let mut env_obj = crate::object::object::JSObject::new();
         if parent.is_object() {
-            env_obj.prototype = Some(parent.get_ptr() as *mut crate::object::object::JSObject);
+            env_obj.prototype = Some(parent.get_ptr());
         }
-        let ptr = Box::into_raw(Box::new(env_obj)) as usize;
+        let ptr = Box::into_raw(Box::new(env_obj));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         let env = JSValue::new_object(ptr);
         let frame = &mut self.frames[fi];
@@ -1727,8 +1727,8 @@ impl VM {
                         }
                     }
                     if func.is_class_constructor {
-                        let proto_ptr = func.cached_prototype_ptr as usize;
-                        if proto_ptr != 0 {
+                        let proto_ptr = func.cached_prototype_ptr;
+                        if !proto_ptr.is_null() {
                             let proto_obj = JSValue::new_object(proto_ptr);
                             let proto_obj = proto_obj.as_object();
                             if proto_obj.has_private_kind(proto_ptr, name)
@@ -2005,7 +2005,7 @@ impl VM {
         is_super_call: bool,
     ) -> Result<bool, String> {
         if func_val.is_function() {
-            let ptr = func_val.get_ptr();
+            let ptr = func_val.get_function_ptr();
             let js_func = JSValue::new_function(ptr);
             let js_func = js_func.as_function();
             if js_func.is_class_constructor && !is_call_new && !is_super_call {
@@ -2159,7 +2159,7 @@ impl VM {
                         let home = js_func.home_object.as_object();
                         let base = home
                             .prototype
-                            .map(|p| JSValue::new_object(p as usize))
+                            .map(|p| JSValue::new_object(p))
                             .unwrap_or(JSValue::undefined());
                         self.frames[self.frame_index].super_base = base;
                     }
@@ -2286,8 +2286,7 @@ impl VM {
                     if let Some(proto_val) = func_val.as_object().get(proto_key) {
                         if proto_val.is_object_like() {
                             result.as_function_mut().base.prototype = Some(
-                                proto_val.get_ptr()
-                                    as *mut crate::object::object::JSObject,
+                                proto_val.get_ptr(),
                             );
                         }
                     }
@@ -2337,11 +2336,11 @@ impl VM {
                     if let Some(proto_val) = target_func.base.get(proto_atom) {
                         if proto_val.is_object_like() {
                             let proto_ptr = proto_val.get_ptr();
-                            new_obj.prototype = Some(proto_ptr as *mut crate::object::object::JSObject);
+                            new_obj.prototype = Some(proto_ptr);
                         }
                     }
                 }
-                let new_ptr = Box::into_raw(Box::new(new_obj)) as usize;
+                let new_ptr = Box::into_raw(Box::new(new_obj));
                 ctx.runtime_mut().gc_heap_mut().track(new_ptr);
                 let new_val = JSValue::new_object(new_ptr);
                 let result =
@@ -2521,7 +2520,7 @@ impl VM {
         &self,
         pc: usize,
         shape_id: crate::object::shape::ShapeId,
-    ) -> Option<(u32, Option<usize>)> {
+    ) -> Option<(u32, Option<*mut crate::object::object::JSObject>)> {
         self.ic_table()
             .and_then(|table| table.get(pc).and_then(|ic| ic.get(shape_id)))
     }
@@ -2537,13 +2536,13 @@ impl VM {
     }
 
     #[inline(always)]
-    fn ic_get_reads0_values(&self, pc: usize, shape_id: usize) -> Option<(bool, u32, usize)> {
+    fn ic_get_reads0_values(&self, pc: usize, shape_id: usize) -> Option<(bool, u32, *mut crate::object::object::JSObject)> {
         self.ic_table()
             .map(|table| table.get_reads0_values(pc, shape_id))
     }
 
     #[inline(always)]
-    fn ic_get_reads123_values(&self, pc: usize, shape_id: usize) -> Option<(bool, u32, usize)> {
+    fn ic_get_reads123_values(&self, pc: usize, shape_id: usize) -> Option<(bool, u32, *mut crate::object::object::JSObject)> {
         self.ic_table()
             .map(|table| table.get_reads123_values(pc, shape_id))
     }
@@ -2658,12 +2657,12 @@ impl VM {
                     .base
                     .prototype
                     .map(|proto| {
-                        let proto_obj = JSValue::new_object(proto as usize);
+                        let proto_obj = JSValue::new_object(proto);
                         let proto_obj = proto_obj.as_object();
                         if proto_obj.is_function_object {
-                            JSValue::new_function(proto as usize)
+                            JSValue::new_function(proto.cast())
                         } else {
-                            JSValue::new_object(proto as usize)
+                            JSValue::new_object(proto)
                         }
                     })
                     .unwrap_or_else(JSValue::undefined);
@@ -2672,13 +2671,13 @@ impl VM {
         frame.super_ctor
     }
 
-    fn private_elements_owner_fn(frame: &CallFrame) -> Option<usize> {
+    fn private_elements_owner_fn(frame: &CallFrame) -> Option<*mut crate::object::function::JSFunction> {
         let fptr = frame.function_ptr?;
         let func = JSValue::new_function(fptr);
         let func = func.as_function();
         let has_elements = func.has_private_elements || !func.instance_fields.is_empty();
         if func.is_arrow() {
-            if func.arrow_enclosing_ctor_ptr != 0 {
+            if ! func.arrow_enclosing_ctor_ptr.is_null() {
                 Some(func.arrow_enclosing_ctor_ptr)
             } else {
                 None
@@ -2690,7 +2689,7 @@ impl VM {
         }
     }
 
-    fn mark_instance_elements_pending(&mut self, this_val: JSValue, func_ptr: usize) {
+    fn mark_instance_elements_pending(&mut self, this_val: JSValue, func_ptr: *mut crate::object::function::JSFunction) {
         if !this_val.is_object_like() {
             return;
         }
@@ -2705,7 +2704,7 @@ impl VM {
         &mut self,
         ctx: &mut JSContext,
         this_val: JSValue,
-        func_ptr: usize,
+        func_ptr: *mut crate::object::function::JSFunction,
     ) -> Result<(), String> {
         if !this_val.is_object_like() {
             self.set_pending_type_error(ctx, "Cannot initialize elements on non-object");
@@ -2716,11 +2715,11 @@ impl VM {
             let func = func.as_function();
             (
                 func.has_private_elements,
-                func.cached_prototype_ptr as usize,
+                func.cached_prototype_ptr,
                 func.instance_fields.len(),
             )
         };
-        if has_private_elements && owner != 0 {
+        if has_private_elements && !owner.is_null() {
             let obj = this_val.as_object();
             if obj.has_private_brand(owner) {
                 self.set_pending_type_error(
@@ -2969,7 +2968,7 @@ impl VM {
         if let Some(proto) = proto {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
@@ -3004,7 +3003,7 @@ impl VM {
                 return obj.proxy_callable();
             }
             if let Some(function_prototype) = ctx.get_function_prototype() {
-                return value.get_ptr() as *mut crate::object::object::JSObject
+                return value.get_ptr()
                     == function_prototype;
             }
         }
@@ -3101,7 +3100,7 @@ impl VM {
         let mut current = obj_val.as_object().prototype_object();
         let mut depth = 0u32;
         while let Some(p) = current {
-            if p as *const crate::object::object::JSObject as usize == proto_ptr {
+            if std::ptr::eq( p, proto_ptr) {
                 return Some(true);
             }
             current = p.prototype_object();
@@ -3342,7 +3341,7 @@ impl VM {
                     let mut result = crate::object::object::JSObject::new();
                     result.set(ctx.intern("value"), v);
                     result.set(ctx.intern("done"), JSValue::bool(false));
-                    let ptr = Box::into_raw(Box::new(result)) as usize;
+                    let ptr = Box::into_raw(Box::new(result));
                     self.set_reg(value_reg, JSValue::new_object(ptr));
                 }
                 return Ok(());
@@ -3835,10 +3834,10 @@ impl VM {
             arr.header.set_prototype_raw(proto);
         }
         arr.header.ensure_shape(ctx.shape_cache_mut());
-        let ptr = Box::into_raw(Box::new(arr)) as usize;
+        let ptr = Box::into_raw(Box::new(arr));
         ctx.runtime_mut().gc_heap_mut().track_array(ptr);
         self.allocation_count += 1;
-        let val = JSValue::new_object(ptr);
+        let val = JSValue::new_object(ptr.cast());
         self.set_reg(stack_reg, val);
         val
     }
@@ -4189,7 +4188,7 @@ impl VM {
             if let Some(proto) = ctx.get_object_prototype() {
                 wrapper.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(wrapper)) as usize;
+            let ptr = Box::into_raw(Box::new(wrapper));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             let promise = ctx.call_builtin("promise_resolve", &[JSValue::new_object(ptr)]);
             self.set_reg(await_reg, JSValue::undefined());
@@ -4336,7 +4335,7 @@ impl VM {
         if let Some(proto) = ctx.get_object_prototype() {
             iter_result.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(iter_result)) as usize;
+        let ptr = Box::into_raw(Box::new(iter_result));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         let promise = ctx.call_builtin("promise_resolve", &[JSValue::new_object(ptr)]);
         self.set_reg(await_reg, JSValue::undefined());
@@ -4359,7 +4358,7 @@ impl VM {
         if let Some(proto) = ctx.get_reference_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
@@ -4446,7 +4445,7 @@ impl VM {
     ) -> Option<*mut crate::object::object::JSObject> {
         if let Some(proto_val) = js_func.base.get(ctx.common_atoms.prototype) {
             if proto_val.is_object_like() {
-                return Some(proto_val.get_ptr() as *mut crate::object::object::JSObject);
+                return Some(proto_val.get_ptr());
             }
         }
         let current = ctx as *mut JSContext as usize;
@@ -4856,7 +4855,7 @@ impl VM {
         macro_rules! push_proto {
             ($getter:ident) => {
                 if let Some(ptr) = ctx.$getter() {
-                    roots.push(JSValue::new_object(ptr as usize));
+                    roots.push(JSValue::new_object(ptr));
                 }
             };
         }
@@ -4929,7 +4928,7 @@ impl VM {
         macro_rules! push_proto {
             ($getter:ident) => {
                 if let Some(ptr) = ctx.$getter() {
-                    roots.push(JSValue::new_object(ptr as usize));
+                    roots.push(JSValue::new_object(ptr));
                 }
             };
         }
@@ -5005,7 +5004,7 @@ impl VM {
         let freed = ctx.runtime_mut().run_gc(roots);
 
         if ctx.runtime().gc_heap().deleted_props_count > 0 {
-            let live_objects: Vec<(usize, u8)> = {
+            let live_objects: Vec<(*mut crate::object::object::JSObject, u8)> = {
                 let heap = ctx.runtime().gc_heap();
                 let mut objs = Vec::new();
                 heap.for_each_live_object(|ptr, tag| objs.push((ptr, tag)));
@@ -5053,7 +5052,7 @@ impl VM {
             let proto_key = ctx.common_atoms.prototype;
             if let Some(proto_val) = js_func.base.get(proto_key) {
                 if proto_val.is_object_like() {
-                    let cptr = proto_val.get_ptr() as *mut crate::object::object::JSObject;
+                    let cptr = proto_val.get_ptr();
                     ctor.as_function_mut().cached_prototype_ptr = cptr;
                     new_obj.prototype = Some(cptr);
                 }
@@ -5063,21 +5062,21 @@ impl VM {
                 if let Some(opp) = ctx.get_object_prototype() {
                     pobj.prototype = Some(opp);
                 }
-                let pp = Box::into_raw(Box::new(pobj)) as usize;
+                let pp = Box::into_raw(Box::new(pobj));
                 ctx.runtime_mut().gc_heap_mut().track(pp);
                 ctor.as_function_mut().base.set(proto_key, JSValue::new_object(pp));
-                let cptr = pp as *mut crate::object::object::JSObject;
+                let cptr = pp;
                 ctor.as_function_mut().cached_prototype_ptr = cptr;
                 new_obj.prototype = Some(cptr);
             }
         }
 
-        let new_ptr = Box::into_raw(Box::new(new_obj)) as usize;
+        let new_ptr = Box::into_raw(Box::new(new_obj));
         ctx.runtime_mut().gc_heap_mut().track(new_ptr);
         let new_val = JSValue::new_object(new_ptr);
 
         if js_func.is_class_constructor && !js_func.is_derived_constructor {
-            self.mark_instance_elements_pending(new_val, ctor.get_ptr());
+            self.mark_instance_elements_pending(new_val, ctor.get_function_ptr());
         }
 
         match self.call_function_with_this_impl(ctx, ctor, new_val, args, true) {
@@ -5106,7 +5105,7 @@ impl VM {
         self.pending_new_target = Some(new_target);
         let js_func = ctor.as_function();
         if js_func.is_class_constructor && !js_func.is_derived_constructor {
-            self.mark_instance_elements_pending(this_obj, ctor.get_ptr());
+            self.mark_instance_elements_pending(this_obj, ctor.get_function_ptr());
         }
         match self.call_function_with_this_impl(ctx, ctor, this_obj, args, true) {
             Ok(result) => {
@@ -5140,7 +5139,7 @@ impl VM {
     ) -> Result<JSValue, String> {
         if func.is_object() && !constructing {
             if let Some(function_prototype) = ctx.get_function_prototype() {
-                if func.get_ptr() as *mut crate::object::object::JSObject == function_prototype
+                if func.get_ptr() == function_prototype
                 {
                     return Ok(JSValue::undefined());
                 }
@@ -5199,7 +5198,7 @@ impl VM {
             return Err(msg);
         }
 
-        let ptr = func.get_ptr();
+        let ptr = func.get_function_ptr();
         let js_func = func.as_function();
 
         if js_func.is_builtin() {
@@ -5438,7 +5437,7 @@ impl VM {
                         param_env_own: result_param_env_own,
                     });
                 }
-                let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
+                let gen_ptr = Box::into_raw(Box::new(gen_obj));
                 ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
                 return Ok(JSValue::new_object(gen_ptr));
             }
@@ -5503,7 +5502,7 @@ impl VM {
                     let home = js_func.home_object.as_object();
                     let base = home
                         .prototype
-                        .map(|p| JSValue::new_object(p as usize))
+                        .map(|p| JSValue::new_object(p))
                         .unwrap_or(JSValue::undefined());
                     self.frames[self.frame_index].super_base = base;
                 }
@@ -5578,11 +5577,11 @@ impl VM {
         ctx: &mut JSContext,
         bytecode: &Bytecode,
         this_value: JSValue,
-        caller_vm_ptr: Option<usize>,
+        caller_vm_ptr: Option<*mut VM>,
     ) -> Result<ExecutionOutcome, String> {
         self.ctx_ptr = ctx;
         self.caller_vm = caller_vm_ptr;
-        ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
+        ctx.set_register_vm_ptr(Some(self as *mut VM));
 
         let caller_frame_snapshot = self.caller_vm_ref().map(|caller| {
             let caller_frame = &caller.frames[caller.frame_index];
@@ -5688,7 +5687,7 @@ impl VM {
                         if let Some(proto) = ctx.get_syntax_error_prototype() {
                             err.prototype = Some(proto);
                         }
-                        let ptr = Box::into_raw(Box::new(err)) as usize;
+                        let ptr = Box::into_raw(Box::new(err));
                         ctx.runtime_mut().gc_heap_mut().track(ptr);
                         ctx.pending_exception = Some(JSValue::new_object(ptr));
                         return Ok(JSValue::undefined());
@@ -5717,7 +5716,7 @@ impl VM {
                 if let Some(proto) = ctx.get_syntax_error_prototype() {
                     err.prototype = Some(proto);
                 }
-                let ptr = Box::into_raw(Box::new(err)) as usize;
+                let ptr = Box::into_raw(Box::new(err));
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                 ctx.pending_exception = Some(JSValue::new_object(ptr));
                 return Ok(JSValue::undefined());
@@ -5805,8 +5804,8 @@ impl VM {
                     });
                 }
                 if func.is_class_constructor {
-                    let proto_ptr = func.cached_prototype_ptr as usize;
-                    if proto_ptr != 0 {
+                    let proto_ptr = func.cached_prototype_ptr;
+                    if !proto_ptr.is_null() {
                         let proto = JSValue::new_object(proto_ptr);
                         let proto = proto.as_object();
                         proto.for_each_private_kind(|key, _| {
@@ -5925,7 +5924,7 @@ impl VM {
                         }
                     }
                 }
-                let ptr = Box::into_raw(Box::new(err)) as usize;
+                let ptr = Box::into_raw(Box::new(err));
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                 let exc = JSValue::new_object(ptr);
                 ctx.pending_exception = Some(exc);
@@ -5959,7 +5958,7 @@ impl VM {
             if let Some(proto) = ctx.get_syntax_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             let exc = JSValue::new_object(ptr);
             ctx.pending_exception = Some(exc);
@@ -5974,7 +5973,7 @@ impl VM {
             if let Some(proto) = ctx.get_reference_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             let exc = JSValue::new_object(ptr);
             ctx.pending_exception = Some(exc);
@@ -5989,7 +5988,7 @@ impl VM {
             if let Some(proto) = ctx.get_type_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             let exc = JSValue::new_object(ptr);
             ctx.pending_exception = Some(exc);
@@ -6026,7 +6025,7 @@ impl VM {
             if let Some(proto) = ctx.get_range_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             self.pending_throw = Some(JSValue::new_object(ptr));
             return Err("RangeError: Maximum call stack size exceeded".to_string());
@@ -6160,7 +6159,7 @@ impl VM {
                             let home = js_func.home_object.as_object();
                             let base = home
                                 .prototype
-                                .map(|p| JSValue::new_object(p as usize))
+                                .map(|p| JSValue::new_object(p))
                                 .unwrap_or(JSValue::undefined());
                             self.frames[0].super_base = base;
                         }
@@ -7283,7 +7282,7 @@ impl VM {
                         } else {
                             let is_function_prototype =
                                 ctx.get_function_prototype().map_or(false, |function_prototype| {
-                                    a.get_ptr() as *mut crate::object::object::JSObject
+                                    a.get_ptr()
                                         == function_prototype
                                 });
                             if obj.get(ctx.common_atoms.__boundFn).is_some()
@@ -8029,7 +8028,7 @@ impl VM {
                             if let Some(proto) = ctx.get_reference_error_prototype() {
                                 err.prototype = Some(proto);
                             }
-                            let ptr = Box::into_raw(Box::new(err)) as usize;
+                            let ptr = Box::into_raw(Box::new(err));
                             ctx.runtime_mut().gc_heap_mut().track(ptr);
                             self.pending_throw = Some(JSValue::new_object(ptr));
                             if let Some(exc) = self.pending_throw.take() {
@@ -8110,7 +8109,7 @@ impl VM {
                                 if let Some(proto) = ctx.get_reference_error_prototype() {
                                     err.prototype = Some(proto);
                                 }
-                                let ptr = Box::into_raw(Box::new(err)) as usize;
+                                let ptr = Box::into_raw(Box::new(err));
                                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                                 self.pending_throw = Some(JSValue::new_object(ptr));
                                 if let Some(exc) = self.pending_throw.take() {
@@ -8200,7 +8199,7 @@ impl VM {
                                 if let Some(proto) = ctx.get_reference_error_prototype() {
                                     err.prototype = Some(proto);
                                 }
-                                let ptr = Box::into_raw(Box::new(err)) as usize;
+                                let ptr = Box::into_raw(Box::new(err));
                                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                                 self.pending_throw = Some(JSValue::new_object(ptr));
                                 if let Some(exc) = self.pending_throw.take() {
@@ -8290,7 +8289,7 @@ impl VM {
                                 if let Some(proto) = ctx.get_reference_error_prototype() {
                                     err.prototype = Some(proto);
                                 }
-                                let ptr = Box::into_raw(Box::new(err)) as usize;
+                                let ptr = Box::into_raw(Box::new(err));
                                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                                 self.pending_throw = Some(JSValue::new_object(ptr));
                                 if let Some(exc) = self.pending_throw.take() {
@@ -8810,7 +8809,7 @@ impl VM {
                     if let Some(proto) = ctx.get_reference_error_prototype() {
                         err.prototype = Some(proto);
                     }
-                    let ptr = Box::into_raw(Box::new(err)) as usize;
+                    let ptr = Box::into_raw(Box::new(err));
                     ctx.runtime_mut().gc_heap_mut().track(ptr);
                     self.pending_throw = Some(JSValue::new_object(ptr));
                     if let Some(exc) = self.pending_throw.take() {
@@ -8854,23 +8853,23 @@ impl VM {
                     let dst = self.read_u16_pc();
                     let ptr = if let Some(proto_ptr) = ctx.get_object_prototype() {
                         if let Some(nursery_ptr) = ctx.runtime_mut().gc_heap_mut().alloc_object() {
-                            let nursery_obj = JSValue::new_object(nursery_ptr as usize);
+                            let nursery_obj = JSValue::new_object(nursery_ptr);
                             let nursery_obj = nursery_obj.as_object_mut();
                             nursery_obj.prototype = Some(proto_ptr);
                             nursery_obj.ensure_shape(ctx.shape_cache_mut());
-                            nursery_ptr as usize
+                            nursery_ptr
                         } else {
                             let mut obj = crate::object::object::JSObject::new();
                             obj.prototype = Some(proto_ptr);
                             obj.ensure_shape(ctx.shape_cache_mut());
-                            let heap_ptr = Box::into_raw(Box::new(obj)) as usize;
+                            let heap_ptr = Box::into_raw(Box::new(obj));
                             ctx.runtime_mut().gc_heap_mut().track(heap_ptr);
                             heap_ptr
                         }
                     } else {
                         let mut obj = crate::object::object::JSObject::new();
                         obj.ensure_shape(ctx.shape_cache_mut());
-                        let heap_ptr = Box::into_raw(Box::new(obj)) as usize;
+                        let heap_ptr = Box::into_raw(Box::new(obj));
                         ctx.runtime_mut().gc_heap_mut().track(heap_ptr);
                         heap_ptr
                     };
@@ -8891,14 +8890,14 @@ impl VM {
                         ctx.runtime_mut()
                             .gc_heap_mut()
                             .alloc_array_with_value(arr)
-                            .expect("nursery alloc failed despite can_fit") as usize
+                            .expect("nursery alloc failed despite can_fit")
                     } else {
-                        let heap_ptr = Box::into_raw(Box::new(arr)) as usize;
+                        let heap_ptr = Box::into_raw(Box::new(arr));
                         ctx.runtime_mut().gc_heap_mut().track_array(heap_ptr);
                         heap_ptr
                     };
                     self.allocation_count += 1;
-                    self.set_reg(dst, JSValue::new_object(ptr));
+                    self.set_reg(dst, JSValue::new_object(ptr.cast()));
                     self.maybe_gc(ctx);
                 }
                 Opcode::GetField => {
@@ -9030,7 +9029,7 @@ impl VM {
                                 JSValue::undefined()
                             }
                         } else if let Some(proto_ptr) = ctx.get_string_prototype() {
-                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_val = JSValue::new_object(proto_ptr);
                             let proto_obj = proto_val.as_object();
                             proto_obj
                                 .get(key_val.get_atom())
@@ -9123,7 +9122,7 @@ impl VM {
                         }
                     } else if obj_val.is_symbol() && key_val.is_string() {
                         if let Some(proto_ptr) = ctx.get_symbol_prototype() {
-                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_val = JSValue::new_object(proto_ptr);
                             let proto_obj = proto_val.as_object();
                             let atom = key_val.get_atom();
                             if let Some(getter) = proto_obj.get_own_accessor_value(atom) {
@@ -9143,7 +9142,7 @@ impl VM {
                         }
                     } else if obj_val.is_symbol() && key_val.is_symbol() {
                         if let Some(proto_ptr) = ctx.get_symbol_prototype() {
-                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_val = JSValue::new_object(proto_ptr);
                             let proto_obj = proto_val.as_object();
                             let sym_key =
                                 crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
@@ -9153,7 +9152,7 @@ impl VM {
                         }
                     } else if obj_val.is_bigint() && key_val.is_string() {
                         if let Some(proto_ptr) = ctx.get_bigint_prototype() {
-                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_val = JSValue::new_object(proto_ptr);
                             let proto_obj = proto_val.as_object();
                             let atom = key_val.get_atom();
                             if let Some(getter) = proto_obj.get_own_accessor_value(atom) {
@@ -9510,7 +9509,7 @@ impl VM {
                         let mut current = start_proto;
                         let mut found = false;
                         while let Some(ptr) = current {
-                            let pobj_val = JSValue::new_object(ptr as usize);
+                            let pobj_val = JSValue::new_object(ptr);
                             let pobj = pobj_val.as_object();
                             if let Some(getter) = pobj.get_own_accessor_value(atom) {
                                 if getter.is_function() {
@@ -10134,8 +10133,8 @@ impl VM {
                                         ThrowDispatch::AsyncComplete(o) => return Ok(o),
                                     }
                                 }
-                            }
                         }
+                            }
                         continue;
                     }
                     let js_obj = obj_val.as_object();
@@ -10183,13 +10182,13 @@ impl VM {
 
                     if ctor_val.is_function() {
                         let js_func = ctor_val.as_function();
-                        let ctor_proto = js_func.cached_prototype_ptr as usize;
-                        if ctor_proto != 0
+                        let ctor_proto = js_func.cached_prototype_ptr;
+                        if !ctor_proto.is_null()
                             && !js_func.has_symbol_on_base()
                             && (obj_val.is_object() || obj_val.is_function())
                         {
                             let obj_proto = obj_val.as_object().prototype;
-                            let obj_proto_key = obj_proto.map(|p| p as usize).unwrap_or(0);
+                            let obj_proto_key = obj_proto.unwrap_or(std::ptr::null_mut());
                             let ctor_ptr = ctor_val.get_ptr();
                             if self.instanceof_cache_ctor == ctor_ptr
                                 && self.instanceof_cache_proto == obj_proto_key
@@ -10202,11 +10201,11 @@ impl VM {
                             let mut found = false;
                             let mut limit = 0;
                             while let Some(proto_ptr) = proto_opt {
-                                if proto_ptr as usize == ctor_proto {
+                                if proto_ptr == ctor_proto {
                                     found = true;
                                     break;
                                 }
-                                let proto_val = JSValue::new_object(proto_ptr as usize);
+                                let proto_val = JSValue::new_object(proto_ptr);
                                 proto_opt = proto_val.as_object().prototype;
                                 limit += 1;
                                 if limit > 1000 {
@@ -10237,8 +10236,8 @@ impl VM {
                                 self.set_reg(dst, JSValue::undefined());
                             }
                         }
-                    }
                 }
+                    }
                 Opcode::NewRegExp => {
                     let cache_key = self.cached_code_ptr as usize + self.pc;
                     let dst = self.read_u16_pc();
@@ -10820,9 +10819,9 @@ impl VM {
                     let len_atom = ctx.common_atoms.length;
                     arr.header
                         .set(len_atom, JSValue::new_int(rest_count as i64));
-                    let ptr = Box::into_raw(Box::new(arr)) as usize;
+                    let ptr = Box::into_raw(Box::new(arr));
                     ctx.runtime_mut().gc_heap_mut().track_array(ptr);
-                    self.set_reg(dst, JSValue::new_object(ptr));
+                    self.set_reg(dst, JSValue::new_object(ptr.cast()));
                 }
                 Opcode::ObjectSpread => {
                     let dst = self.read_u16_pc();
@@ -10932,11 +10931,11 @@ impl VM {
                     }
                     // Collect all enumerable properties from the object and its prototype chain
                     let mut seen = Vec::new();
-                    let obj_proto_ptr = ctx.get_object_prototype().map(|p| p as usize);
-                    let arr_proto_ptr = ctx.get_array_prototype().map(|p| p as usize);
-                    let str_proto_ptr = ctx.get_string_prototype().map(|p| p as usize);
-                    let mut current_ptr = if obj_val.is_object() || obj_val.is_function() {
-                        Some(obj_val.get_ptr() as usize)
+                    let obj_proto_ptr = ctx.get_object_prototype();
+                    let arr_proto_ptr = ctx.get_array_prototype();
+                    let str_proto_ptr = ctx.get_string_prototype();
+                    let mut current_ptr: Option<*mut crate::object::object::JSObject> = if obj_val.is_object() || obj_val.is_function() {
+                        Some(obj_val.get_ptr())
                     } else {
                         None
                     };
@@ -11031,15 +11030,15 @@ impl VM {
                         for atom in str_keys {
                             arr.push(JSValue::new_string(atom));
                         }
-                        current_ptr = js_obj.prototype.map(|p| p as usize);
+                        current_ptr = js_obj.prototype;
                     }
                     let len_atom = ctx.common_atoms.length;
                     arr.header
                         .set(len_atom, JSValue::new_int(arr.elements.len() as i64));
-                    let ptr = Box::into_raw(Box::new(arr)) as usize;
+                    let ptr = Box::into_raw(Box::new(arr));
                     ctx.runtime_mut().gc_heap_mut().track_array(ptr);
                     self.allocation_count += 1;
-                    self.set_reg(dst, JSValue::new_object(ptr));
+                    self.set_reg(dst, JSValue::new_object(ptr.cast()));
                     self.maybe_gc(ctx);
                 }
                 Opcode::ArrayExtend => {
@@ -11184,7 +11183,7 @@ impl VM {
                         let obj_ref = obj_val.as_object_mut();
                         if proto_val.is_object_like() {
                             obj_ref.prototype =
-                                Some(proto_val.get_ptr() as *mut crate::object::object::JSObject);
+                                Some(proto_val.get_ptr());
                         } else if proto_val.is_null() {
                             obj_ref.prototype = None;
                         }
@@ -11488,10 +11487,10 @@ impl VM {
                             set: None,
                         };
                         proto_obj.define_property(ctx.common_atoms.constructor, ctor_desc);
-                        let func_val = JSValue::new_function(ctor_val.get_ptr());
+                        let func_val = JSValue::new_function(ctor_val.get_function_ptr());
                         let func = func_val.as_function_mut();
                         func.cached_prototype_ptr =
-                            proto_val.get_ptr() as *mut crate::object::object::JSObject;
+                            proto_val.get_ptr();
                     }
                 }
 
@@ -11599,7 +11598,7 @@ impl VM {
                     let mut env = crate::object::object::JSObject::new();
                     env.set(object_atom, value);
                     env.set(parent_atom, parent);
-                    let ptr = Box::into_raw(Box::new(env)) as usize;
+                    let ptr = Box::into_raw(Box::new(env));
                     ctx.runtime_mut().gc_heap_mut().track(ptr);
                     self.frames[self.frame_index].with_env = Some(JSValue::new_object(ptr));
                 }
@@ -12041,8 +12040,7 @@ impl VM {
                                 let proto_key = ctx.common_atoms.prototype;
                                 if let Some(proto_val) = js_func.base.get(proto_key) {
                                     if proto_val.is_object_like() {
-                                        let cptr = proto_val.get_ptr()
-                                            as *mut crate::object::object::JSObject;
+                                        let cptr = proto_val.get_ptr();
                                         func_val.as_function_mut().cached_prototype_ptr = cptr;
                                         obj.prototype = Some(cptr);
                                     }
@@ -12052,11 +12050,11 @@ impl VM {
                                     if let Some(opp) = ctx.get_object_prototype() {
                                         pobj.prototype = Some(opp);
                                     }
-                                    let pp = Box::into_raw(Box::new(pobj)) as usize;
+                                    let pp = Box::into_raw(Box::new(pobj));
                                     ctx.runtime_mut().gc_heap_mut().track(pp);
                                     let func_mut = func_val.as_function_mut();
                                     func_mut.base.set(proto_key, JSValue::new_object(pp));
-                                    let cptr = pp as *mut crate::object::object::JSObject;
+                                    let cptr = pp;
                                     func_mut.cached_prototype_ptr = cptr;
                                     obj.prototype = Some(cptr);
                                 }
@@ -12066,16 +12064,15 @@ impl VM {
                             ctx.runtime_mut()
                                 .gc_heap_mut()
                                 .alloc_object_with_value(obj)
-                                .map(|p| p as usize)
                                 .unwrap_or_else(|| {
                                     let hp = Box::into_raw(Box::new(
                                         crate::object::object::JSObject::new(),
-                                    )) as usize;
+                                    ));
                                     ctx.runtime_mut().gc_heap_mut().track(hp);
                                     hp
                                 })
                         } else {
-                            let heap_ptr = Box::into_raw(Box::new(obj)) as usize;
+                            let heap_ptr = Box::into_raw(Box::new(obj));
                             ctx.runtime_mut().gc_heap_mut().track(heap_ptr);
                             heap_ptr
                         };
@@ -12280,8 +12277,7 @@ impl VM {
                                 let proto_key = ctx.common_atoms.prototype;
                                 if let Some(proto_val) = js_func.base.get(proto_key) {
                                     if proto_val.is_object_like() {
-                                        let cptr = proto_val.get_ptr()
-                                            as *mut crate::object::object::JSObject;
+                                        let cptr = proto_val.get_ptr();
                                         func_val.as_function_mut().cached_prototype_ptr = cptr;
                                         obj.prototype = Some(cptr);
                                     }
@@ -12291,11 +12287,11 @@ impl VM {
                                     if let Some(opp) = ctx.get_object_prototype() {
                                         pobj.prototype = Some(opp);
                                     }
-                                    let pp = Box::into_raw(Box::new(pobj)) as usize;
+                                    let pp = Box::into_raw(Box::new(pobj));
                                     ctx.runtime_mut().gc_heap_mut().track(pp);
                                     let func_mut = func_val.as_function_mut();
                                     func_mut.base.set(proto_key, JSValue::new_object(pp));
-                                    let cptr = pp as *mut crate::object::object::JSObject;
+                                    let cptr = pp;
                                     func_mut.cached_prototype_ptr = cptr;
                                     obj.prototype = Some(cptr);
                                 }
@@ -12305,16 +12301,15 @@ impl VM {
                             ctx.runtime_mut()
                                 .gc_heap_mut()
                                 .alloc_object_with_value(obj)
-                                .map(|p| p as usize)
                                 .unwrap_or_else(|| {
                                     let hp = Box::into_raw(Box::new(
                                         crate::object::object::JSObject::new(),
-                                    )) as usize;
+                                    ));
                                     ctx.runtime_mut().gc_heap_mut().track(hp);
                                     hp
                                 })
                         } else {
-                            let heap_ptr = Box::into_raw(Box::new(obj)) as usize;
+                            let heap_ptr = Box::into_raw(Box::new(obj));
                             ctx.runtime_mut().gc_heap_mut().track(heap_ptr);
                             heap_ptr
                         };
@@ -12329,7 +12324,7 @@ impl VM {
                     };
 
                     if func_val.is_function() {
-                        let ptr = func_val.get_ptr();
+                        let ptr = func_val.get_function_ptr();
                         let js_func = func_val.as_function();
                         if js_func.is_class_constructor && !is_call_new && !is_super_call {
                             self.set_pending_type_error(
@@ -12360,8 +12355,8 @@ impl VM {
                                                 ThrowDispatch::AsyncComplete(o) => return Ok(o),
                                             }
                                         }
-                                    }
                                 }
+                                    }
                                 self.eval_direct_active = false;
                                 continue;
                             }
@@ -12790,7 +12785,7 @@ impl VM {
                             {
                                 parent_ptr
                             } else {
-                                0
+                                std::ptr::null_mut()
                             };
                         }
                         let parent = &mut self.frames[self.frame_index];
@@ -12958,7 +12953,7 @@ impl VM {
                         }
                     }
                     let proto_atom = ctx.common_atoms.prototype;
-                    let func_ptr = Box::into_raw(Box::new(func)) as usize;
+                    let func_ptr = Box::into_raw(Box::new(func));
                     ctx.runtime_mut().gc_heap_mut().track_function(func_ptr);
                     let unboxed_func_val = JSValue::new_function(func_ptr);
                     let unboxed_func = unboxed_func_val.as_function_mut();
@@ -12974,7 +12969,7 @@ impl VM {
                         if let Some(pp) = parent_proto {
                             proto_obj.prototype = Some(pp);
                         }
-                        let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+                        let proto_ptr = Box::into_raw(Box::new(proto_obj));
                         ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
                         let func_value = JSValue::new_function(func_ptr);
                         if !is_generator {
@@ -13000,7 +12995,7 @@ impl VM {
                         };
                         unboxed_func.base.define_property(proto_atom, proto_desc);
                         unboxed_func.cached_prototype_ptr =
-                            proto_ptr as *mut crate::object::object::JSObject;
+                            proto_ptr;
                     }
                     let function_parent_proto = if is_generator && is_async {
                         ctx.get_async_generator_function_prototype()
@@ -13102,7 +13097,7 @@ impl VM {
                         } else if let Some(proto) = ctx.get_error_prototype() {
                             err.prototype = Some(proto as *mut _);
                         }
-                        let ptr = Box::into_raw(Box::new(err)) as usize;
+                        let ptr = Box::into_raw(Box::new(err));
                         ctx.runtime_mut().gc_heap_mut().track(ptr);
                         self.pending_throw = Some(JSValue::new_object(ptr));
                         if let Some(exc) = self.pending_throw.take() {
@@ -13129,7 +13124,7 @@ impl VM {
                         } else if let Some(proto) = ctx.get_error_prototype() {
                             err.prototype = Some(proto as *mut _);
                         }
-                        let ptr = Box::into_raw(Box::new(err)) as usize;
+                        let ptr = Box::into_raw(Box::new(err));
                         ctx.runtime_mut().gc_heap_mut().track(ptr);
                         let exc = JSValue::new_object(ptr);
                         self.pending_throw = Some(exc);
@@ -13512,7 +13507,7 @@ impl VM {
                                 thrower.builtin_atom = Some(ctx.intern("throw_type_error_callee"));
                                 thrower.builtin_func =
                                     ctx.get_builtin_func("throw_type_error_callee");
-                                let thrower_ptr = Box::into_raw(Box::new(thrower)) as usize;
+                                let thrower_ptr = Box::into_raw(Box::new(thrower));
                                 ctx.runtime_mut().gc_heap_mut().track_function(thrower_ptr);
                                 args_obj.define_accessor_flags(
                                     callee_atom,
@@ -13541,7 +13536,7 @@ impl VM {
                         if sym_iter_atom.0 != 0 {
                             let iter_fn = ctx
                                 .get_array_prototype()
-                                .map(|p| JSValue::new_object(p as usize))
+                                .map(|p| JSValue::new_object(p))
                                 .and_then(|proto_val| proto_val.as_object().get(sym_iter_atom));
                             if let Some(f) = iter_fn {
                                 args_obj.define_property(
@@ -13567,9 +13562,8 @@ impl VM {
                                 .gc_heap_mut()
                                 .alloc_object_with_value(args_obj)
                                 .expect("nursery alloc failed despite can_fit")
-                                as usize
                         } else {
-                            let hp = Box::into_raw(Box::new(args_obj)) as usize;
+                            let hp = Box::into_raw(Box::new(args_obj));
                             ctx.runtime_mut().gc_heap_mut().track(hp);
                             hp
                         };
@@ -13667,7 +13661,7 @@ impl VM {
         let saved_vm_ptr = ctx.get_register_vm_ptr();
         self.pending_upvalue_cells = Some(state.upvalue_cells.clone());
         self.pending_param_env = Some((state.param_env, state.param_env_own));
-        ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
+        ctx.set_register_vm_ptr(Some(self as *mut VM));
         let result = self.execute_inner(ctx, &state.bytecode, true, state.pc, true);
         ctx.set_register_vm_ptr(saved_vm_ptr);
         self.async_step = false;
@@ -13790,7 +13784,7 @@ impl VM {
                 JSValue::undefined(),
                 None,
                 args,
-                Some(func_val.get_ptr()),
+                Some(func_val.get_function_ptr()),
                 &[],
                 0,
                 JSValue::undefined(),
@@ -13861,7 +13855,7 @@ impl VM {
                 done: result_done,
                 send_reg: result_send_reg,
                 saved_args: args.to_vec(),
-                func_ptr: Some(func_val.get_ptr()),
+                func_ptr: Some(func_val.get_function_ptr()),
                 handlers: result_handlers,
                 pending_throw: None,
                 resume_kind: 0,
@@ -13894,7 +13888,7 @@ impl VM {
                 send_reg: result_send_reg,
                 argc: args.len() as u32,
                 saved_args: args.to_vec(),
-                func_ptr: Some(func_val.get_ptr()),
+                func_ptr: Some(func_val.get_function_ptr()),
                 handlers: result_handlers,
                 yield_is_result: result_yield_is_result,
                 upvalue_cells: result_upvalue_cells,
@@ -13902,7 +13896,7 @@ impl VM {
                 param_env_own: result_param_env_own,
             });
         }
-        let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
+        let gen_ptr = Box::into_raw(Box::new(gen_obj));
         ctx.runtime_mut().gc_heap_mut().track(gen_ptr);
         Ok(Some(JSValue::new_object(gen_ptr)))
     }
@@ -13916,7 +13910,7 @@ impl VM {
         send_value: JSValue,
         send_reg: Option<u16>,
         saved_args: &[JSValue],
-        func_ptr: Option<usize>,
+        func_ptr: Option<*mut crate::object::function::JSFunction>,
         handlers: &[ExceptionHandler],
         resume_kind: u8,
         resume_value: JSValue,
@@ -13990,7 +13984,7 @@ impl VM {
 
         let saved_vm_ptr = ctx.get_register_vm_ptr();
         self.pending_upvalue_cells = Some(upvalue_cells.to_vec());
-        ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
+        ctx.set_register_vm_ptr(Some(self as *mut VM));
         let result = match self.execute_inner(ctx, bytecode, true, start_pc, true) {
             Ok(r) => r,
             Err(e) => {
@@ -14223,7 +14217,7 @@ impl VM {
                     ctx.get_bool_prototype()
                 };
                 while let Some(ptr) = current {
-                    let proto_val = JSValue::new_object(ptr as usize);
+                    let proto_val = JSValue::new_object(ptr);
                     let proto = proto_val.as_object();
                     if let Some(entry) = proto.get_own_accessor_entry(atom) {
                         if let Some(getter) = entry.get {
@@ -14419,7 +14413,7 @@ impl VM {
         let configurable = desc.configurable;
         desc_obj.set(ctx.intern("enumerable"), JSValue::bool(enumerable));
         desc_obj.set(ctx.intern("configurable"), JSValue::bool(configurable));
-        let ptr = Box::into_raw(Box::new(desc_obj)) as usize;
+        let ptr = Box::into_raw(Box::new(desc_obj));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     }
@@ -14677,7 +14671,7 @@ impl VM {
             }
             match obj.prototype {
                 Some(p) if !p.is_null() => {
-                    current = JSValue::new_object(p as usize);
+                    current = JSValue::new_object(p);
                 }
                 _ => break,
             }
@@ -15785,7 +15779,7 @@ impl VM {
             };
             let mut current = start_proto;
             while let Some(ptr) = current {
-                let pobj_val = JSValue::new_object(ptr as usize);
+                let pobj_val = JSValue::new_object(ptr);
                 let pobj = pobj_val.as_object();
                 if let Some(getter) = pobj.get_own_accessor_value(atom) {
                     if getter.is_function() {
@@ -15828,7 +15822,7 @@ impl VM {
                                     ic.insert(
                                         crate::object::shape::ShapeId(pseudo_id),
                                         offset as u32,
-                                        Some(ptr as usize),
+                                        Some(ptr),
                                     );
                                 }
                             }
@@ -15891,7 +15885,7 @@ impl VM {
                             let val = if let Some(proto) = proto_ptr {
                                 let mut proto_matches = js_obj
                                     .prototype
-                                    .map(|p| !p.is_null() && p as usize == proto)
+                                    .map(|p| !p.is_null() && p == proto)
                                     .unwrap_or(false);
                                 if !proto_matches {
                                     let mut cur = js_obj.prototype;
@@ -15900,12 +15894,12 @@ impl VM {
                                         if p.is_null() || depth > 1000 {
                                             break;
                                         }
-                                        if p as usize == proto {
+                                        if p == proto {
                                             proto_matches = true;
                                             break;
                                         }
                                         depth += 1;
-                                        let p_val = JSValue::new_object(p as usize);
+                                        let p_val = JSValue::new_object(p);
                                         cur = p_val.as_object().prototype;
                                     }
                                 }
@@ -15970,7 +15964,7 @@ impl VM {
                                     break;
                                 }
                                 depth += 1;
-                                let proto_val = JSValue::new_object(proto_ptr as usize);
+                                let proto_val = JSValue::new_object(proto_ptr);
                                 let proto = proto_val.as_object();
                                 if let Some(offset) = proto.find_offset(atom) {
                                     let v = proto
@@ -15984,7 +15978,7 @@ impl VM {
                                                 ic.insert(
                                                     shape_id,
                                                     offset as u32,
-                                                    Some(proto_ptr as usize),
+                                                    Some(proto_ptr),
                                                 );
                                             }
                                         }
@@ -16023,7 +16017,7 @@ impl VM {
                             }
                             if !found && obj_val.is_function() && js_obj.prototype.is_none() {
                                 if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
-                                    let fn_proto_val = JSValue::new_object(fn_proto_ptr as usize);
+                                    let fn_proto_val = JSValue::new_object(fn_proto_ptr);
                                     let fn_proto = fn_proto_val.as_object();
                                     if let Some(offset) = fn_proto.find_offset(atom) {
                                         let v = fn_proto
@@ -16062,7 +16056,7 @@ impl VM {
                                                     {
                                                         err.prototype = Some(proto);
                                                     }
-                                                    let ptr = Box::into_raw(Box::new(err)) as usize;
+                                                    let ptr = Box::into_raw(Box::new(err));
                                                     ctx.runtime_mut().gc_heap_mut().track(ptr);
                                                     self.pending_throw =
                                                         Some(JSValue::new_object(ptr));
@@ -16125,7 +16119,7 @@ impl VM {
                                 break;
                             }
                             depth += 1;
-                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_val = JSValue::new_object(proto_ptr);
                             let proto = proto_val.as_object();
                             if let Some(offset) = proto.find_offset(atom) {
                                 value = proto.get_by_offset(offset).unwrap_or(JSValue::undefined());
@@ -16159,7 +16153,7 @@ impl VM {
 
                     if !found && obj_val.is_function() && js_obj.prototype.is_none() {
                         if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
-                            let fn_proto_val = JSValue::new_object(fn_proto_ptr as usize);
+                            let fn_proto_val = JSValue::new_object(fn_proto_ptr);
                             let fn_proto = fn_proto_val.as_object();
                             if let Some(offset) = fn_proto.find_offset(atom) {
                                 value = fn_proto
@@ -16204,7 +16198,7 @@ impl VM {
                     ctx.string_code_unit_count(obj_val.get_atom()) as i64
                 ))
             } else if let Some(proto_ptr) = ctx.get_string_prototype() {
-                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto_val = JSValue::new_object(proto_ptr);
                 let proto_obj = proto_val.as_object();
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
@@ -16212,7 +16206,7 @@ impl VM {
             }
         } else if obj_val.is_int() || obj_val.is_float() {
             if let Some(proto_ptr) = ctx.get_number_prototype() {
-                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto_val = JSValue::new_object(proto_ptr);
                 let proto_obj = proto_val.as_object();
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
@@ -16220,7 +16214,7 @@ impl VM {
             }
         } else if obj_val.is_bool() {
             if let Some(proto_ptr) = ctx.get_bool_prototype() {
-                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto_val = JSValue::new_object(proto_ptr);
                 let proto_obj = proto_val.as_object();
                 Some(proto_obj.get(atom).unwrap_or(JSValue::undefined()))
             } else {
@@ -16236,7 +16230,7 @@ impl VM {
                     Some(JSValue::new_string(desc_atom))
                 }
             } else if let Some(proto_ptr) = ctx.get_symbol_prototype() {
-                let proto_val = JSValue::new_object(proto_ptr as usize);
+                let proto_val = JSValue::new_object(proto_ptr);
                 let proto = proto_val.as_object();
                 Some(proto.get(atom).unwrap_or(JSValue::undefined()))
             } else {
@@ -16275,7 +16269,7 @@ impl VM {
                     self.ic_get_reads0_values(instr_pc, shape_id)
                 {
                     if ic_hit {
-                        if r0_proto == 0 {
+                        if r0_proto.is_null() {
                             let val = if r0_offset == u32::MAX {
                                 crate::value::JSValue::undefined()
                             } else {
@@ -16296,8 +16290,7 @@ impl VM {
                             return true;
                         } else {
                             if let Some(proto_obj) = js_obj.prototype_object() {
-                                if proto_obj as *const crate::object::object::JSObject as usize
-                                    == r0_proto
+                                if std::ptr::eq( proto_obj, r0_proto)
                                 {
                                     let off = r0_offset as usize;
                                     let v = if off < crate::object::object::INLINE_PROPS
@@ -16344,7 +16337,7 @@ impl VM {
         {
             if ic_hit {
                 let js_obj = obj_val.as_object();
-                if r_proto == 0 {
+                if r_proto.is_null() {
                     let val = if r_offset == u32::MAX {
                         JSValue::undefined()
                     } else {
@@ -16363,7 +16356,7 @@ impl VM {
                     return true;
                 } else {
                     if let Some(proto_obj) = js_obj.prototype_object() {
-                        if proto_obj as *const crate::object::object::JSObject as usize == r_proto {
+                        if std::ptr::eq( proto_obj, r_proto) {
                             let off = r_offset as usize;
                             let v = if off < crate::object::object::INLINE_PROPS
                                 && proto_obj.has_no_deleted_props()
@@ -16396,7 +16389,7 @@ impl VM {
         atom: crate::runtime::atom::Atom,
         instr_pc: usize,
         offset: u32,
-        proto_ptr: usize,
+        proto_ptr: *mut crate::object::object::JSObject,
     ) -> bool {
         let js_obj = obj_val.as_object();
         let mut cur = js_obj.prototype_object();
@@ -16405,7 +16398,7 @@ impl VM {
             if depth > 1000 {
                 break;
             }
-            if proto_obj as *const crate::object::object::JSObject as usize == proto_ptr {
+            if std::ptr::eq( proto_obj, proto_ptr) {
                 if let Some(v) = proto_obj.get_by_offset(offset as usize) {
                     self.set_reg(dst, v);
                     return true;
@@ -16445,7 +16438,7 @@ impl VM {
                 self.ic_get_reads0_values(instr_pc, pseudo_id)
             {
                 if ic_hit {
-                    if r0_proto != 0 {
+                    if !r0_proto.is_null() {
                         let proto_obj = JSValue::new_object(r0_proto);
                         let proto_obj = proto_obj.as_object();
                         if let Some(v) = proto_obj.get_by_offset(r0_offset as usize) {
@@ -16669,7 +16662,7 @@ impl VM {
                 }
                 match obj.prototype {
                     Some(p) if !p.is_null() => {
-                        current = JSValue::new_object(p as usize);
+                        current = JSValue::new_object(p);
                     }
                     _ => break,
                 }
@@ -17022,7 +17015,7 @@ impl VM {
                 return false;
             }
 
-            self.set_named_prop_slow(ctx, obj_val, ptr, js_obj, value, atom, ic_pc);
+            self.set_named_prop_slow(ctx, obj_val, js_obj, value, atom, ic_pc);
         }
         false
     }
@@ -17032,7 +17025,6 @@ impl VM {
         &mut self,
         ctx: &mut JSContext,
         obj_val: JSValue,
-        ptr: usize,
         js_obj: &mut crate::object::object::JSObject,
         value: JSValue,
         atom: crate::runtime::atom::Atom,
@@ -17071,18 +17063,18 @@ impl VM {
         }
 
         if obj_val.is_function() && atom == ctx.common_atoms.prototype {
-            let js_func = JSValue::new_function(ptr);
+            let js_func = JSValue::new_function(obj_val.get_function_ptr());
             let js_func = js_func.as_function_mut();
             if value.is_object() {
                 js_func.cached_prototype_ptr =
-                    value.get_ptr() as *mut crate::object::object::JSObject;
+                    value.get_ptr();
             } else {
                 js_func.cached_prototype_ptr = std::ptr::null_mut();
             }
         }
 
         if obj_val.is_function() && atom.0 & 0x40000000 != 0 {
-            let js_func = JSValue::new_function(ptr);
+            let js_func = JSValue::new_function(obj_val.get_function_ptr());
             let js_func = js_func.as_function_mut();
             js_func.mark_has_symbol_prop();
         }
@@ -17222,9 +17214,9 @@ impl VM {
         let mut has_tp = false;
 
         let has_own_tp = self.get_symbol_to_primitive_atom(ctx).map_or(false, |a| {
-            let mut cur: Option<*mut crate::object::object::JSObject> = Some(v.get_ptr() as *mut _);
+            let mut cur: Option<*mut crate::object::object::JSObject> = Some(v.get_ptr());
             while let Some(p) = cur {
-                let p_val = JSValue::new_object(p as usize);
+                let p_val = JSValue::new_object(p);
                 let pobj = p_val.as_object();
                 if let Some(v) = pobj.get_own_value(a) {
                     return v.is_function();
@@ -17250,7 +17242,7 @@ impl VM {
                     .or_else(|| {
                         let mut current = obj.prototype;
                         while let Some(proto_ptr) = current {
-                            let proto_val = JSValue::new_object(proto_ptr as usize);
+                            let proto_val = JSValue::new_object(proto_ptr);
                             let proto = proto_val.as_object();
                             if let Some(desc) = proto.get_own_descriptor(tp_atom) {
                                 if let Some(getter) = desc.get {
@@ -17308,7 +17300,7 @@ impl VM {
 
                 let mut current = obj.prototype;
                 while let Some(proto_ptr) = current {
-                    let proto_val = JSValue::new_object(proto_ptr as usize);
+                    let proto_val = JSValue::new_object(proto_ptr);
                     let proto = proto_val.as_object();
                     if let Some(desc) = proto.get_own_descriptor(tp_atom) {
                         if let Some(getter) = desc.get {
@@ -17396,7 +17388,7 @@ impl VM {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.pending_throw = Some(JSValue::new_object(ptr));
         JSValue::undefined()
@@ -17488,7 +17480,7 @@ impl VM {
         }
 
         let obj_proto = if let Some(p) = ctx.get_object_prototype() {
-            JSValue::new_object(p as usize)
+            JSValue::new_object(p)
         } else {
             return Self::js_to_string(v, ctx);
         };
@@ -17512,7 +17504,7 @@ impl VM {
         if let Some(proto) = ctx.get_range_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         self.pending_throw = Some(JSValue::new_object(ptr));
     }
@@ -17976,7 +17968,7 @@ impl VM {
     fn create_bigint(value: crate::builtins::bignum::BigInt) -> JSValue {
         let mut bigint_obj = crate::object::object::JSObject::new_bigint();
         bigint_obj.set_bigint_value(value);
-        let ptr = Box::into_raw(Box::new(bigint_obj)) as usize;
+        let ptr = Box::into_raw(Box::new(bigint_obj));
         JSValue::new_bigint(ptr)
     }
 
@@ -18405,7 +18397,7 @@ mod tests {
 
         let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern("f0"), 0);
         func.builtin_func = Some(builtin_const_99);
-        let func_ptr = Box::into_raw(Box::new(func)) as usize;
+        let func_ptr = Box::into_raw(Box::new(func));
         ctx.runtime_mut().gc_heap_mut().track_function(func_ptr);
 
         let mut code = Vec::new();
@@ -18439,7 +18431,7 @@ mod tests {
 
         let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern("f1"), 1);
         func.builtin_func = Some(builtin_inc);
-        let func_ptr = Box::into_raw(Box::new(func)) as usize;
+        let func_ptr = Box::into_raw(Box::new(func));
 
         let mut code = Vec::new();
         code.push(Opcode::LoadConst as u8);
@@ -18483,7 +18475,7 @@ mod tests {
 
         let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern("f2"), 2);
         func.builtin_func = Some(builtin_add2);
-        let func_ptr = Box::into_raw(Box::new(func)) as usize;
+        let func_ptr = Box::into_raw(Box::new(func));
 
         let mut code = Vec::new();
         code.push(Opcode::LoadConst as u8);
@@ -18533,7 +18525,7 @@ mod tests {
 
         let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern("f3"), 3);
         func.builtin_func = Some(builtin_add3);
-        let func_ptr = Box::into_raw(Box::new(func)) as usize;
+        let func_ptr = Box::into_raw(Box::new(func));
 
         let mut code = Vec::new();
         code.push(Opcode::LoadConst as u8);

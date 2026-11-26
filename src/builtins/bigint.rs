@@ -9,7 +9,7 @@ use crate::value::JSValue;
 fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), 2);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -26,7 +26,7 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
     if let Some(proto) = ctx.get_type_error_prototype() { err.prototype = Some(proto); }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -36,7 +36,7 @@ fn throw_range_error(ctx: &mut JSContext, msg: &str) {
     if let Some(proto) = ctx.get_range_error_prototype() { err.prototype = Some(proto); }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("RangeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -46,7 +46,7 @@ fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
     if let Some(proto) = ctx.get_syntax_error_prototype() { err.prototype = Some(proto); }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("SyntaxError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -54,7 +54,7 @@ fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
 fn create_bigint_value(value: BigInt) -> JSValue {
     let mut bigint_obj = JSObject::new_bigint();
     bigint_obj.set_bigint_value(value);
-    JSValue::new_bigint(Box::into_raw(Box::new(bigint_obj)) as usize)
+    JSValue::new_bigint(Box::into_raw(Box::new(bigint_obj)))
 }
 
 fn to_primitive_number(ctx: &mut JSContext, value: JSValue) -> Option<JSValue> {
@@ -185,7 +185,7 @@ pub fn init_bigint(ctx: &mut JSContext) {
 
     let mut func = JSFunction::new_builtin(bigint_atom, 1);
     func.set_builtin_marker(ctx, "bigint_constructor");
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let bigint_value = JSValue::new_function(ptr);
 
@@ -236,7 +236,7 @@ pub fn init_bigint(ctx: &mut JSContext) {
             },
         );
     }
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_bigint_prototype(proto_ptr);

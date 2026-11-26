@@ -15,7 +15,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -47,7 +47,7 @@ fn ws_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     );
 
     let ws_obj = Box::new(ws_obj);
-    let ws_obj_ptr = &*ws_obj as *const crate::object::object::JSObject as usize;
+    let ws_obj_ptr = &*ws_obj as *const crate::object::object::JSObject as *mut crate::object::object::JSObject;
 
     let promise_val = crate::builtins::promise::create_pending_promise(ctx);
     let promise_ptr = promise_val.get_ptr();
@@ -70,19 +70,19 @@ fn ws_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    JSValue::new_object(Box::into_raw(ws_obj) as usize)
+    JSValue::new_object(Box::into_raw(ws_obj))
 }
 
-fn get_ws_obj_ptr(args: &[JSValue]) -> usize {
+fn get_ws_obj_ptr(args: &[JSValue]) -> *mut crate::object::object::JSObject {
     if args.is_empty() || !args[0].is_object() {
-        return 0;
+        return std::ptr::null_mut();
     }
     args[0].get_ptr()
 }
 
 fn ws_send(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let ws_obj_ptr = get_ws_obj_ptr(args);
-    if ws_obj_ptr == 0 {
+    if ws_obj_ptr.is_null() {
         return JSValue::undefined();
     }
 
@@ -102,7 +102,7 @@ fn ws_send(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
 fn ws_close(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let ws_obj_ptr = get_ws_obj_ptr(args);
-    if ws_obj_ptr == 0 {
+    if ws_obj_ptr.is_null() {
         return JSValue::undefined();
     }
 

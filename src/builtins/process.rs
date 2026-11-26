@@ -44,7 +44,7 @@ fn make_argv(ctx: &mut JSContext) -> JSValue {
         arr.set(atom, val);
     }
 
-    let ptr = Box::into_raw(Box::new(arr)) as usize;
+    let ptr = Box::into_raw(Box::new(arr));
     JSValue::new_object(ptr)
 }
 
@@ -54,7 +54,7 @@ fn make_env(ctx: &mut JSContext) -> JSValue {
         let key_atom = ctx.intern(&key);
         obj.set(key_atom, JSValue::new_string(ctx.intern(&val)));
     }
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     JSValue::new_object(ptr)
 }
 
@@ -68,7 +68,7 @@ fn make_functions(ctx: &mut JSContext) -> (JSValue, JSValue, JSValue) {
 fn make_function_value(ctx: &mut JSContext, name: &str, arity: u32, marker: &str) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, marker);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -115,7 +115,7 @@ fn process_exec(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     promise_obj.set(ctx.intern("__promise_state__"), JSValue::new_int(0));
     promise_obj.set(ctx.intern("__promise_result__"), JSValue::undefined());
     promise_obj.set(ctx.intern("__promise_reactions__"), JSValue::null());
-    let promise_ptr = Box::into_raw(Box::new(promise_obj)) as usize;
+    let promise_ptr = Box::into_raw(Box::new(promise_obj));
     let promise_val = JSValue::new_object(promise_ptr);
 
     if let Some(e) = result.error {
@@ -140,7 +140,7 @@ fn process_exec(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 JSValue::null()
             },
         );
-        let result_ptr = Box::into_raw(Box::new(result_obj)) as usize;
+        let result_ptr = Box::into_raw(Box::new(result_obj));
         super::promise::fulfill_promise_with_value(
             ctx,
             promise_ptr,

@@ -1,11 +1,11 @@
-use v16::object::JSObject;
-use v16::value::JSValue;
-use v16::{JSRuntime, eval};
 use serde_yaml::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use v16::object::JSObject;
+use v16::value::JSValue;
+use v16::{JSRuntime, eval};
 
 thread_local! {
     static PRINT_OUTPUT: RefCell<Vec<String>> = RefCell::new(Vec::new());
@@ -166,7 +166,7 @@ fn test262_create_realm(ctx: &mut v16::JSContext, _args: &[JSValue]) -> JSValue 
     let mut realm = JSObject::new();
     realm.set(ctx.intern("global"), new_global);
 
-    let realm_ptr = Box::into_raw(Box::new(realm)) as usize;
+    let realm_ptr = Box::into_raw(Box::new(realm));
     ctx.runtime_mut().gc_heap_mut().track(realm_ptr);
 
     JSValue::new_object(realm_ptr)
@@ -207,8 +207,8 @@ fn inject_test262_globals(ctx: &mut v16::JSContext) {
         let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("print"), 1);
         f.builtin_atom = Some(ctx.intern("test262_print"));
         f.builtin_func = ctx.get_builtin_func("test262_print");
-        let ptr = Box::into_raw(Box::new(f)) as usize;
-        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        let ptr = Box::into_raw(Box::new(f));
+        ctx.runtime_mut().gc_heap_mut().track(ptr.cast());
         JSValue::new_function(ptr)
     };
     global_obj.set(ctx.intern("print"), print_func);
@@ -238,8 +238,8 @@ fn inject_test262_globals(ctx: &mut v16::JSContext) {
         let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("createRealm"), 0);
         f.builtin_atom = Some(ctx.intern("test262_create_realm"));
         f.builtin_func = ctx.get_builtin_func("test262_create_realm");
-        let ptr = Box::into_raw(Box::new(f)) as usize;
-        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        let ptr = Box::into_raw(Box::new(f));
+        ctx.runtime_mut().gc_heap_mut().track(ptr.cast());
         JSValue::new_function(ptr)
     };
     dollar_262.set(ctx.intern("createRealm"), create_realm_func);
@@ -248,8 +248,8 @@ fn inject_test262_globals(ctx: &mut v16::JSContext) {
         let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("evalScript"), 1);
         f.builtin_atom = Some(ctx.intern("test262_eval_script"));
         f.builtin_func = ctx.get_builtin_func("test262_eval_script");
-        let ptr = Box::into_raw(Box::new(f)) as usize;
-        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        let ptr = Box::into_raw(Box::new(f));
+        ctx.runtime_mut().gc_heap_mut().track(ptr.cast());
         JSValue::new_function(ptr)
     };
     dollar_262.set(ctx.intern("evalScript"), eval_script_func);
@@ -259,13 +259,13 @@ fn inject_test262_globals(ctx: &mut v16::JSContext) {
             v16::object::function::JSFunction::new_builtin(ctx.intern("detachArrayBuffer"), 1);
         f.builtin_atom = Some(ctx.intern("test262_detach_array_buffer"));
         f.builtin_func = ctx.get_builtin_func("test262_detach_array_buffer");
-        let ptr = Box::into_raw(Box::new(f)) as usize;
-        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        let ptr = Box::into_raw(Box::new(f));
+        ctx.runtime_mut().gc_heap_mut().track(ptr.cast());
         JSValue::new_function(ptr)
     };
     dollar_262.set(ctx.intern("detachArrayBuffer"), detach_func);
 
-    let dollar_ptr = Box::into_raw(Box::new(dollar_262)) as usize;
+    let dollar_ptr = Box::into_raw(Box::new(dollar_262));
     ctx.runtime_mut().gc_heap_mut().track(dollar_ptr);
     global_obj.set(ctx.intern("$262"), JSValue::new_object(dollar_ptr));
 }

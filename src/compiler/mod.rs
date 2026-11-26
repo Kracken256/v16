@@ -326,10 +326,10 @@ fn eval_bytecode_with_caller(
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
 
     let mut vm = VM::new();
-    let vm_ptr = &mut vm as *mut _ as usize;
+    let vm_ptr = &mut vm as *mut _;
     ctx.set_register_vm_ptr(Some(vm_ptr));
 
-    let caller_ptr = caller_vm.map(|p| p as usize);
+    let caller_ptr = caller_vm;
 
     let result = match vm.execute_eval(ctx, rb, caller_this, caller_ptr) {
         Ok(ExecutionOutcome::Complete(v)) => Ok(v),
@@ -396,7 +396,7 @@ pub fn eval_code_via_ast_with_opt_level(
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
 
     let mut vm = crate::runtime::vm::VM::new();
-    let vm_ptr = &mut vm as *mut _ as usize;
+    let vm_ptr = &mut vm as *mut _;
     ctx.set_register_vm_ptr(Some(vm_ptr));
 
     let result = match vm.execute_preserving_registers(ctx, &rb) {
@@ -438,7 +438,7 @@ fn eval_exception_from_message(ctx: &mut JSContext, message: &str) -> JSValue {
     if let Some(proto) = proto {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -456,7 +456,7 @@ pub fn eval_code_with_exception(
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
 
     let mut vm = crate::runtime::vm::VM::new();
-    let vm_ptr = &mut vm as *mut _ as usize;
+    let vm_ptr = &mut vm as *mut _;
     ctx.set_register_vm_ptr(Some(vm_ptr));
 
     let result = match vm.execute_preserving_registers(ctx, &rb) {

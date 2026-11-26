@@ -371,9 +371,9 @@ impl<'a> JsonParser<'a> {
         let len_atom = ctx.common_atoms.length;
         arr.header.set(len_atom, JSValue::new_int(len as i64));
 
-        let ptr = Box::into_raw(Box::new(arr)) as usize;
+        let ptr = Box::into_raw(Box::new(arr));
         ctx.runtime_mut().gc_heap_mut().track_array(ptr);
-        Ok(JSValue::new_object(ptr))
+        Ok(JSValue::new_object(ptr.cast()))
     }
 
     fn parse_object(&mut self, ctx: &mut JSContext) -> Result<JSValue, String> {
@@ -414,7 +414,7 @@ impl<'a> JsonParser<'a> {
         }
         self.expect_byte(b'}')?;
 
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         Ok(JSValue::new_object(ptr))
     }
 }

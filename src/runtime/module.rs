@@ -35,9 +35,9 @@ pub struct Module {
     pub state: ModuleState,
     pub exports: FxHashMap<String, ModuleExport>,
     pub imports: Vec<ModuleImport>,
-    pub namespace_object: Option<usize>,
+    pub namespace_object: Option<*mut crate::object::object::JSObject>,
     pub source: String,
-    pub import_meta_object: Option<usize>,
+    pub import_meta_object: Option<*mut crate::object::object::JSObject>,
     pub error: Option<String>,
     pub error_value: Option<JSValue>,
     pub local_exports: Vec<(String, String)>,
@@ -128,7 +128,7 @@ impl Module {
         atom_table: &mut AtomTable,
         to_string_tag_key: crate::runtime::atom::Atom,
         module_tag_atom: crate::runtime::atom::Atom,
-    ) -> usize {
+    ) -> *mut crate::object::object::JSObject {
         let mut names: Vec<String> = self.exports.keys().cloned().collect();
         names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         let mut ns_obj = JSObject::new();
@@ -187,7 +187,7 @@ impl Module {
         );
         ns_obj.set_extensible(false);
         ns_obj.set_module_namespace();
-        let ptr = Box::into_raw(Box::new(ns_obj)) as usize;
+        let ptr = Box::into_raw(Box::new(ns_obj));
         self.namespace_object = Some(ptr);
         ptr
     }
@@ -197,7 +197,7 @@ impl Module {
         atom_table: &mut AtomTable,
         to_string_tag_key: crate::runtime::atom::Atom,
         module_tag_atom: crate::runtime::atom::Atom,
-    ) -> usize {
+    ) -> *mut crate::object::object::JSObject {
         if let Some(ptr) = self.namespace_object {
             ptr
         } else {
@@ -329,7 +329,7 @@ fn collect_static_dependencies(body: &[crate::compiler::ast::ASTNode]) -> Vec<St
     dependencies
 }
 
-fn namespace_object_for(ctx: &mut JSContext, resolved: &str) -> Result<usize, String> {
+fn namespace_object_for(ctx: &mut JSContext, resolved: &str) -> Result<*mut crate::object::object::JSObject, String> {
     let to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
     let module_tag_atom = ctx.intern("Module");
     let (registry, atom_table) = ctx.runtime_mut().module_registry_and_atoms_mut();
@@ -367,7 +367,7 @@ pub fn create_syntax_error(ctx: &mut JSContext, message: &str) -> JSValue {
     if let Some(proto) = ctx.get_syntax_error_prototype() {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -790,7 +790,7 @@ fn link_module(ctx: &mut JSContext, resolved: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<usize, String> {
+pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<*mut crate::object::object::JSObject, String> {
     load_and_evaluate_module_with_attributes(ctx, specifier, None)
 }
 
@@ -856,7 +856,7 @@ pub fn load_and_evaluate_module_with_attributes(
     ctx: &mut JSContext,
     specifier: &str,
     attribute_type: Option<&str>,
-) -> Result<usize, String> {
+) -> Result<*mut crate::object::object::JSObject, String> {
     use crate::compiler::ast::BlockStatement;
     use crate::compiler::codegen::CodeGenerator;
     use crate::compiler::parser::Parser;

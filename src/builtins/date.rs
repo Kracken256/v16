@@ -281,7 +281,7 @@ pub fn init_date(ctx: &mut JSContext) {
         create_builtin_function(ctx, "date_utc", 7, None),
     );
 
-    let date_ptr = Box::into_raw(Box::new(date_func)) as usize;
+    let date_ptr = Box::into_raw(Box::new(date_func));
     ctx.runtime_mut().gc_heap_mut().track_function(date_ptr);
     let date_value = JSValue::new_function(date_ptr);
 
@@ -524,7 +524,7 @@ pub fn init_date(ctx: &mut JSContext) {
         create_builtin_function(ctx, "date_to_time_string", 0, Some("toLocaleTimeString")),
     );
 
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_date_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
@@ -557,7 +557,7 @@ fn create_builtin_function(
     let mut func =
         crate::object::function::JSFunction::new_builtin(ctx.intern(internal_name), arity);
     func.set_builtin_marker(ctx, internal_name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     if let Some(dname) = display_name {
         let func_binding = JSValue::new_function(ptr);
@@ -1175,7 +1175,7 @@ fn require_date_this(ctx: &mut JSContext, this: &JSValue) -> Option<JSValue> {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return Some(JSValue::undefined());
@@ -1200,7 +1200,7 @@ fn require_date_this(ctx: &mut JSContext, this: &JSValue) -> Option<JSValue> {
             if let Some(proto) = ctx.get_type_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return Some(JSValue::undefined());
@@ -1702,7 +1702,7 @@ pub fn date_to_iso_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_range_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1863,7 +1863,7 @@ pub fn date_to_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1975,7 +1975,7 @@ pub fn date_to_primitive(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -2003,7 +2003,7 @@ pub fn date_to_primitive(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_type_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -2049,7 +2049,7 @@ pub fn date_to_primitive(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if let Some(proto) = ctx.get_type_error_prototype() {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
     JSValue::undefined()

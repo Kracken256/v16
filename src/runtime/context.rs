@@ -264,56 +264,56 @@ pub struct JSContext {
     interrupt_counter: i32,
     builtin_functions: FxHashMap<String, HostFunction>,
 
-    string_prototype: Option<usize>,
-    number_prototype: Option<usize>,
-    array_prototype: Option<usize>,
-    array_iterator_prototype: Option<usize>,
+    string_prototype: Option<*mut JSObject>,
+    number_prototype: Option<*mut JSObject>,
+    array_prototype: Option<*mut JSObject>,
+    array_iterator_prototype: Option<*mut JSObject>,
 
-    array_iterator_fn: Option<usize>,
-    map_iterator_prototype: Option<usize>,
-    set_iterator_prototype: Option<usize>,
-    regexp_prototype: Option<usize>,
-    date_prototype: Option<usize>,
-    object_prototype: Option<usize>,
-    function_prototype: Option<usize>,
-    map_prototype: Option<usize>,
-    set_prototype: Option<usize>,
-    weakmap_prototype: Option<usize>,
-    weakset_prototype: Option<usize>,
-    dataview_prototype: Option<usize>,
-    typed_array_prototype: Option<usize>,
-    typed_array_prototypes: [Option<usize>; 11],
-    typed_array_iterator_prototype: Option<usize>,
-    array_buffer_prototype: Option<usize>,
-    error_prototype: Option<usize>,
-    type_error_prototype: Option<usize>,
-    reference_error_prototype: Option<usize>,
-    syntax_error_prototype: Option<usize>,
-    range_error_prototype: Option<usize>,
-    uri_error_prototype: Option<usize>,
-    eval_error_prototype: Option<usize>,
-    suppressed_error_prototype: Option<usize>,
-    aggregate_error_prototype: Option<usize>,
+    array_iterator_fn: Option<*mut JSObject>,
+    map_iterator_prototype: Option<*mut JSObject>,
+    set_iterator_prototype: Option<*mut JSObject>,
+    regexp_prototype: Option<*mut JSObject>,
+    date_prototype: Option<*mut JSObject>,
+    object_prototype: Option<*mut JSObject>,
+    function_prototype: Option<*mut JSObject>,
+    map_prototype: Option<*mut JSObject>,
+    set_prototype: Option<*mut JSObject>,
+    weakmap_prototype: Option<*mut JSObject>,
+    weakset_prototype: Option<*mut JSObject>,
+    dataview_prototype: Option<*mut JSObject>,
+    typed_array_prototype: Option<*mut JSObject>,
+    typed_array_prototypes: [Option<*mut JSObject>; 11],
+    typed_array_iterator_prototype: Option<*mut JSObject>,
+    array_buffer_prototype: Option<*mut JSObject>,
+    error_prototype: Option<*mut JSObject>,
+    type_error_prototype: Option<*mut JSObject>,
+    reference_error_prototype: Option<*mut JSObject>,
+    syntax_error_prototype: Option<*mut JSObject>,
+    range_error_prototype: Option<*mut JSObject>,
+    uri_error_prototype: Option<*mut JSObject>,
+    eval_error_prototype: Option<*mut JSObject>,
+    suppressed_error_prototype: Option<*mut JSObject>,
+    aggregate_error_prototype: Option<*mut JSObject>,
     pub eval_private_names: Option<Vec<crate::runtime::atom::Atom>>,
-    symbol_prototype: Option<usize>,
-    bool_prototype: Option<usize>,
-    bigint_prototype: Option<usize>,
-    weakref_prototype: Option<usize>,
-    finalization_registry_prototype: Option<usize>,
-    pub finalization_registries: std::cell::RefCell<Vec<usize>>,
+    symbol_prototype: Option<*mut JSObject>,
+    bool_prototype: Option<*mut JSObject>,
+    bigint_prototype: Option<*mut JSObject>,
+    weakref_prototype: Option<*mut JSObject>,
+    finalization_registry_prototype: Option<*mut JSObject>,
+    pub finalization_registries: std::cell::RefCell<Vec<*mut JSObject>>,
     pub tagged_template_cache: FxHashMap<u32, JSValue>,
     pub global_lexical_bindings: FxHashMap<u32, JSValue>,
     pub global_lexical_kinds: FxHashMap<u32, u8>,
-    generator_prototype: Option<usize>,
-    async_generator_prototype: Option<usize>,
-    generator_function_prototype: Option<usize>,
-    async_generator_function_prototype: Option<usize>,
-    promise_prototype: Option<usize>,
-    promise_constructor: Option<usize>,
+    generator_prototype: Option<*mut JSObject>,
+    async_generator_prototype: Option<*mut JSObject>,
+    generator_function_prototype: Option<*mut JSObject>,
+    async_generator_function_prototype: Option<*mut JSObject>,
+    promise_prototype: Option<*mut JSObject>,
+    promise_constructor: Option<*mut JSObject>,
 
     active_realm: usize,
 
-    register_vm_ptr: Option<usize>,
+    register_vm_ptr: Option<*mut crate::runtime::vm::VM>,
     compiler_opt_level: OptLevel,
 
     pub pending_exception: Option<JSValue>,
@@ -326,7 +326,7 @@ pub struct JSContext {
 
     current_module_specifier: Option<String>,
     script_base_path: Option<String>,
-    import_meta_object: Option<usize>,
+    import_meta_object: Option<*mut JSObject>,
 
     event_loop: EventLoop,
 
@@ -355,7 +355,7 @@ impl JSContext {
 
     pub fn new(runtime: &mut JSRuntime) -> Self {
         let global = JSObject::new_global();
-        let global_ptr = Box::into_raw(Box::new(global)) as usize;
+        let global_ptr = Box::into_raw(Box::new(global));
         runtime.gc_heap_mut().track(global_ptr);
         let global_value = JSValue::new_object(global_ptr);
 
@@ -551,10 +551,10 @@ impl JSContext {
         if !global.is_object_like() {
             return;
         }
-        let mut function_ptrs = Vec::new();
+        let mut function_ptrs: Vec<*mut crate::object::function::JSFunction> = Vec::new();
         global.as_object().for_each_property(|_, value, _| {
             if value.is_function() {
-                function_ptrs.push(value.get_ptr());
+                function_ptrs.push(value.get_ptr().cast());
             }
         });
         for ptr in function_ptrs {
@@ -780,7 +780,7 @@ impl JSContext {
         self.register_builtin(name, HostFunction::new(name, arity, func));
         let mut f = crate::object::function::JSFunction::new_builtin(self.intern(name), arity);
         f.set_builtin_marker(self, name);
-        let ptr = Box::into_raw(Box::new(f)) as usize;
+        let ptr = Box::into_raw(Box::new(f));
         self.runtime_mut().gc_heap_mut().track_function(ptr);
         self.global()
             .as_object_mut()
@@ -830,147 +830,147 @@ impl JSContext {
         func(self, args)
     }
 
-    pub fn set_string_prototype(&mut self, ptr: usize) {
+    pub fn set_string_prototype(&mut self, ptr: *mut JSObject) {
         self.string_prototype = Some(ptr);
     }
 
-    pub fn set_number_prototype(&mut self, ptr: usize) {
+    pub fn set_number_prototype(&mut self, ptr: *mut JSObject) {
         self.number_prototype = Some(ptr);
     }
 
-    pub fn set_array_prototype(&mut self, ptr: usize) {
+    pub fn set_array_prototype(&mut self, ptr: *mut JSObject) {
         self.array_prototype = Some(ptr);
     }
 
-    pub fn set_array_iterator_prototype(&mut self, ptr: usize) {
+    pub fn set_array_iterator_prototype(&mut self, ptr: *mut JSObject) {
         self.array_iterator_prototype = Some(ptr);
     }
 
-    pub fn get_array_iterator_prototype(&self) -> Option<usize> {
+    pub fn get_array_iterator_prototype(&self) -> Option<*mut JSObject> {
         self.array_iterator_prototype
     }
 
-    pub fn set_array_iterator_fn(&mut self, ptr: usize) {
+    pub fn set_array_iterator_fn(&mut self, ptr: *mut JSObject) {
         self.array_iterator_fn = Some(ptr);
     }
 
-    pub fn get_array_iterator_fn(&self) -> Option<usize> {
+    pub fn get_array_iterator_fn(&self) -> Option<*mut JSObject> {
         self.array_iterator_fn
     }
 
-    pub fn set_map_iterator_prototype(&mut self, ptr: usize) {
+    pub fn set_map_iterator_prototype(&mut self, ptr: *mut JSObject) {
         self.map_iterator_prototype = Some(ptr);
     }
 
-    pub fn get_map_iterator_prototype(&self) -> Option<usize> {
+    pub fn get_map_iterator_prototype(&self) -> Option<*mut JSObject> {
         self.map_iterator_prototype
     }
 
-    pub fn set_set_iterator_prototype(&mut self, ptr: usize) {
+    pub fn set_set_iterator_prototype(&mut self, ptr: *mut JSObject) {
         self.set_iterator_prototype = Some(ptr);
     }
 
-    pub fn get_set_iterator_prototype(&self) -> Option<usize> {
+    pub fn get_set_iterator_prototype(&self) -> Option<*mut JSObject> {
         self.set_iterator_prototype
     }
 
-    pub fn set_regexp_prototype(&mut self, ptr: usize) {
+    pub fn set_regexp_prototype(&mut self, ptr: *mut JSObject) {
         self.regexp_prototype = Some(ptr);
     }
 
-    pub fn set_object_prototype(&mut self, ptr: usize) {
+    pub fn set_object_prototype(&mut self, ptr: *mut JSObject) {
         self.object_prototype = Some(ptr);
     }
 
-    pub fn set_function_prototype(&mut self, ptr: usize) {
+    pub fn set_function_prototype(&mut self, ptr: *mut JSObject) {
         self.function_prototype = Some(ptr);
     }
 
-    pub fn set_map_prototype(&mut self, ptr: usize) {
+    pub fn set_map_prototype(&mut self, ptr: *mut JSObject) {
         self.map_prototype = Some(ptr);
     }
 
-    pub fn set_set_prototype(&mut self, ptr: usize) {
+    pub fn set_set_prototype(&mut self, ptr: *mut JSObject) {
         self.set_prototype = Some(ptr);
     }
 
     pub fn get_string_prototype(&self) -> Option<*mut JSObject> {
-        self.string_prototype.map(|p| p as *mut JSObject)
+        self.string_prototype
     }
 
     pub fn get_number_prototype(&self) -> Option<*mut JSObject> {
-        self.number_prototype.map(|p| p as *mut JSObject)
+        self.number_prototype
     }
 
     pub fn get_bool_prototype(&self) -> Option<*mut JSObject> {
-        self.bool_prototype.map(|p| p as *mut JSObject)
+        self.bool_prototype
     }
 
-    pub fn set_bool_prototype(&mut self, ptr: usize) {
+    pub fn set_bool_prototype(&mut self, ptr: *mut JSObject) {
         self.bool_prototype = Some(ptr);
     }
 
     pub fn get_bigint_prototype(&self) -> Option<*mut JSObject> {
-        self.bigint_prototype.map(|p| p as *mut JSObject)
+        self.bigint_prototype
     }
 
-    pub fn set_bigint_prototype(&mut self, ptr: usize) {
+    pub fn set_bigint_prototype(&mut self, ptr: *mut JSObject) {
         self.bigint_prototype = Some(ptr);
     }
 
     pub fn get_array_prototype(&self) -> Option<*mut JSObject> {
-        self.array_prototype.map(|p| p as *mut JSObject)
+        self.array_prototype
     }
 
     pub fn get_regexp_prototype(&self) -> Option<*mut JSObject> {
-        self.regexp_prototype.map(|p| p as *mut JSObject)
+        self.regexp_prototype
     }
 
     pub fn get_object_prototype(&self) -> Option<*mut JSObject> {
-        self.object_prototype.map(|p| p as *mut JSObject)
+        self.object_prototype
     }
 
-    pub fn set_date_prototype(&mut self, ptr: usize) {
+    pub fn set_date_prototype(&mut self, ptr: *mut JSObject) {
         self.date_prototype = Some(ptr);
     }
 
     pub fn get_date_prototype(&self) -> Option<*mut JSObject> {
-        self.date_prototype.map(|p| p as *mut JSObject)
+        self.date_prototype
     }
 
     pub fn get_function_prototype(&self) -> Option<*mut JSObject> {
-        self.function_prototype.map(|p| p as *mut JSObject)
+        self.function_prototype
     }
 
     pub fn get_map_prototype(&self) -> Option<*mut JSObject> {
-        self.map_prototype.map(|p| p as *mut JSObject)
+        self.map_prototype
     }
 
     pub fn get_set_prototype(&self) -> Option<*mut JSObject> {
-        self.set_prototype.map(|p| p as *mut JSObject)
+        self.set_prototype
     }
 
-    pub fn set_weakmap_prototype(&mut self, ptr: usize) {
+    pub fn set_weakmap_prototype(&mut self, ptr: *mut JSObject) {
         self.weakmap_prototype = Some(ptr);
     }
 
     pub fn get_weakmap_prototype(&self) -> Option<*mut JSObject> {
-        self.weakmap_prototype.map(|p| p as *mut JSObject)
+        self.weakmap_prototype
     }
 
-    pub fn set_weakset_prototype(&mut self, ptr: usize) {
+    pub fn set_weakset_prototype(&mut self, ptr: *mut JSObject) {
         self.weakset_prototype = Some(ptr);
     }
 
-    pub fn set_dataview_prototype(&mut self, ptr: usize) {
+    pub fn set_dataview_prototype(&mut self, ptr: *mut JSObject) {
         self.dataview_prototype = Some(ptr);
     }
 
-    pub fn set_typed_array_prototype(&mut self, ptr: usize) {
+    pub fn set_typed_array_prototype(&mut self, ptr: *mut JSObject) {
         self.typed_array_prototype = Some(ptr);
     }
 
-    pub fn set_typed_array_prototype_for_kind(&mut self, kind_index: usize, ptr: usize) {
+    pub fn set_typed_array_prototype_for_kind(&mut self, kind_index: usize, ptr: *mut JSObject) {
         if let Some(slot) = self.typed_array_prototypes.get_mut(kind_index) {
             *slot = Some(ptr);
         }
@@ -981,188 +981,185 @@ impl JSContext {
             .get(kind_index)
             .copied()
             .flatten()
-            .map(|p| p as *mut JSObject)
     }
 
-    pub fn set_typed_array_iterator_prototype(&mut self, ptr: usize) {
+    pub fn set_typed_array_iterator_prototype(&mut self, ptr: *mut JSObject) {
         self.typed_array_iterator_prototype = Some(ptr);
     }
 
-    pub fn set_array_buffer_prototype(&mut self, ptr: usize) {
+    pub fn set_array_buffer_prototype(&mut self, ptr: *mut JSObject) {
         self.array_buffer_prototype = Some(ptr);
     }
 
     pub fn get_array_buffer_prototype(&self) -> Option<*mut JSObject> {
-        self.array_buffer_prototype.map(|p| p as *mut JSObject)
+        self.array_buffer_prototype
     }
 
     pub fn get_typed_array_iterator_prototype(&self) -> Option<*mut JSObject> {
-        self.typed_array_iterator_prototype.map(|p| p as *mut JSObject)
+        self.typed_array_iterator_prototype
     }
 
     pub fn get_weakset_prototype(&self) -> Option<*mut JSObject> {
-        self.weakset_prototype.map(|p| p as *mut JSObject)
+        self.weakset_prototype
     }
 
     pub fn get_dataview_prototype(&self) -> Option<*mut JSObject> {
-        self.dataview_prototype.map(|p| p as *mut JSObject)
+        self.dataview_prototype
     }
 
     pub fn get_typed_array_prototype(&self) -> Option<*mut JSObject> {
-        self.typed_array_prototype.map(|p| p as *mut JSObject)
+        self.typed_array_prototype
     }
 
-    pub fn set_error_prototype(&mut self, ptr: usize) {
+    pub fn set_error_prototype(&mut self, ptr: *mut JSObject) {
         self.error_prototype = Some(ptr);
     }
 
     pub fn get_error_prototype(&self) -> Option<*mut JSObject> {
-        self.error_prototype.map(|p| p as *mut JSObject)
+        self.error_prototype
     }
 
-    pub fn set_type_error_prototype(&mut self, ptr: usize) {
+    pub fn set_type_error_prototype(&mut self, ptr: *mut JSObject) {
         self.type_error_prototype = Some(ptr);
     }
 
     pub fn get_type_error_prototype(&self) -> Option<*mut JSObject> {
-        self.type_error_prototype.map(|p| p as *mut JSObject)
+        self.type_error_prototype
     }
 
-    pub fn set_reference_error_prototype(&mut self, ptr: usize) {
+    pub fn set_reference_error_prototype(&mut self, ptr: *mut JSObject) {
         self.reference_error_prototype = Some(ptr);
     }
 
     pub fn get_reference_error_prototype(&self) -> Option<*mut JSObject> {
-        self.reference_error_prototype.map(|p| p as *mut JSObject)
+        self.reference_error_prototype
     }
 
-    pub fn set_range_error_prototype(&mut self, ptr: usize) {
+    pub fn set_range_error_prototype(&mut self, ptr: *mut JSObject) {
         self.range_error_prototype = Some(ptr);
     }
 
     pub fn get_range_error_prototype(&self) -> Option<*mut JSObject> {
-        self.range_error_prototype.map(|p| p as *mut JSObject)
+        self.range_error_prototype
     }
 
-    pub fn set_uri_error_prototype(&mut self, ptr: usize) {
+    pub fn set_uri_error_prototype(&mut self, ptr: *mut JSObject) {
         self.uri_error_prototype = Some(ptr);
     }
 
     pub fn get_uri_error_prototype(&self) -> Option<*mut JSObject> {
-        self.uri_error_prototype.map(|p| p as *mut JSObject)
+        self.uri_error_prototype
     }
 
-    pub fn set_syntax_error_prototype(&mut self, ptr: usize) {
+    pub fn set_syntax_error_prototype(&mut self, ptr: *mut JSObject) {
         self.syntax_error_prototype = Some(ptr);
     }
 
     pub fn get_syntax_error_prototype(&self) -> Option<*mut JSObject> {
-        self.syntax_error_prototype.map(|p| p as *mut JSObject)
+        self.syntax_error_prototype
     }
 
-    pub fn set_eval_error_prototype(&mut self, ptr: usize) {
+    pub fn set_eval_error_prototype(&mut self, ptr: *mut JSObject) {
         self.eval_error_prototype = Some(ptr);
     }
 
     pub fn get_eval_error_prototype(&self) -> Option<*mut JSObject> {
-        self.eval_error_prototype.map(|p| p as *mut JSObject)
+        self.eval_error_prototype
     }
 
-    pub fn set_suppressed_error_prototype(&mut self, ptr: usize) {
+    pub fn set_suppressed_error_prototype(&mut self, ptr: *mut JSObject) {
         self.suppressed_error_prototype = Some(ptr);
     }
 
     pub fn get_suppressed_error_prototype(&self) -> Option<*mut JSObject> {
-        self.suppressed_error_prototype.map(|p| p as *mut JSObject)
+        self.suppressed_error_prototype
     }
 
-    pub fn set_aggregate_error_prototype(&mut self, ptr: usize) {
+    pub fn set_aggregate_error_prototype(&mut self, ptr: *mut JSObject) {
         self.aggregate_error_prototype = Some(ptr);
     }
 
     pub fn get_aggregate_error_prototype(&self) -> Option<*mut JSObject> {
-        self.aggregate_error_prototype.map(|p| p as *mut JSObject)
+        self.aggregate_error_prototype
     }
 
-    pub fn set_symbol_prototype(&mut self, ptr: usize) {
+    pub fn set_symbol_prototype(&mut self, ptr: *mut JSObject) {
         self.symbol_prototype = Some(ptr);
     }
 
     pub fn get_symbol_prototype(&self) -> Option<*mut JSObject> {
-        self.symbol_prototype.map(|p| p as *mut JSObject)
+        self.symbol_prototype
     }
 
-    pub fn set_weakref_prototype(&mut self, ptr: usize) {
+    pub fn set_weakref_prototype(&mut self, ptr: *mut JSObject) {
         self.weakref_prototype = Some(ptr);
     }
 
     pub fn get_weakref_prototype(&self) -> Option<*mut JSObject> {
-        self.weakref_prototype.map(|p| p as *mut JSObject)
+        self.weakref_prototype
     }
 
-    pub fn set_finalization_registry_prototype(&mut self, ptr: usize) {
+    pub fn set_finalization_registry_prototype(&mut self, ptr: *mut JSObject) {
         self.finalization_registry_prototype = Some(ptr);
     }
 
     pub fn get_finalization_registry_prototype(&self) -> Option<*mut JSObject> {
         self.finalization_registry_prototype
-            .map(|p| p as *mut JSObject)
     }
 
-    pub fn set_generator_prototype(&mut self, ptr: usize) {
+    pub fn set_generator_prototype(&mut self, ptr: *mut JSObject) {
         self.generator_prototype = Some(ptr);
     }
 
     pub fn get_generator_prototype(&self) -> Option<*mut JSObject> {
-        self.generator_prototype.map(|p| p as *mut JSObject)
+        self.generator_prototype
     }
 
-    pub fn set_async_generator_prototype(&mut self, ptr: usize) {
+    pub fn set_async_generator_prototype(&mut self, ptr: *mut JSObject) {
         self.async_generator_prototype = Some(ptr);
     }
 
     pub fn get_async_generator_prototype(&self) -> Option<*mut JSObject> {
-        self.async_generator_prototype.map(|p| p as *mut JSObject)
+        self.async_generator_prototype
     }
 
-    pub fn set_generator_function_prototype(&mut self, ptr: usize) {
+    pub fn set_generator_function_prototype(&mut self, ptr: *mut JSObject) {
         self.generator_function_prototype = Some(ptr);
     }
 
     pub fn get_generator_function_prototype(&self) -> Option<*mut JSObject> {
-        self.generator_function_prototype.map(|p| p as *mut JSObject)
+        self.generator_function_prototype
     }
 
-    pub fn set_async_generator_function_prototype(&mut self, ptr: usize) {
+    pub fn set_async_generator_function_prototype(&mut self, ptr: *mut JSObject) {
         self.async_generator_function_prototype = Some(ptr);
     }
 
     pub fn get_async_generator_function_prototype(&self) -> Option<*mut JSObject> {
         self.async_generator_function_prototype
-            .map(|p| p as *mut JSObject)
     }
 
-    pub fn set_promise_prototype(&mut self, ptr: usize) {
+    pub fn set_promise_prototype(&mut self, ptr: *mut JSObject) {
         self.promise_prototype = Some(ptr);
     }
 
     pub fn get_promise_prototype(&self) -> Option<*mut JSObject> {
-        self.promise_prototype.map(|p| p as *mut JSObject)
+        self.promise_prototype
     }
 
-    pub fn set_promise_constructor(&mut self, ptr: usize) {
+    pub fn set_promise_constructor(&mut self, ptr: *mut JSObject) {
         self.promise_constructor = Some(ptr);
     }
 
-    pub fn get_promise_constructor(&self) -> Option<usize> {
+    pub fn get_promise_constructor(&self) -> Option<*mut JSObject> {
         self.promise_constructor
     }
 
-    pub fn set_register_vm_ptr(&mut self, ptr: Option<usize>) {
+    pub fn set_register_vm_ptr(&mut self, ptr: Option<*mut crate::runtime::vm::VM>) {
         self.register_vm_ptr = ptr;
     }
 
-    pub fn get_register_vm_ptr(&self) -> Option<usize> {
+    pub fn get_register_vm_ptr(&self) -> Option<*mut crate::runtime::vm::VM> {
         self.register_vm_ptr
     }
 
@@ -1171,7 +1168,7 @@ impl JSContext {
         f: impl FnOnce(&mut crate::runtime::vm::VM, &mut JSContext) -> R,
     ) -> Option<R> {
         let ptr = self.register_vm_ptr?;
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+        let vm = unsafe { &mut *ptr };
         Some(f(vm, self))
     }
 
@@ -1227,19 +1224,19 @@ impl JSContext {
         self.script_base_path.as_deref()
     }
 
-    pub fn get_symbol_registry_ptr(&self) -> Option<usize> {
+    pub fn get_symbol_registry_ptr(&self) -> Option<*mut JSObject> {
         self.runtime().symbol_registry()
     }
 
-    pub fn set_symbol_registry_ptr(&mut self, ptr: Option<usize>) {
+    pub fn set_symbol_registry_ptr(&mut self, ptr: Option<*mut JSObject>) {
         self.runtime_mut().set_symbol_registry(ptr);
     }
 
-    pub fn set_import_meta(&mut self, ptr: Option<usize>) {
+    pub fn set_import_meta(&mut self, ptr: Option<*mut JSObject>) {
         self.import_meta_object = ptr;
     }
 
-    pub fn get_import_meta(&self) -> Option<usize> {
+    pub fn get_import_meta(&self) -> Option<*mut JSObject> {
         self.import_meta_object
     }
 
@@ -1280,7 +1277,7 @@ impl JSContext {
             None
         };
         if let Some(vm) = owned_vm.as_mut() {
-            self.register_vm_ptr = Some(vm as *mut _ as usize);
+            self.register_vm_ptr = Some(vm as *mut _);
         }
 
         let result = {

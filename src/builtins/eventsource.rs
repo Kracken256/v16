@@ -14,7 +14,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -44,7 +44,7 @@ fn es_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     es_obj.set(ctx.intern("close"), close_fn);
 
     let es_obj = Box::new(es_obj);
-    let es_obj_ptr = &*es_obj as *const crate::object::object::JSObject as usize;
+    let es_obj_ptr = &*es_obj as *const crate::object::object::JSObject as *mut crate::object::object::JSObject;
 
     let promise_val = crate::builtins::promise::create_pending_promise(ctx);
     let promise_ptr = promise_val.get_ptr();
@@ -67,7 +67,7 @@ fn es_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    JSValue::new_object(Box::into_raw(es_obj) as usize)
+    JSValue::new_object(Box::into_raw(es_obj))
 }
 
 fn es_close(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {

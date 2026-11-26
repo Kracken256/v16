@@ -32,7 +32,7 @@ pub enum ReactorTask {
 
 pub struct FetchTask {
     phase: FetchPhase,
-    promise_ptr: usize,
+    promise_ptr: *mut crate::object::object::JSObject,
     url: Url,
     method: HttpMethod,
     req_headers: Headers,
@@ -46,8 +46,8 @@ pub enum FetchPhase {
 
 pub struct WsTask {
     phase: WsPhase,
-    ws_obj_ptr: usize,
-    promise_ptr: usize,
+    ws_obj_ptr: *mut crate::object::object::JSObject,
+    promise_ptr: *mut crate::object::object::JSObject,
     url: Url,
 }
 
@@ -73,8 +73,8 @@ pub enum WsPhase {
 
 pub struct SseTask {
     phase: SsePhase,
-    es_obj_ptr: usize,
-    promise_ptr: usize,
+    es_obj_ptr: *mut crate::object::object::JSObject,
+    promise_ptr: *mut crate::object::object::JSObject,
     url: Url,
 }
 
@@ -182,7 +182,7 @@ impl FetchTask {
         method: HttpMethod,
         req_headers: Headers,
         body: Option<Vec<u8>>,
-        promise_ptr: usize,
+        promise_ptr: *mut crate::object::object::JSObject,
     ) -> Result<Self, String> {
         let use_tls = url.is_tls();
         let cs = ConnectState::new(&url.host, url.port, use_tls, Vec::new())?;
@@ -198,7 +198,7 @@ impl FetchTask {
 }
 
 impl WsTask {
-    pub fn new(url: Url, ws_obj_ptr: usize, promise_ptr: usize) -> Result<Self, String> {
+    pub fn new(url: Url, ws_obj_ptr: *mut crate::object::object::JSObject, promise_ptr: *mut crate::object::object::JSObject) -> Result<Self, String> {
         let use_tls = url.is_tls();
         let cs = ConnectState::new(&url.host, url.port, use_tls, Vec::new())?;
         Ok(WsTask {
@@ -211,7 +211,7 @@ impl WsTask {
 }
 
 impl SseTask {
-    pub fn new(url: Url, es_obj_ptr: usize, promise_ptr: usize) -> Result<Self, String> {
+    pub fn new(url: Url, es_obj_ptr: *mut crate::object::object::JSObject, promise_ptr: *mut crate::object::object::JSObject) -> Result<Self, String> {
         let use_tls = url.is_tls();
         let cs = ConnectState::new(&url.host, url.port, use_tls, Vec::new())?;
         Ok(SseTask {
@@ -321,7 +321,7 @@ impl IoReactor {
         Ok(results)
     }
 
-    pub fn ws_send(&mut self, ws_obj_ptr: usize, data: Vec<u8>) {
+    pub fn ws_send(&mut self, ws_obj_ptr: *mut crate::object::object::JSObject, data: Vec<u8>) {
         let frame = WsFrame::new_text(data);
         for (_, task) in &mut self.tasks {
             if let ReactorTask::Ws(ws_task) = task {
@@ -335,7 +335,7 @@ impl IoReactor {
         }
     }
 
-    pub fn ws_close(&mut self, ws_obj_ptr: usize, code: u16, reason: &str) {
+    pub fn ws_close(&mut self, ws_obj_ptr: *mut crate::object::object::JSObject, code: u16, reason: &str) {
         for (_, task) in &mut self.tasks {
             if let ReactorTask::Ws(ws_task) = task {
                 if ws_task.ws_obj_ptr == ws_obj_ptr {
@@ -360,7 +360,7 @@ impl IoReactor {
         }
     }
 
-    pub fn sse_close(&mut self, es_obj_ptr: usize) {
+    pub fn sse_close(&mut self, es_obj_ptr: *mut crate::object::object::JSObject) {
         let ids_to_remove: Vec<u64> = self
             .tasks
             .iter()
@@ -1103,19 +1103,19 @@ fn build_response_js_object(
     let json_fn = create_builtin_function(ctx, "response_json");
     obj.set(ctx.intern("json"), json_fn);
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     crate::value::JSValue::new_object(ptr)
 }
 
 fn create_builtin_function(ctx: &mut JSContext, name: &str) -> crate::value::JSValue {
     let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern(name), 1);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     crate::value::JSValue::new_function(ptr)
 }
 
-fn dispatch_ws_message(ctx: &mut JSContext, ws_obj_ptr: usize, data: &str, _is_text: bool) {
+fn dispatch_ws_message(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::object::JSObject, data: &str, _is_text: bool) {
     let ws_obj = crate::value::JSValue::new_object(ws_obj_ptr);
     let ws_obj = ws_obj.as_object();
     let on_msg = ws_obj
@@ -1128,7 +1128,7 @@ fn dispatch_ws_message(ctx: &mut JSContext, ws_obj_ptr: usize, data: &str, _is_t
     }
 }
 
-fn dispatch_ws_close(ctx: &mut JSContext, ws_obj_ptr: usize, code: u16, reason: String) {
+fn dispatch_ws_close(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::object::JSObject, code: u16, reason: String) {
     let ws_obj = crate::value::JSValue::new_object(ws_obj_ptr);
     let ws_obj = ws_obj.as_object();
     let on_close = ws_obj
@@ -1144,14 +1144,14 @@ fn dispatch_ws_close(ctx: &mut JSContext, ws_obj_ptr: usize, code: u16, reason: 
             ctx.intern("reason"),
             crate::value::JSValue::new_string(ctx.intern(&reason)),
         );
-        let ptr = Box::into_raw(Box::new(evt)) as usize;
+        let ptr = Box::into_raw(Box::new(evt));
         let evt_val = crate::value::JSValue::new_object(ptr);
         ctx.event_loop_mut()
             .schedule_macrotask(on_close, vec![evt_val]);
     }
 }
 
-fn dispatch_ws_error(ctx: &mut JSContext, ws_obj_ptr: usize, error: &str) {
+fn dispatch_ws_error(ctx: &mut JSContext, ws_obj_ptr: *mut crate::object::object::JSObject, error: &str) {
     let ws_obj = crate::value::JSValue::new_object(ws_obj_ptr);
     let ws_obj = ws_obj.as_object();
     let on_error = ws_obj
@@ -1166,7 +1166,7 @@ fn dispatch_ws_error(ctx: &mut JSContext, ws_obj_ptr: usize, error: &str) {
 
 fn dispatch_sse_event(
     ctx: &mut JSContext,
-    es_obj_ptr: usize,
+    es_obj_ptr: *mut crate::object::object::JSObject,
     event: &crate::builtins::eventsource::SseEvent,
 ) {
     let es_obj = crate::value::JSValue::new_object(es_obj_ptr);
@@ -1192,7 +1192,7 @@ fn dispatch_sse_event(
                 crate::value::JSValue::new_string(ctx.intern(&event.last_event_id)),
             );
         }
-        let ptr = Box::into_raw(Box::new(evt)) as usize;
+        let ptr = Box::into_raw(Box::new(evt));
         let evt_val = crate::value::JSValue::new_object(ptr);
         ctx.event_loop_mut()
             .schedule_macrotask(on_msg, vec![evt_val]);

@@ -50,7 +50,7 @@ pub fn number_to_exponential(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_type_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -68,7 +68,7 @@ pub fn number_to_exponential(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -149,7 +149,7 @@ pub fn number_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_range_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -196,18 +196,17 @@ pub fn number_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let mut is_number_wrapper = false;
         if let Some(np) = number_proto {
             let this_ptr = this.get_ptr();
-            if this_ptr as usize == np as usize {
+            if this_ptr == np {
                 is_number_wrapper = true;
             }
             if !is_number_wrapper {
-                let np_usize = np as usize;
                 let mut current = this.as_object().prototype_object();
                 let mut depth = 0u32;
                 while let Some(p) = current {
                     if depth > 10 {
                         break;
                     }
-                    if p as *const crate::object::object::JSObject as usize == np_usize {
+                    if std::ptr::eq( p, np) {
                         is_number_wrapper = true;
                         break;
                     }

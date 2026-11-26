@@ -18,7 +18,7 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
         ctx.common_atoms.message,
         JSValue::new_string(ctx.intern(msg)),
     );
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -26,7 +26,7 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
 fn create_builtin_function(ctx: &mut JSContext, name: &str, arity: u32) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -127,7 +127,7 @@ fn symbol_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         None => {
             let mut new_reg = JSObject::new_array();
             new_reg.set(ctx.common_atoms.length, JSValue::new_int(0));
-            let reg_ptr = Box::into_raw(Box::new(new_reg)) as usize;
+            let reg_ptr = Box::into_raw(Box::new(new_reg));
             ctx.runtime_mut().gc_heap_mut().track(reg_ptr);
             ctx.runtime_mut().gc_heap_mut().extra_roots.push(JSValue::new_object(reg_ptr));
             ctx.set_symbol_registry_ptr(Some(reg_ptr));
@@ -162,7 +162,7 @@ fn symbol_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut entry = JSObject::new();
     entry.set(ctx.intern("description"), JSValue::new_string(key));
     entry.set(ctx.intern("symbol"), new_sym);
-    let entry_ptr = Box::into_raw(Box::new(entry)) as usize;
+    let entry_ptr = Box::into_raw(Box::new(entry));
     let entry_val = JSValue::new_object(entry_ptr);
     let idx_atom = ctx.intern(&len.to_string());
     reg.set(idx_atom, entry_val);
@@ -629,7 +629,7 @@ pub fn init_symbol(ctx: &mut JSContext) {
     sym_proto.set(ctx.intern("toString"), to_string_fn.clone());
     sym_proto.set(ctx.intern("valueOf"), value_of_fn.clone());
 
-    let proto_ptr = Box::into_raw(Box::new(sym_proto)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(sym_proto));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     symbol_ctor.base.set(ctx.intern("prototype"), proto_value);
@@ -649,7 +649,7 @@ pub fn init_symbol(ctx: &mut JSContext) {
         },
     );
 
-    let symbol_ptr = Box::into_raw(Box::new(symbol_ctor)) as usize;
+    let symbol_ptr = Box::into_raw(Box::new(symbol_ctor));
     ctx.runtime_mut().gc_heap_mut().track_function(symbol_ptr);
     let symbol_ctor_val = JSValue::new_function(symbol_ptr);
 
@@ -756,7 +756,7 @@ pub fn register_builtins(ctx: &mut JSContext) {
 pub fn fix_prototype_chain(ctx: &mut JSContext) {
     if let Some(sym_proto_ptr) = ctx.get_symbol_prototype() {
         if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
-            let sym_proto_val = JSValue::new_object(sym_proto_ptr as usize);
+            let sym_proto_val = JSValue::new_object(sym_proto_ptr);
             sym_proto_val.as_object_mut().prototype = Some(obj_proto_ptr);
         }
     }
@@ -883,7 +883,7 @@ pub fn install_species_accessor(ctx: &mut JSContext, ctor_val: &JSValue) {
             set: None,
         };
         f.base.define_property(ctx.common_atoms.length, length_desc);
-        let ptr = Box::into_raw(Box::new(f)) as usize;
+        let ptr = Box::into_raw(Box::new(f));
         ctx.runtime_mut().gc_heap_mut().track_function(ptr);
         JSValue::new_function(ptr)
     };

@@ -42,7 +42,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -142,7 +142,7 @@ fn this_to_string(ctx: &mut JSContext, this: &JSValue) -> Option<String> {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return None;
@@ -225,7 +225,7 @@ fn require_string_coercible(ctx: &mut JSContext, this: &JSValue) -> Option<Strin
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return None;
@@ -310,7 +310,7 @@ pub fn init_string(ctx: &mut JSContext) {
         },
     );
 
-    let string_ptr = Box::into_raw(Box::new(string_func)) as usize;
+    let string_ptr = Box::into_raw(Box::new(string_func));
     ctx.runtime_mut().gc_heap_mut().track_function(string_ptr);
     let string_value = JSValue::new_function(string_ptr);
     let global = ctx.global();
@@ -598,7 +598,7 @@ pub fn init_string(ctx: &mut JSContext) {
         proto_obj.prototype = Some(obj_proto_ptr);
     }
 
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
 
     ctx.set_string_prototype(proto_ptr);
@@ -1102,7 +1102,7 @@ fn string_normalize(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_range_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -1211,7 +1211,7 @@ fn string_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if let Some(proto) = ctx.get_type_error_prototype() {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
     JSValue::undefined()
@@ -1256,7 +1256,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result.set_prototype_raw(p);
     }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
     let s = match require_string_coercible(ctx, &args[0]) {
@@ -1336,7 +1336,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 result.set(key, JSValue::new_string(part_atom));
             }
             result.set(length_atom, JSValue::new_int(parts.len() as i64));
-            let ptr = Box::into_raw(Box::new(result)) as usize;
+            let ptr = Box::into_raw(Box::new(result));
             return JSValue::new_object(ptr);
         }
     }
@@ -1368,7 +1368,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result.set_prototype_raw(p);
     }
             result.set(length_atom, JSValue::new_int(0));
-            let ptr = Box::into_raw(Box::new(result)) as usize;
+            let ptr = Box::into_raw(Box::new(result));
             return JSValue::new_object(ptr);
         }
         let mut result = JSObject::new_array();
@@ -1377,7 +1377,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
         result.set(ctx.int_atom_mut(0), JSValue::new_string(s_atom));
         result.set(length_atom, JSValue::new_int(1));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
 
@@ -1398,7 +1398,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result.set_prototype_raw(p);
     }
         result.set(length_atom, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
 
@@ -1428,7 +1428,7 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result.set(length_atom, JSValue::new_int(count as i64));
     }
 
-    let ptr = Box::into_raw(Box::new(result)) as usize;
+    let ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(ptr)
 }
 
@@ -1499,7 +1499,7 @@ fn string_fromcodepoint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_type_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -1517,7 +1517,7 @@ fn string_fromcodepoint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_range_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -2169,7 +2169,7 @@ fn string_match_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result.set_prototype_raw(p);
     }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
     let s = match require_string_coercible(ctx, &args[0]) {
@@ -2202,7 +2202,7 @@ fn string_match_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     ctx.common_atoms.message,
                     JSValue::new_string(ctx.intern("matchAll requires a global RegExp")),
                 );
-                let ptr = Box::into_raw(Box::new(err_obj)) as usize;
+                let ptr = Box::into_raw(Box::new(err_obj));
                 return JSValue::new_object(ptr);
             }
 
@@ -2234,7 +2234,7 @@ fn string_match_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     if pattern.is_empty() {
         result_array.set(length_atom, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result_array)) as usize;
+        let ptr = Box::into_raw(Box::new(result_array));
         return JSValue::new_object(ptr);
     }
 
@@ -2261,7 +2261,7 @@ fn string_match_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     let key = ctx.int_atom_mut(match_count);
                     result_array.set(
                         key,
-                        JSValue::new_object(Box::into_raw(Box::new(match_obj)) as usize),
+                        JSValue::new_object(Box::into_raw(Box::new(match_obj))),
                     );
 
                     match_count += 1;
@@ -2280,7 +2280,7 @@ fn string_match_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     result_array.set(length_atom, JSValue::new_int(match_count as i64));
-    let ptr = Box::into_raw(Box::new(result_array)) as usize;
+    let ptr = Box::into_raw(Box::new(result_array));
     JSValue::new_object(ptr)
 }
 
@@ -2423,7 +2423,7 @@ fn string_match(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 arr.set(key, JSValue::new_string(ctx.intern(m)));
             }
             arr.set(length_atom, JSValue::new_int(results.len() as i64));
-            let ptr = Box::into_raw(Box::new(arr)) as usize;
+            let ptr = Box::into_raw(Box::new(arr));
             JSValue::new_object(ptr)
         } else {
             let found = compiled.as_ref().and_then(|re| re.find(&s));
@@ -2439,7 +2439,7 @@ fn string_match(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 result.set(ctx.common_atoms.index, JSValue::new_int(start as i64));
                 result.set(ctx.common_atoms.input, JSValue::new_string(ctx.intern(&s)));
                 result.set(ctx.common_atoms.length, JSValue::new_int(1));
-                let ptr = Box::into_raw(Box::new(result)) as usize;
+                let ptr = Box::into_raw(Box::new(result));
                 JSValue::new_object(ptr)
             } else {
                 JSValue::null()
@@ -2617,7 +2617,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -2637,7 +2637,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -2661,7 +2661,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_type_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -2681,7 +2681,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();

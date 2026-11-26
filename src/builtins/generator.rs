@@ -44,7 +44,7 @@ pub fn init_generator(ctx: &mut JSContext) {
         false,
         true,
     );
-    let iterator_proto_ptr = Box::into_raw(Box::new(iterator_proto)) as usize;
+    let iterator_proto_ptr = Box::into_raw(Box::new(iterator_proto));
     ctx.runtime_mut().gc_heap_mut().track(iterator_proto_ptr);
 
     ctx.register_builtin(
@@ -60,7 +60,7 @@ pub fn init_generator(ctx: &mut JSContext) {
             create_builtin_function(ctx, "async_iterator_prototype_symbol_async_iterator");
         define_data_property(&mut async_iterator_proto, sym_atom, method, true, true);
     }
-    let async_iterator_proto_ptr = Box::into_raw(Box::new(async_iterator_proto)) as usize;
+    let async_iterator_proto_ptr = Box::into_raw(Box::new(async_iterator_proto));
     ctx.runtime_mut().gc_heap_mut().track(async_iterator_proto_ptr);
 
     ctx.register_builtin(
@@ -122,8 +122,8 @@ pub fn init_generator(ctx: &mut JSContext) {
         false,
         true,
     );
-    gen_proto.prototype = Some(iterator_proto_ptr as *mut crate::object::object::JSObject);
-    let proto_ptr = Box::into_raw(Box::new(gen_proto)) as usize;
+    gen_proto.prototype = Some(iterator_proto_ptr);
+    let proto_ptr = Box::into_raw(Box::new(gen_proto));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_generator_prototype(proto_ptr);
 
@@ -153,7 +153,7 @@ pub fn init_generator(ctx: &mut JSContext) {
         true,
     );
     let generator_function_proto_ptr =
-        Box::into_raw(Box::new(generator_function_proto)) as usize;
+        Box::into_raw(Box::new(generator_function_proto));
     ctx.runtime_mut()
         .gc_heap_mut()
         .track(generator_function_proto_ptr);
@@ -218,9 +218,9 @@ pub fn init_generator(ctx: &mut JSContext) {
         true,
     );
     async_gen_proto.prototype =
-        Some(async_iterator_proto_ptr as *mut crate::object::object::JSObject);
+        Some(async_iterator_proto_ptr);
 
-    let async_proto_ptr = Box::into_raw(Box::new(async_gen_proto)) as usize;
+    let async_proto_ptr = Box::into_raw(Box::new(async_gen_proto));
     ctx.runtime_mut().gc_heap_mut().track(async_proto_ptr);
     ctx.set_async_generator_prototype(async_proto_ptr);
 
@@ -250,7 +250,7 @@ pub fn init_generator(ctx: &mut JSContext) {
         true,
     );
     let async_generator_function_proto_ptr =
-        Box::into_raw(Box::new(async_generator_function_proto)) as usize;
+        Box::into_raw(Box::new(async_generator_function_proto));
     ctx.runtime_mut()
         .gc_heap_mut()
         .track(async_generator_function_proto_ptr);
@@ -304,7 +304,7 @@ fn create_generator_constructor(
     if let Some(fn_pp) = ctx.get_function_prototype() {
         func.base.prototype = Some(fn_pp);
     }
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
     let func_ref = value.as_function_mut();
@@ -388,7 +388,7 @@ fn dynamic_generator_function_constructor(
             if let Some(proto) = ctx.get_syntax_error_prototype() {
                 err.prototype = Some(proto);
             }
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             JSValue::undefined()
@@ -410,10 +410,10 @@ fn create_builtin_function(ctx: &mut JSContext, builtin_name: &str) -> JSValue {
     func.set_builtin_marker(ctx, builtin_name);
     let proto_atom = ctx.intern("prototype");
     let proto_obj = JSObject::new();
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     func.base.set(proto_atom, JSValue::new_object(proto_ptr));
 
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -552,7 +552,7 @@ fn finish_generator_step(
                 let mut err = JSObject::new();
                 err.set(ctx.intern("name"), JSValue::new_string(ctx.intern("Error")));
                 err.set(ctx.intern("message"), JSValue::new_string(ctx.intern(&msg)));
-                let ptr = Box::into_raw(Box::new(err)) as usize;
+                let ptr = Box::into_raw(Box::new(err));
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                 JSValue::new_object(ptr)
             });
@@ -634,7 +634,7 @@ fn make_type_error(ctx: &mut JSContext, message: &str) -> JSValue {
     if let Some(proto) = ctx.get_type_error_prototype() {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -745,7 +745,7 @@ fn create_iterator_result(ctx: &mut JSContext, value: JSValue, done: bool) -> JS
         result.prototype = Some(proto_ptr);
     }
 
-    let ptr = Box::into_raw(Box::new(result)) as usize;
+    let ptr = Box::into_raw(Box::new(result));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }

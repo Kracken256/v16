@@ -1,10 +1,12 @@
+use crate::object::object::JSObject;
 use crate::object::shape::ShapeId;
 
 #[derive(Clone, Copy)]
 struct InlineCacheRead {
     shape_id: u32,
     offset: u32,
-    proto_ptr: usize,
+    proto_ptr: *mut JSObject,
+    global_atom: u32,
 }
 
 impl InlineCacheRead {
@@ -13,7 +15,8 @@ impl InlineCacheRead {
         Self {
             shape_id: u32::MAX,
             offset: 0,
-            proto_ptr: 0,
+            proto_ptr: std::ptr::null_mut(),
+            global_atom: 0,
         }
     }
 }
@@ -52,7 +55,7 @@ impl std::fmt::Debug for InlineCacheRead {
         write!(
             f,
             "ICRead(shape={}, off={}, proto={})",
-            self.shape_id as usize, self.offset, self.proto_ptr
+            self.shape_id as usize, self.offset, self.proto_ptr as usize
         )
     }
 }
@@ -76,13 +79,13 @@ impl InlineCache {
     }
 
     #[inline(always)]
-    pub fn get(&self, shape_id: ShapeId) -> Option<(u32, Option<usize>)> {
+    pub fn get(&self, shape_id: ShapeId) -> Option<(u32, Option<*mut JSObject>)> {
         let sid = shape_id.0 as u32;
         let r0 = &self.reads[0];
         if r0.shape_id == sid {
             return Some((
                 r0.offset,
-                if r0.proto_ptr == 0 {
+                if r0.proto_ptr.is_null() {
                     None
                 } else {
                     Some(r0.proto_ptr)
@@ -93,7 +96,7 @@ impl InlineCache {
         if r1.shape_id == sid {
             return Some((
                 r1.offset,
-                if r1.proto_ptr == 0 {
+                if r1.proto_ptr.is_null() {
                     None
                 } else {
                     Some(r1.proto_ptr)
@@ -113,12 +116,13 @@ impl InlineCache {
         }
     }
 
-    pub fn insert(&mut self, shape_id: ShapeId, offset: u32, proto_ptr: Option<usize>) {
+    pub fn insert(&mut self, shape_id: ShapeId, offset: u32, proto_ptr: Option<*mut JSObject>) {
         self.reads[1] = self.reads[0];
         self.reads[0] = InlineCacheRead {
             shape_id: shape_id.0 as u32,
             offset,
-            proto_ptr: proto_ptr.unwrap_or(0),
+            proto_ptr: proto_ptr.unwrap_or(std::ptr::null_mut()),
+            global_atom: 0,
         };
     }
 
@@ -185,7 +189,7 @@ impl InlineCacheTable {
     pub fn get_own_fast(&self, pc: usize, shape_id: usize) -> Option<u32> {
         if let Some(ic) = self.caches.get(pc) {
             let r = ic.reads[0];
-            if r.shape_id == shape_id as u32 && r.proto_ptr == 0 {
+            if r.shape_id == shape_id as u32 && r.proto_ptr.is_null() && r.global_atom == 0 {
                 return Some(r.offset);
             }
         }
@@ -193,7 +197,7 @@ impl InlineCacheTable {
     }
 
     #[inline(always)]
-    pub fn get_reads0_fast(&self, pc: usize, shape_id: usize) -> Option<(u32, usize)> {
+    pub fn get_reads0_fast(&self, pc: usize, shape_id: usize) -> Option<(u32, *mut JSObject)> {
         if let Some(ic) = self.caches.get(pc) {
             let r = ic.reads[0];
             if r.shape_id == shape_id as u32 {
@@ -204,18 +208,18 @@ impl InlineCacheTable {
     }
 
     #[inline(always)]
-    pub fn get_reads0_values(&self, pc: usize, shape_id: usize) -> (bool, u32, usize) {
+    pub fn get_reads0_values(&self, pc: usize, shape_id: usize) -> (bool, u32, *mut JSObject) {
         if let Some(ic) = self.caches.get(pc) {
             let r = &ic.reads[0];
             if r.shape_id == shape_id as u32 {
                 return (true, r.offset, r.proto_ptr);
             }
         }
-        (false, 0, 0)
+        (false, 0, std::ptr::null_mut())
     }
 
     #[inline(always)]
-    pub fn get_reads123_values(&self, pc: usize, shape_id: usize) -> (bool, u32, usize) {
+    pub fn get_reads123_values(&self, pc: usize, shape_id: usize) -> (bool, u32, *mut JSObject) {
         if let Some(ic) = self.caches.get(pc) {
             let sid = shape_id as u32;
             let r1 = ic.reads[1];
@@ -223,7 +227,7 @@ impl InlineCacheTable {
                 return (true, r1.offset, r1.proto_ptr);
             }
         }
-        (false, 0, 0)
+        (false, 0, std::ptr::null_mut())
     }
 
     #[inline(always)]
@@ -260,7 +264,7 @@ impl InlineCacheTable {
         if let Some(ic) = self.caches.get(pc) {
             let r = &ic.reads[0];
 
-            if r.shape_id == global_shape_id as u32 && r.proto_ptr == atom_id as usize + 1 {
+            if r.shape_id == global_shape_id as u32 && r.global_atom == atom_id + 1 {
                 return Some(r.offset);
             }
         }
@@ -280,7 +284,8 @@ impl InlineCacheTable {
             ic.reads[0] = InlineCacheRead {
                 shape_id: global_shape_id as u32,
                 offset,
-                proto_ptr: atom_id as usize + 1,
+                proto_ptr: std::ptr::null_mut(),
+                global_atom: atom_id + 1,
             };
         }
     }
@@ -358,7 +363,8 @@ mod tests {
     fn test_inline_cache_prototype() {
         let mut ic = InlineCache::new();
         let shape_id = test_shape_id();
-        let proto = 0x1234usize;
+        let mut object = JSObject::new();
+        let proto = &mut object as *mut JSObject;
 
         ic.insert(shape_id, 7, Some(proto));
         assert_eq!(ic.get(shape_id), Some((7, Some(proto))));

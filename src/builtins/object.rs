@@ -18,7 +18,7 @@ fn throw_type_error_obj(ctx: &mut JSContext, msg: &str) {
         ctx.common_atoms.message,
         JSValue::new_string(ctx.intern(msg)),
     );
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -40,7 +40,7 @@ pub fn object_to_object(ctx: &mut JSContext, value: &JSValue) -> JSValue {
                 elements.push(JSValue::new_string(atom));
             }
         }
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
@@ -50,7 +50,7 @@ pub fn object_to_object(ctx: &mut JSContext, value: &JSValue) -> JSValue {
             obj.prototype = Some(proto_ptr);
         }
         obj.set(ctx.common_atoms.__value__, *value);
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
@@ -60,7 +60,7 @@ pub fn object_to_object(ctx: &mut JSContext, value: &JSValue) -> JSValue {
             obj.prototype = Some(proto_ptr);
         }
         obj.set(ctx.common_atoms.__value__, *value);
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
@@ -70,7 +70,7 @@ pub fn object_to_object(ctx: &mut JSContext, value: &JSValue) -> JSValue {
             obj.prototype = Some(proto_ptr);
         }
         obj.set(ctx.common_atoms.__value__, *value);
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
@@ -80,7 +80,7 @@ pub fn object_to_object(ctx: &mut JSContext, value: &JSValue) -> JSValue {
             obj.prototype = Some(proto_ptr);
         }
         obj.set(ctx.common_atoms.__value__, *value);
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
@@ -131,7 +131,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = crate::object::function::JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -209,14 +209,14 @@ pub fn init_object(ctx: &mut JSContext) {
         ctx.intern("__lookupSetter__"),
         create_builtin_function(ctx, "object_lookup_setter"),
     );
-    let proto_ptr = Box::into_raw(Box::new(proto_obj)) as usize;
+    let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_object_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
 
     let mut object_obj = JSFunction::new_builtin(object_atom, 1);
     object_obj.set_builtin_marker(ctx, "object_constructor");
-    object_obj.base.prototype = Some(proto_ptr as *mut JSObject);
+    object_obj.base.prototype = Some(proto_ptr);
     crate::builtins::global::set_non_enumerable(&mut object_obj.base, 
         ctx.common_atoms.keys,
         create_builtin_function(ctx, "object_keys"),
@@ -237,7 +237,7 @@ pub fn init_object(ctx: &mut JSContext) {
         let mut create_func =
             crate::object::function::JSFunction::new_builtin(ctx.intern("object_create"), 2);
         create_func.set_builtin_marker(ctx, "object_create");
-        let ptr = Box::into_raw(Box::new(create_func)) as usize;
+        let ptr = Box::into_raw(Box::new(create_func));
         ctx.runtime_mut().gc_heap_mut().track_function(ptr);
         object_obj
             .base
@@ -324,12 +324,12 @@ pub fn init_object(ctx: &mut JSContext) {
         },
     );
 
-    let object_ptr = Box::into_raw(Box::new(object_obj)) as usize;
+    let object_ptr = Box::into_raw(Box::new(object_obj));
     ctx.runtime_mut().gc_heap_mut().track_function(object_ptr);
     let object_value = JSValue::new_function(object_ptr);
 
     if let Some(op) = ctx.get_object_prototype() {
-        let op_val = JSValue::new_object(op as usize);
+        let op_val = JSValue::new_object(op);
         op_val
             .as_object_mut()
             .set(ctx.common_atoms.constructor, object_value);
@@ -355,7 +355,7 @@ fn object_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 obj.prototype = Some(proto_ptr);
             }
             obj.set(ctx.common_atoms.__value__, arg);
-            let ptr = Box::into_raw(Box::new(obj)) as usize;
+            let ptr = Box::into_raw(Box::new(obj));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             return JSValue::new_object(ptr);
         }
@@ -368,7 +368,7 @@ fn object_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             obj.set(ctx.common_atoms.__value__, arg);
             let s = ctx.get_atom_str(arg.get_atom());
             obj.set(ctx.common_atoms.length, JSValue::new_int(s.len() as i64));
-            let ptr = Box::into_raw(Box::new(obj)) as usize;
+            let ptr = Box::into_raw(Box::new(obj));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             return JSValue::new_object(ptr);
         }
@@ -379,7 +379,7 @@ fn object_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 obj.prototype = Some(proto_ptr);
             }
             obj.set(ctx.common_atoms.__value__, arg);
-            let ptr = Box::into_raw(Box::new(obj)) as usize;
+            let ptr = Box::into_raw(Box::new(obj));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             return JSValue::new_object(ptr);
         }
@@ -390,7 +390,7 @@ fn object_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 obj.prototype = Some(proto_ptr);
             }
             obj.set(ctx.common_atoms.__value__, arg);
-            let ptr = Box::into_raw(Box::new(obj)) as usize;
+            let ptr = Box::into_raw(Box::new(obj));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             return JSValue::new_object(ptr);
         }
@@ -401,7 +401,7 @@ fn object_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 obj.prototype = Some(proto_ptr);
             }
             obj.set(ctx.common_atoms.__value__, arg);
-            let ptr = Box::into_raw(Box::new(obj)) as usize;
+            let ptr = Box::into_raw(Box::new(obj));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             return JSValue::new_object(ptr);
         }
@@ -410,7 +410,7 @@ fn object_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if let Some(proto_ptr) = ctx.get_object_prototype() {
         obj.prototype = Some(proto_ptr);
     }
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     JSValue::new_object(ptr)
 }
 
@@ -564,7 +564,7 @@ fn object_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             result.prototype = Some(proto_ptr);
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
@@ -582,7 +582,7 @@ fn object_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             JSValue::new_string(ctx.intern(&key_str)),
         );
     }
-    let result_ptr = Box::into_raw(Box::new(result)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(result_ptr)
 }
 
@@ -601,7 +601,7 @@ fn object_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             result.prototype = Some(proto_ptr);
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
@@ -622,7 +622,7 @@ fn object_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     for (i, val) in values.iter().enumerate() {
         result.set(ctx.int_atom_mut(i), *val);
     }
-    let result_ptr = Box::into_raw(Box::new(result)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(result_ptr)
 }
 
@@ -641,7 +641,7 @@ fn object_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             result.prototype = Some(proto_ptr);
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
@@ -675,11 +675,11 @@ fn object_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         );
         pair.set(ctx.intern("1"), *val);
 
-        let pair_ptr = Box::into_raw(Box::new(pair)) as usize;
+        let pair_ptr = Box::into_raw(Box::new(pair));
         result.set(ctx.int_atom_mut(i), JSValue::new_object(pair_ptr));
     }
 
-    let result_ptr = Box::into_raw(Box::new(result)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(result_ptr)
 }
 
@@ -788,7 +788,7 @@ fn throw_desc_type_error(ctx: &mut JSContext, msg: &str) {
     }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
@@ -920,7 +920,7 @@ fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     if !args.is_empty() && args[0].is_object() {
         let proto_ptr = args[0].get_ptr();
-        new_obj.prototype = Some(proto_ptr as *mut JSObject);
+        new_obj.prototype = Some(proto_ptr);
     } else if !args.is_empty() && args[0].is_null() {
     }
 
@@ -933,7 +933,7 @@ fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(proto) = ctx.get_type_error_prototype() { err.prototype = Some(proto); }
             err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
             err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("Cannot convert undefined or null to object")));
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(ptr);
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -949,7 +949,7 @@ fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 if let Some(proto) = ctx.get_type_error_prototype() { err.prototype = Some(proto); }
                 err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
                 err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("Property description must be an object")));
-                let ptr = Box::into_raw(Box::new(err)) as usize;
+                let ptr = Box::into_raw(Box::new(err));
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                 ctx.pending_exception = Some(JSValue::new_object(ptr));
                 return JSValue::undefined();
@@ -973,7 +973,7 @@ fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let ptr = Box::into_raw(Box::new(new_obj)) as usize;
+    let ptr = Box::into_raw(Box::new(new_obj));
     JSValue::new_object(ptr)
 }
 
@@ -993,7 +993,7 @@ fn object_get_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let obj_ref = obj.as_object();
     if let Some(proto_ptr) = obj_ref.prototype {
-        return JSValue::new_object(proto_ptr as usize);
+        return JSValue::new_object(proto_ptr);
     }
     JSValue::null()
 }
@@ -1006,7 +1006,7 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let obj = args[0].as_object_mut();
     if args[1].is_object_like() {
-        let new_proto = args[1].get_ptr() as *mut JSObject;
+        let new_proto = args[1].get_ptr();
         // Object.prototype is immutable
         if let Some(proto_ptr) = ctx.get_object_prototype() {
             if obj as *mut JSObject == proto_ptr {
@@ -1022,7 +1022,7 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                         ctx.common_atoms.message,
                         JSValue::new_string(ctx.intern("Object.prototype is immutable")),
                     );
-                    let eptr = Box::into_raw(Box::new(err)) as usize;
+                    let eptr = Box::into_raw(Box::new(err));
                     ctx.runtime_mut().gc_heap_mut().track(eptr);
                     ctx.pending_exception = Some(JSValue::new_object(eptr));
                     return JSValue::undefined();
@@ -1041,7 +1041,7 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 ctx.common_atoms.message,
                 JSValue::new_string(ctx.intern("Cannot set prototype of a non-extensible object")),
             );
-            let eptr = Box::into_raw(Box::new(err)) as usize;
+            let eptr = Box::into_raw(Box::new(err));
             ctx.runtime_mut().gc_heap_mut().track(eptr);
             ctx.pending_exception = Some(JSValue::new_object(eptr));
             return JSValue::undefined();
@@ -1060,7 +1060,7 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     ctx.common_atoms.message,
                     JSValue::new_string(ctx.intern("Cyclic __proto__ value")),
                 );
-                let eptr = Box::into_raw(Box::new(err)) as usize;
+                let eptr = Box::into_raw(Box::new(err));
                     ctx.runtime_mut().gc_heap_mut().track(eptr);
                 ctx.pending_exception = Some(JSValue::new_object(eptr));
                 return JSValue::undefined();
@@ -1284,7 +1284,7 @@ fn define_legacy_accessor(
             ctx.common_atoms.message,
             JSValue::new_string(ctx.intern("this is not an object")),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1306,7 +1306,7 @@ fn define_legacy_accessor(
             ctx.common_atoms.message,
             JSValue::new_string(ctx.intern("getter/setter must be a function")),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1334,7 +1334,7 @@ fn define_legacy_accessor(
             ctx.common_atoms.message,
             JSValue::new_string(ctx.intern("Cannot redefine property")),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1356,7 +1356,7 @@ fn object_from_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result.prototype = Some(obj_proto_ptr);
     }
     if args.is_empty() || !args[0].is_object() {
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
     let iterable = args[0];
@@ -1385,7 +1385,7 @@ fn object_from_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             }
         }
     }
-    let result_ptr = Box::into_raw(Box::new(result)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(result_ptr)
 }
 
@@ -1448,7 +1448,7 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
             result.prototype = Some(proto_ptr);
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
 
@@ -1459,7 +1459,7 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
             result.prototype = Some(proto_ptr);
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
 
@@ -1484,7 +1484,7 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
         result.set(ctx.int_atom_mut(i), value);
     }
 
-    let result_ptr = Box::into_raw(Box::new(result)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(result_ptr)
 }
 
@@ -1584,7 +1584,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = _ctx.get_type_error_prototype() { err.prototype = Some(proto); }
         err.set(_ctx.common_atoms.name, JSValue::new_string(_ctx.intern("TypeError")));
         err.set(_ctx.common_atoms.message, JSValue::new_string(_ctx.intern("Object.defineProperty called on non-object")));
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         _ctx.runtime_mut().gc_heap_mut().track(ptr);
         _ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1603,7 +1603,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = _ctx.get_type_error_prototype() { err.prototype = Some(proto); }
         err.set(_ctx.common_atoms.name, JSValue::new_string(_ctx.intern("TypeError")));
         err.set(_ctx.common_atoms.message, JSValue::new_string(_ctx.intern("Property description must be an object")));
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         _ctx.runtime_mut().gc_heap_mut().track(ptr);
         _ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1648,7 +1648,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 _ctx.common_atoms.message,
                 JSValue::new_string(_ctx.intern("Cannot redefine property")),
             );
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             _ctx.runtime_mut().gc_heap_mut().track(ptr);
             _ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -1677,7 +1677,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     _ctx.common_atoms.message,
                     JSValue::new_string(_ctx.intern("Cannot redefine property: length")),
                 );
-                let ptr = Box::into_raw(Box::new(err)) as usize;
+                let ptr = Box::into_raw(Box::new(err));
                 _ctx.runtime_mut().gc_heap_mut().track(ptr);
                 _ctx.pending_exception = Some(JSValue::new_object(ptr));
                 return JSValue::undefined();
@@ -1709,7 +1709,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                         _ctx.common_atoms.message,
                         JSValue::new_string(_ctx.intern("Invalid array length")),
                     );
-                    let ptr = Box::into_raw(Box::new(err)) as usize;
+                    let ptr = Box::into_raw(Box::new(err));
                     _ctx.runtime_mut().gc_heap_mut().track(ptr);
                     _ctx.pending_exception = Some(JSValue::new_object(ptr));
                     return JSValue::undefined();
@@ -1764,7 +1764,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             _ctx.common_atoms.message,
             JSValue::new_string(_ctx.intern(&format!("Cannot redefine property: {}", name_str))),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         _ctx.runtime_mut().gc_heap_mut().track(ptr);
         _ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -1814,7 +1814,7 @@ fn object_define_properties(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 _ctx.common_atoms.message,
                 JSValue::new_string(_ctx.intern("Cannot redefine property")),
             );
-            let ptr = Box::into_raw(Box::new(err)) as usize;
+            let ptr = Box::into_raw(Box::new(err));
             _ctx.runtime_mut().gc_heap_mut().track(ptr);
             _ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
@@ -1931,7 +1931,7 @@ fn object_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) -> 
         desc_obj.set(ctx.intern("enumerable"), JSValue::bool(pd.enumerable));
         desc_obj.set(ctx.intern("configurable"), JSValue::bool(pd.configurable));
 
-        let ptr = Box::into_raw(Box::new(desc_obj)) as usize;
+        let ptr = Box::into_raw(Box::new(desc_obj));
         return JSValue::new_object(ptr);
     }
 
@@ -1942,7 +1942,7 @@ fn object_get_own_property_descriptors(ctx: &mut JSContext, args: &[JSValue]) ->
     let mut result = JSObject::new();
 
     if args.is_empty() || !(args[0].is_object() || args[0].is_function()) {
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     }
 
@@ -1970,12 +1970,12 @@ fn object_get_own_property_descriptors(ctx: &mut JSContext, args: &[JSValue]) ->
             desc_obj.set(ctx.intern("enumerable"), JSValue::bool(pd.enumerable));
             desc_obj.set(ctx.intern("configurable"), JSValue::bool(pd.configurable));
 
-            let desc_ptr = Box::into_raw(Box::new(desc_obj)) as usize;
+            let desc_ptr = Box::into_raw(Box::new(desc_obj));
             result.set(key_atom, JSValue::new_object(desc_ptr));
         }
     }
 
-    let ptr = Box::into_raw(Box::new(result)) as usize;
+    let ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(ptr)
 }
 
@@ -1990,7 +1990,7 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
             ctx.common_atoms.message,
             JSValue::new_string(ctx.intern("Object.getOwnPropertyNames called on non-object")),
         );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -2008,7 +2008,7 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
             ctx.common_atoms.length,
             JSValue::new_int(arg.get_atom().0 as i64),
         );
-        let ptr = Box::into_raw(Box::new(wrapper)) as usize;
+        let ptr = Box::into_raw(Box::new(wrapper));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     } else {
@@ -2017,7 +2017,7 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
             result.prototype = Some(proto_ptr);
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let ptr = Box::into_raw(Box::new(result)) as usize;
+        let ptr = Box::into_raw(Box::new(result));
         return JSValue::new_object(ptr);
     };
 
@@ -2068,6 +2068,6 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
         );
     }
 
-    let ptr = Box::into_raw(Box::new(result)) as usize;
+    let ptr = Box::into_raw(Box::new(result));
     JSValue::new_object(ptr)
 }

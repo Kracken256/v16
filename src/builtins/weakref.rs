@@ -6,7 +6,7 @@ use crate::value::JSValue;
 fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), 1);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -74,7 +74,7 @@ pub fn init_weakref(ctx: &mut JSContext) {
         weakref_proto.prototype = Some(obj_proto_ptr);
     }
 
-    let weakref_proto_ptr = Box::into_raw(Box::new(weakref_proto)) as usize;
+    let weakref_proto_ptr = Box::into_raw(Box::new(weakref_proto));
     ctx.runtime_mut().gc_heap_mut().track(weakref_proto_ptr);
     ctx.set_weakref_prototype(weakref_proto_ptr);
 
@@ -86,7 +86,7 @@ pub fn init_weakref(ctx: &mut JSContext) {
             ctx.common_atoms.prototype,
             JSValue::new_object(weakref_proto_ptr),
         );
-        weakref_func_ref.cached_prototype_ptr = weakref_proto_ptr as *mut JSObject;
+        weakref_func_ref.cached_prototype_ptr = weakref_proto_ptr;
     }
     let weakref_atom = ctx.intern("WeakRef");
     let global = ctx.global();
@@ -114,7 +114,7 @@ pub fn init_weakref(ctx: &mut JSContext) {
         fr_proto.prototype = Some(obj_proto_ptr);
     }
 
-    let fr_proto_ptr = Box::into_raw(Box::new(fr_proto)) as usize;
+    let fr_proto_ptr = Box::into_raw(Box::new(fr_proto));
     ctx.runtime_mut().gc_heap_mut().track(fr_proto_ptr);
     ctx.set_finalization_registry_prototype(fr_proto_ptr);
 
@@ -126,9 +126,10 @@ pub fn init_weakref(ctx: &mut JSContext) {
             ctx.common_atoms.prototype,
             JSValue::new_object(fr_proto_ptr),
         );
-        fr_func_ref.cached_prototype_ptr = fr_proto_ptr as *mut JSObject;
+        fr_func_ref.cached_prototype_ptr = fr_proto_ptr;
     }
     let fr_atom = ctx.intern("FinalizationRegistry");
+    let global = ctx.global();
     if global.is_object() {
         let global_obj = global.as_object_mut();
         crate::builtins::global::set_non_enumerable(global_obj, fr_atom, fr_ctor);
@@ -147,14 +148,14 @@ pub fn weakref_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     if args.is_empty() {
         obj.set(ctx.intern("__weakref_target__"), JSValue::undefined());
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         return JSValue::new_object(ptr);
     }
 
     let target = &args[0];
     if !target.is_object() {
         obj.set(ctx.intern("__weakref_target__"), target.clone());
-        let ptr = Box::into_raw(Box::new(obj)) as usize;
+        let ptr = Box::into_raw(Box::new(obj));
         return JSValue::new_object(ptr);
     }
 
@@ -166,7 +167,7 @@ pub fn weakref_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     );
     obj.set(ctx.intern("__is_weakref__"), JSValue::bool(true));
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     JSValue::new_object(ptr)
 }
 
@@ -205,7 +206,7 @@ pub fn weakref_deref(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return JSValue::undefined();
         }
 
-        return JSValue::new_object(target_ptr);
+        return JSValue::new_object(target_ptr as *mut crate::object::object::JSObject);
     }
 
     target_value
@@ -224,7 +225,7 @@ pub fn finalization_registry_constructor(ctx: &mut JSContext, args: &[JSValue]) 
     );
 
     let held_values_obj = JSObject::new();
-    let held_values_ptr = Box::into_raw(Box::new(held_values_obj)) as usize;
+    let held_values_ptr = Box::into_raw(Box::new(held_values_obj));
     obj.set(
         ctx.intern("__held_values__"),
         JSValue::new_object(held_values_ptr),
@@ -237,7 +238,7 @@ pub fn finalization_registry_constructor(ctx: &mut JSContext, args: &[JSValue]) 
         }
     }
 
-    let ptr = Box::into_raw(Box::new(obj)) as usize;
+    let ptr = Box::into_raw(Box::new(obj));
     let obj_value = JSValue::new_object(ptr);
 
     ctx.finalization_registries.borrow_mut().push(ptr);
@@ -283,7 +284,7 @@ pub fn finalization_registry_register(ctx: &mut JSContext, args: &[JSValue]) -> 
             let held_obj = hvv.as_object_mut();
 
             let key = if unregister_token.is_object() {
-                let token_ptr = unregister_token.get_ptr();
+                let token_ptr = unregister_token.get_ptr() as usize;
                 ctx.intern(&format!("__token_{}__", token_ptr))
             } else {
                 ctx.intern(&format!("__entry_{}__", held_obj.inline_values_len()))
@@ -324,7 +325,7 @@ pub fn finalization_registry_unregister(ctx: &mut JSContext, args: &[JSValue]) -
         return JSValue::bool(false);
     }
 
-    let token_ptr = unregister_token.get_ptr();
+    let token_ptr = unregister_token.get_ptr() as usize;
     let key = ctx.intern(&format!("__token_{}__", token_ptr));
 
     let held_values_atom = ctx.intern("__held_values__");

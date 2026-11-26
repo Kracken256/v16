@@ -14,7 +14,7 @@ pub struct JSRuntime {
     interrupt: AtomicBool,
     module_registry: ModuleRegistry,
     next_symbol_id: u32,
-    symbol_registry: Option<usize>,
+    symbol_registry: Option<*mut crate::object::object::JSObject>,
     symbol_descriptions: crate::util::FxHashMap<u32, Atom>,
 
     pub argv: Vec<String>,
@@ -106,11 +106,11 @@ impl JSRuntime {
         self.symbol_descriptions.get(&id).copied()
     }
 
-    pub fn symbol_registry(&self) -> Option<usize> {
+    pub fn symbol_registry(&self) -> Option<*mut crate::object::object::JSObject> {
         self.symbol_registry
     }
 
-    pub fn set_symbol_registry(&mut self, ptr: Option<usize>) {
+    pub fn set_symbol_registry(&mut self, ptr: Option<*mut crate::object::object::JSObject>) {
         self.symbol_registry = ptr;
     }
 

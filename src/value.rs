@@ -126,13 +126,13 @@ impl JSValue {
     }
 
     #[inline(always)]
-    pub fn new_object(ptr: usize) -> Self {
-        JSValue(Self::pack(TAG_OBJECT, Self::compress_ptr(ptr)))
+    pub fn new_object(ptr: *mut crate::object::object::JSObject) -> Self {
+        JSValue(Self::pack(TAG_OBJECT, Self::compress_ptr(ptr as usize)))
     }
 
     #[inline(always)]
-    pub fn new_function(ptr: usize) -> Self {
-        JSValue(Self::pack(TAG_FUNC, Self::compress_ptr(ptr)))
+    pub fn new_function(ptr: *mut crate::object::function::JSFunction) -> Self {
+        JSValue(Self::pack(TAG_FUNC, Self::compress_ptr(ptr as usize)))
     }
 
     pub fn new_symbol(atom: Atom) -> Self {
@@ -148,8 +148,8 @@ impl JSValue {
         (self.get_payload() >> 32) as u32
     }
 
-    pub fn new_bigint(ptr: usize) -> Self {
-        JSValue(Self::pack(TAG_BIGINT, Self::compress_ptr(ptr)))
+    pub fn new_bigint(ptr: *mut crate::object::object::JSObject) -> Self {
+        JSValue(Self::pack(TAG_BIGINT, Self::compress_ptr(ptr as usize)))
     }
 
     #[inline(always)]
@@ -319,18 +319,23 @@ impl JSValue {
     }
 
     #[inline(always)]
-    pub fn get_ptr(&self) -> usize {
-        Self::decompress_ptr(self.get_payload())
+    pub fn get_ptr(&self) -> *mut crate::object::object::JSObject {
+        Self::decompress_ptr(self.get_payload()) as *mut crate::object::object::JSObject
+    }
+
+    #[inline(always)]
+    pub fn get_function_ptr(&self) -> *mut crate::object::function::JSFunction {
+        self.get_ptr() as *mut crate::object::function::JSFunction
     }
 
     #[inline(always)]
     pub fn as_object(&self) -> &crate::object::object::JSObject {
-        unsafe { &*(self.get_ptr() as *const crate::object::object::JSObject) }
+        unsafe { &*self.get_ptr() }
     }
 
     #[inline(always)]
     pub fn as_object_mut(&self) -> &mut crate::object::object::JSObject {
-        unsafe { &mut *(self.get_ptr() as *mut crate::object::object::JSObject) }
+        unsafe { &mut *self.get_ptr() }
     }
 
     #[inline(always)]

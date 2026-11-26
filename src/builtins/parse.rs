@@ -349,7 +349,7 @@ pub fn global_parsefloat(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     if let Some(proto) = ctx.get_type_error_prototype() {
                         err.prototype = Some(proto);
                     }
-                    let err_ptr = Box::into_raw(Box::new(err)) as usize;
+                    let err_ptr = Box::into_raw(Box::new(err));
                     ctx.runtime_mut().gc_heap_mut().track(err_ptr);
                     vm.pending_throw = Some(JSValue::new_object(err_ptr));
                 });

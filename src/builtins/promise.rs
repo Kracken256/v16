@@ -77,7 +77,7 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
 fn create_builtin_function_arity(ctx: &mut JSContext, name: &str, arity: u32) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func)) as usize;
+    let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     JSValue::new_function(ptr)
 }
@@ -153,7 +153,7 @@ fn get_promise_reactions(ctx: &mut JSContext, obj: &JSObject) -> Vec<Reaction> {
         if reactions_val.is_object() {
             let ptr = reactions_val.get_ptr();
 
-            if ptr == 0 {
+            if ptr.is_null() {
                 return Vec::new();
             }
             let arr = reactions_val.as_object();
@@ -219,12 +219,12 @@ fn create_reaction_array(ctx: &mut JSContext, reactions: Vec<Reaction>) -> JSVal
         r_obj.set(all_settled_atom, JSValue::bool(reaction.is_all_settled));
         r_obj.set(finally_atom, JSValue::bool(reaction.is_finally));
         r_obj.set(target_atom, reaction.target_promise);
-        let r_ptr = Box::into_raw(Box::new(r_obj)) as usize;
+        let r_ptr = Box::into_raw(Box::new(r_obj));
         ctx.runtime_mut().gc_heap_mut().track(r_ptr);
         let idx_atom = intern_str(ctx, &i.to_string());
         arr.set(idx_atom, JSValue::new_object(r_ptr));
     }
-    let ptr = Box::into_raw(Box::new(arr)) as usize;
+    let ptr = Box::into_raw(Box::new(arr));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -303,7 +303,7 @@ fn promise_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let promise = create_promise(ctx);
     let promise_val = {
-        let ptr = Box::into_raw(Box::new(promise)) as usize;
+        let ptr = Box::into_raw(Box::new(promise));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     };
@@ -325,7 +325,7 @@ fn promise_reject(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let mut promise = create_promise(ctx);
     reject_promise(ctx, &mut promise, reason);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     JSValue::new_object(ptr)
 }
 
@@ -338,7 +338,7 @@ fn promise_then(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
@@ -350,7 +350,7 @@ fn promise_then(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let on_fulfilled = args.get(1).copied().unwrap_or(JSValue::undefined());
     let on_rejected = args.get(2).copied().unwrap_or(JSValue::undefined());
     let new_promise = create_promise(ctx);
-    let ptr_new = Box::into_raw(Box::new(new_promise)) as usize;
+    let ptr_new = Box::into_raw(Box::new(new_promise));
     let target = JSValue::new_object(ptr_new);
     let state = get_promise_state(ctx, promise);
     let reactions_atom = intern_str(ctx, PROMISE_REACTIONS_SLOT);
@@ -433,7 +433,7 @@ fn promise_catch(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 if let Some(proto) = ctx.get_type_error_prototype() {
                     err.prototype = Some(proto);
                 }
-                let ptr = Box::into_raw(Box::new(err)) as usize;
+                let ptr = Box::into_raw(Box::new(err));
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                 ctx.pending_exception = Some(JSValue::new_object(ptr));
                 JSValue::undefined()
@@ -480,7 +480,7 @@ fn promise_finally(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 if let Some(proto) = ctx.get_type_error_prototype() {
                     err.prototype = Some(proto);
                 }
-                let ptr = Box::into_raw(Box::new(err)) as usize;
+                let ptr = Box::into_raw(Box::new(err));
                 ctx.runtime_mut().gc_heap_mut().track(ptr);
                 ctx.pending_exception = Some(JSValue::new_object(ptr));
                 JSValue::undefined()
@@ -494,7 +494,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let iterable = args.get(0).copied().unwrap_or(JSValue::undefined());
 
     let result_promise = create_promise(ctx);
-    let result_promise_ptr = Box::into_raw(Box::new(result_promise)) as usize;
+    let result_promise_ptr = Box::into_raw(Box::new(result_promise));
     let result_promise_val = JSValue::new_object(result_promise_ptr);
     ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
@@ -537,7 +537,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let mut empty_arr = create_result_array(ctx);
         let length_atom = intern_str(ctx, "length");
         empty_arr.set(length_atom, JSValue::new_int(0));
-        let arr_ptr = Box::into_raw(Box::new(empty_arr)) as usize;
+        let arr_ptr = Box::into_raw(Box::new(empty_arr));
         ctx.runtime_mut().gc_heap_mut().track(arr_ptr);
         let rp = result_promise_val.as_object_mut();
         fulfill_promise(ctx, rp, JSValue::new_object(arr_ptr));
@@ -547,7 +547,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut results_arr = create_result_array(ctx);
     let length_atom = intern_str(ctx, "length");
     results_arr.set(length_atom, JSValue::new_int(len as i64));
-    let results_ptr = Box::into_raw(Box::new(results_arr)) as usize;
+    let results_ptr = Box::into_raw(Box::new(results_arr));
     ctx.runtime_mut().gc_heap_mut().track(results_ptr);
     let results_val = JSValue::new_object(results_ptr);
 
@@ -608,7 +608,7 @@ fn promise_race(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let iterable = args.get(0).copied().unwrap_or(JSValue::undefined());
 
     let result_promise = create_promise(ctx);
-    let result_promise_ptr = Box::into_raw(Box::new(result_promise)) as usize;
+    let result_promise_ptr = Box::into_raw(Box::new(result_promise));
     let result_promise_val = JSValue::new_object(result_promise_ptr);
     ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
@@ -669,7 +669,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let iterable = args.get(0).copied().unwrap_or(JSValue::undefined());
 
     let result_promise = create_promise(ctx);
-    let result_promise_ptr = Box::into_raw(Box::new(result_promise)) as usize;
+    let result_promise_ptr = Box::into_raw(Box::new(result_promise));
     let result_promise_val = JSValue::new_object(result_promise_ptr);
 
     if !iterable.is_object() {
@@ -687,7 +687,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let mut empty_arr = create_result_array(ctx);
         let length_atom = intern_str(ctx, "length");
         empty_arr.set(length_atom, JSValue::new_int(0));
-        let arr_ptr = Box::into_raw(Box::new(empty_arr)) as usize;
+        let arr_ptr = Box::into_raw(Box::new(empty_arr));
         let rp = result_promise_val.as_object_mut();
         fulfill_promise(ctx, rp, JSValue::new_object(arr_ptr));
         ctx.runtime_mut().gc_heap_mut().track(arr_ptr);
@@ -697,7 +697,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut results_arr = create_result_array(ctx);
     let length_atom = intern_str(ctx, "length");
     results_arr.set(length_atom, JSValue::new_int(len as i64));
-    let results_ptr = Box::into_raw(Box::new(results_arr)) as usize;
+    let results_ptr = Box::into_raw(Box::new(results_arr));
     ctx.runtime_mut().gc_heap_mut().track(results_ptr);
     let results_val = JSValue::new_object(results_ptr);
 
@@ -763,7 +763,7 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let iterable = args.get(0).copied().unwrap_or(JSValue::undefined());
 
     let result_promise = create_promise(ctx);
-    let result_promise_ptr = Box::into_raw(Box::new(result_promise)) as usize;
+    let result_promise_ptr = Box::into_raw(Box::new(result_promise));
     let result_promise_val = JSValue::new_object(result_promise_ptr);
 
     if !iterable.is_object() {
@@ -785,7 +785,7 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_error_prototype() {
             err.prototype = Some(proto);
         }
-        let err_ptr = Box::into_raw(Box::new(err)) as usize;
+        let err_ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(err_ptr);
         reject_promise(ctx, rp, JSValue::new_object(err_ptr));
         return result_promise_val;
@@ -838,15 +838,15 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     ctx.microtask_enqueue(Microtask::Reaction(reaction, reason));
                 }
             }
-        }
     }
+        }
 
     result_promise_val
 }
 
 fn promise_with_resolvers(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     let mut promise = create_promise(ctx);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     let promise_val = JSValue::new_object(ptr);
 
@@ -859,7 +859,7 @@ fn promise_with_resolvers(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     result.set(promise_atom, promise_val);
     result.set(resolve_atom, resolve_val);
     result.set(reject_atom, reject_val);
-    let result_ptr = Box::into_raw(Box::new(result)) as usize;
+    let result_ptr = Box::into_raw(Box::new(result));
     ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     JSValue::new_object(result_ptr)
 }
@@ -872,7 +872,7 @@ fn reject_promise_with_type_error(ctx: &mut JSContext, target: JSValue, message:
     if let Some(proto) = ctx.get_type_error_prototype() {
         err.prototype = Some(proto);
     }
-    let ptr = Box::into_raw(Box::new(err)) as usize;
+    let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     let t = target.as_object_mut();
     if t.is_promise() && get_promise_state(ctx, t).is_pending() {
@@ -946,7 +946,7 @@ fn resolve_value_as_promise(ctx: &mut JSContext, value: JSValue) -> JSValue {
     }
     let mut promise = create_promise(ctx);
     fulfill_promise(ctx, &mut promise, value);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -1014,7 +1014,7 @@ fn create_resolve_reject_fns(ctx: &mut JSContext, promise_val: JSValue) -> (JSVa
     resolve_fn.base.define_property(ctx.common_atoms.name, name_desc);
     let resolve_target_atom = ctx.intern("__target_promise__");
     resolve_fn.base.set(resolve_target_atom, promise_val);
-    let resolve_ptr = Box::into_raw(Box::new(resolve_fn)) as usize;
+    let resolve_ptr = Box::into_raw(Box::new(resolve_fn));
     ctx.runtime_mut().gc_heap_mut().track_function(resolve_ptr);
     let resolve_val = JSValue::new_function(resolve_ptr);
 
@@ -1032,7 +1032,7 @@ fn create_resolve_reject_fns(ctx: &mut JSContext, promise_val: JSValue) -> (JSVa
     reject_fn.base.define_property(ctx.common_atoms.name, name_desc);
     let reject_target_atom = ctx.intern("__target_promise__");
     reject_fn.base.set(reject_target_atom, promise_val);
-    let reject_ptr = Box::into_raw(Box::new(reject_fn)) as usize;
+    let reject_ptr = Box::into_raw(Box::new(reject_fn));
     ctx.runtime_mut().gc_heap_mut().track_function(reject_ptr);
     let reject_val = JSValue::new_function(reject_ptr);
 
@@ -1051,14 +1051,14 @@ fn promise_executor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(proto) = ctx.get_type_error_prototype() {
             err.prototype = Some(proto);
         }
-        let ptr = Box::into_raw(Box::new(err)) as usize;
+        let ptr = Box::into_raw(Box::new(err));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
 
     let mut promise = create_promise(ctx);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     let promise_val = JSValue::new_object(ptr);
 
@@ -1104,7 +1104,7 @@ fn create_promise_prototype(ctx: &mut JSContext) -> JSValue {
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         proto.prototype = Some(obj_proto_ptr);
     }
-    let ptr = Box::into_raw(Box::new(proto)) as usize;
+    let ptr = Box::into_raw(Box::new(proto));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -1126,10 +1126,10 @@ pub fn init_promise(ctx: &mut JSContext) {
     set_non_enumerable(&mut promise_func.base, ctx.intern("allSettled"), create_builtin_function(ctx, "promise_allSettled"));
     set_non_enumerable(&mut promise_func.base, ctx.intern("any"), create_builtin_function(ctx, "promise_any"));
     set_non_enumerable(&mut promise_func.base, ctx.intern("withResolvers"), create_builtin_function(ctx, "promise_with_resolvers"));
-    let promise_ptr = Box::into_raw(Box::new(promise_func)) as usize;
+    let promise_ptr = Box::into_raw(Box::new(promise_func));
     ctx.runtime_mut().gc_heap_mut().track_function(promise_ptr);
     let promise_value = JSValue::new_function(promise_ptr);
-    ctx.set_promise_constructor(promise_ptr);
+    ctx.set_promise_constructor(promise_ptr.cast());
 
     crate::builtins::symbol::install_species_accessor(ctx, &promise_value);
 
@@ -1146,7 +1146,7 @@ pub fn init_promise(ctx: &mut JSContext) {
 pub fn create_resolved_promise(ctx: &mut JSContext, value: JSValue) -> JSValue {
     let mut promise = create_promise(ctx);
     fulfill_promise(ctx, &mut promise, value);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     let result = JSValue::new_object(ptr);
     result
 }
@@ -1154,14 +1154,14 @@ pub fn create_resolved_promise(ctx: &mut JSContext, value: JSValue) -> JSValue {
 pub fn create_rejected_promise(ctx: &mut JSContext, reason: JSValue) -> JSValue {
     let mut promise = create_promise(ctx);
     reject_promise(ctx, &mut promise, reason);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     JSValue::new_object(ptr)
 }
 
 #[cfg(any(feature = "process", feature = "fetch"))]
 pub(crate) fn fulfill_promise_with_value(
     ctx: &mut JSContext,
-    promise_obj_ptr: usize,
+    promise_obj_ptr: *mut crate::object::object::JSObject,
     value: JSValue,
 ) {
     let promise_val = JSValue::new_object(promise_obj_ptr);
@@ -1172,7 +1172,7 @@ pub(crate) fn fulfill_promise_with_value(
 #[cfg(any(feature = "process", feature = "fetch"))]
 pub(crate) fn reject_promise_with_value(
     ctx: &mut JSContext,
-    promise_obj_ptr: usize,
+    promise_obj_ptr: *mut crate::object::object::JSObject,
     reason: JSValue,
 ) {
     let promise_val = JSValue::new_object(promise_obj_ptr);
@@ -1183,7 +1183,7 @@ pub(crate) fn reject_promise_with_value(
 #[cfg(feature = "fetch")]
 pub fn create_pending_promise(ctx: &mut JSContext) -> JSValue {
     let promise = create_promise(ctx);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     JSValue::new_object(ptr)
 }
 
@@ -1249,7 +1249,7 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                                     if let Some(proto) = ctx.get_error_prototype() {
                                         err.prototype = Some(proto);
                                     }
-                                    let err_ptr = Box::into_raw(Box::new(err)) as usize;
+                                    let err_ptr = Box::into_raw(Box::new(err));
                                     ctx.runtime_mut().gc_heap_mut().track(err_ptr);
                                     reject_promise(ctx, target, JSValue::new_object(err_ptr));
                                 }
@@ -1349,7 +1349,7 @@ pub const ASYNC_PUMP_HANDLER: &str = "__v16_async_pump__";
 
 pub fn new_pending_promise(ctx: &mut JSContext) -> JSValue {
     let promise = create_promise(ctx);
-    let ptr = Box::into_raw(Box::new(promise)) as usize;
+    let ptr = Box::into_raw(Box::new(promise));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
@@ -1507,7 +1507,7 @@ fn handle_all_settled_reaction(ctx: &mut JSContext, vm: &mut crate::runtime::vm:
         result_obj.set(status_atom, JSValue::new_string(ctx.intern("fulfilled")));
         result_obj.set(ctx.intern("value"), argument);
     }
-    let r_ptr = Box::into_raw(Box::new(result_obj)) as usize;
+    let r_ptr = Box::into_raw(Box::new(result_obj));
     ctx.runtime_mut().gc_heap_mut().track(r_ptr);
     let result_val = JSValue::new_object(r_ptr);
 
