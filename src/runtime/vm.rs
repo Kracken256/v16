@@ -250,8 +250,7 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
     if !holder_val.is_object() {
         return;
     }
-    let holder_ptr = holder_val.get_ptr();
-    let holder = unsafe { &mut *(holder_ptr as *mut crate::object::object::JSObject) };
+    let holder = holder_val.as_object_mut();
     let is_generator = holder.get_async_generator_state().is_some();
     let mut state = match holder.take_async_state() {
         Some(s) => s,
@@ -400,7 +399,7 @@ fn generator_iterator_result(ctx: &mut JSContext, value: JSValue, done: bool) ->
 
 fn take_async_generator_current(ctx: &mut JSContext, gen_val: JSValue) -> Option<JSValue> {
     let generator_obj =
-        unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+        gen_val.as_object_mut();
     let state = generator_obj.get_async_generator_state_mut()?;
     state.running = false;
     let promise = state.current_promise;
@@ -436,7 +435,7 @@ fn resume_async_generator_body_from_request(
 ) {
     {
         let generator_obj =
-            unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+            gen_val.as_object_mut();
         let state = match generator_obj.get_async_state_mut() {
             Some(state) => state,
             None => return,
@@ -465,7 +464,7 @@ fn async_generator_await_return(
 ) {
     {
         let generator_obj =
-            unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+            gen_val.as_object_mut();
         if let Some(ag) = generator_obj.get_async_generator_state_mut() {
             ag.awaiting_return = true;
             ag.current_promise = promise;
@@ -476,7 +475,7 @@ fn async_generator_await_return(
     if let Some(exc) = ctx.pending_exception.take() {
         {
             let generator_obj =
-                unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+                gen_val.as_object_mut();
             if let Some(ag) = generator_obj.get_async_generator_state_mut() {
                 ag.pending_return_action = 0;
                 ag.awaiting_return = false;
@@ -501,7 +500,7 @@ pub fn drive_async_generator_queue(ctx: &mut JSContext, gen_val: JSValue) {
     loop {
         let (running, awaiting_return, empty, started, first_kind) = {
             let generator_obj =
-                unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+                gen_val.as_object_mut();
             match generator_obj.get_async_generator_state() {
                 Some(ag) => (
                     ag.running,
@@ -518,7 +517,7 @@ pub fn drive_async_generator_queue(ctx: &mut JSContext, gen_val: JSValue) {
         }
         let is_done = {
             let generator_obj =
-                unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+                gen_val.as_object_mut();
             generator_obj
                 .get_async_state()
                 .map(|state| state.done)
@@ -527,7 +526,7 @@ pub fn drive_async_generator_queue(ctx: &mut JSContext, gen_val: JSValue) {
         if is_done || (!started && first_kind == 2) {
             let (kind, value, request_promise) = {
                 let generator_obj =
-                    unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+                    gen_val.as_object_mut();
                 let ag = match generator_obj.get_async_generator_state_mut() {
                     Some(ag) => ag,
                     None => return,
@@ -562,7 +561,7 @@ pub fn drive_async_generator_queue(ctx: &mut JSContext, gen_val: JSValue) {
         }
         let (kind, value) = {
             let generator_obj =
-                unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+                gen_val.as_object_mut();
             let ag = match generator_obj.get_async_generator_state_mut() {
                 Some(ag) => ag,
                 None => return,
@@ -576,7 +575,7 @@ pub fn drive_async_generator_queue(ctx: &mut JSContext, gen_val: JSValue) {
         if kind == 2 {
             {
                 let generator_obj =
-                    unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+                    gen_val.as_object_mut();
                 if let Some(ag) = generator_obj.get_async_generator_state_mut() {
                     ag.pending_return_action = 1;
                 }
@@ -585,7 +584,7 @@ pub fn drive_async_generator_queue(ctx: &mut JSContext, gen_val: JSValue) {
             if let Some(exc) = ctx.pending_exception.take() {
                 {
                     let generator_obj =
-                        unsafe { &mut *(gen_val.get_ptr() as *mut crate::object::object::JSObject) };
+                        gen_val.as_object_mut();
                     if let Some(ag) = generator_obj.get_async_generator_state_mut() {
                         ag.pending_return_action = 0;
                     }
@@ -613,7 +612,7 @@ pub fn resume_async_state(
     }
     let pending_action = {
         let holder =
-            unsafe { &mut *(holder_val.get_ptr() as *mut crate::object::object::JSObject) };
+            holder_val.as_object_mut();
         holder
             .get_async_generator_state()
             .map(|ag| ag.pending_return_action)
@@ -623,7 +622,7 @@ pub fn resume_async_state(
         if pending_action == 2 {
             let request_promise = {
                 let holder =
-                    unsafe { &mut *(holder_val.get_ptr() as *mut crate::object::object::JSObject) };
+                    holder_val.as_object_mut();
                 let ag = match holder.get_async_generator_state_mut() {
                     Some(ag) => ag,
                     None => return,
@@ -652,7 +651,7 @@ pub fn resume_async_state(
             }
             {
                 let holder =
-                    unsafe { &mut *(holder_val.get_ptr() as *mut crate::object::object::JSObject) };
+                    holder_val.as_object_mut();
                 if let Some(state) = holder.get_async_state_mut() {
                     state.done = true;
                 }
@@ -661,7 +660,7 @@ pub fn resume_async_state(
         } else {
             {
                 let holder =
-                    unsafe { &mut *(holder_val.get_ptr() as *mut crate::object::object::JSObject) };
+                    holder_val.as_object_mut();
                 if let Some(ag) = holder.get_async_generator_state_mut() {
                     ag.pending_return_action = 0;
                 }
@@ -672,7 +671,7 @@ pub fn resume_async_state(
         return;
     }
     let holder =
-        unsafe { &mut *(holder_val.get_ptr() as *mut crate::object::object::JSObject) };
+        holder_val.as_object_mut();
     let mut state = match holder.take_async_state() {
         Some(s) => s,
         None => return,
@@ -1060,7 +1059,7 @@ impl VM {
             return false;
         }
         let sym_atom = crate::runtime::atom::Atom(0x40000000 | sym_iter.get_symbol_id());
-        let arr_obj = unsafe { arr.as_object() };
+        let arr_obj = arr.as_object();
         match arr_obj.get(sym_atom) {
             Some(v) => v.is_function() && v.get_ptr() == default_ptr,
             None => false,
@@ -2203,7 +2202,7 @@ impl VM {
                 if is_call_new && rb.is_simple_constructor {
                     if let Some(cached_shape) = rb.cached_constructor_final_shape {
                         if this_val.is_object() {
-                            let obj = unsafe { JSValue::object_from_ptr_mut(this_val.get_ptr()) };
+                            let obj = this_val.as_object_mut();
                             obj.fast_init_from_simple_constructor(
                                 rb.simple_constructor_props
                                     .iter()
