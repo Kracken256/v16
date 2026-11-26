@@ -905,6 +905,16 @@ impl VM {
         self.pc = 0;
     }
 
+    #[inline(always)]
+    fn caller_vm_ref(&self) -> Option<&VM> {
+        self.caller_vm.map(|ptr| unsafe { &*(ptr as *const VM) })
+    }
+
+    #[inline(always)]
+    fn caller_vm_mut(&mut self) -> Option<&mut VM> {
+        self.caller_vm.map(|ptr| unsafe { &mut *(ptr as *mut VM) })
+    }
+
     fn cleanup_handlers_for_frame(&mut self) {
         let fi = self.frame_index;
         while self
@@ -988,10 +998,9 @@ impl VM {
     }
 
     fn eval_variable_env_is_global(&self) -> bool {
-        match self.caller_vm {
+        match self.caller_vm_ref() {
             None => true,
-            Some(ptr) => {
-                let caller = unsafe { &*(ptr as *const VM) };
+            Some(caller) => {
                 caller.frame_index == 0 && caller.frames[0].function_ptr.is_none()
             }
         }
@@ -1660,8 +1669,7 @@ impl VM {
 
     #[inline(always)]
     pub fn get_var_in_caller_vm(&self, name_atom: u32) -> Option<JSValue> {
-        if let Some(ptr) = self.caller_vm {
-            let caller = unsafe { &*(ptr as *const VM) };
+        if let Some(caller) = self.caller_vm_ref() {
             for fi in (0..=caller.frame_index).rev() {
                 let frame = &caller.frames[fi];
                 if let Some(ref eb) = frame.eval_bindings {
@@ -1694,9 +1702,8 @@ impl VM {
 
     pub fn eval_private_owner_in_caller_vm(&self, name_atom: u32) -> Option<JSValue> {
         let name = crate::runtime::atom::Atom(name_atom);
-        let mut vm_ptr = self.caller_vm?;
+        let mut vm = self.caller_vm_ref()?;
         loop {
-            let vm = unsafe { &*(vm_ptr as *const VM) };
             for fi in (0..=vm.frame_index).rev() {
                 let frame = &vm.frames[fi];
                 if let Some(fptr) = frame.function_ptr {
@@ -1747,7 +1754,7 @@ impl VM {
                     }
                 }
             }
-            vm_ptr = vm.caller_vm?;
+            vm = vm.caller_vm_ref()?;
         }
     }
 
@@ -1757,8 +1764,8 @@ impl VM {
         name_atom: u32,
         value: JSValue,
     ) -> CallerVarSet {
-        if let Some(ptr) = self.caller_vm {
-            let caller = unsafe { &mut *(ptr as *mut VM) };
+        let caller_self_strict = self.frames[self.frame_index].is_strict_frame;
+        if let Some(caller) = self.caller_vm_mut() {
             for fi in (0..=caller.frame_index).rev() {
                 let in_eb = caller.frames[fi]
                     .eval_bindings
@@ -1848,7 +1855,7 @@ impl VM {
                     let exists = global
                         .as_object()
                         .has_own(crate::runtime::atom::Atom(name_atom));
-                    if !exists && self.frames[self.frame_index].is_strict_frame {
+                    if !exists && caller_self_strict {
                         return CallerVarSet::NotFound;
                     }
                     global.as_object_mut().set_cached(
@@ -1897,8 +1904,7 @@ impl VM {
         name_atom: u32,
         value: JSValue,
     ) -> bool {
-        if let Some(ptr) = self.caller_vm {
-            let caller = unsafe { &mut *(ptr as *mut VM) };
+        if let Some(caller) = self.caller_vm_mut() {
             let fi = caller.frame_index;
             if let Some(ref eb) = caller.frames[fi].eval_bindings {
                 if eb.contains_key(&name_atom) {
@@ -5542,6 +5548,17 @@ impl VM {
         self.caller_vm = caller_vm_ptr;
         ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
 
+        let caller_frame_snapshot = self.caller_vm_ref().map(|caller| {
+            let caller_frame = &caller.frames[caller.frame_index];
+            (
+                caller_frame.super_ctor,
+                caller_frame.super_base,
+                caller_frame.new_target,
+                caller_frame.this_initialized,
+                caller_frame.with_env.clone(),
+            )
+        });
+
         let needed = (bytecode.locals_count as usize).max(1);
         if needed > self.registers.len() {
             self.registers.resize(needed, JSValue::undefined());
@@ -5572,14 +5589,14 @@ impl VM {
         frame.this_initialized = true;
         frame.this_cell = None;
         frame.is_super_call = false;
-        if let Some(caller_ptr) = caller_vm_ptr {
-            let caller = unsafe { &*(caller_ptr as *const VM) };
-            let caller_frame = &caller.frames[caller.frame_index];
-            frame.super_ctor = caller_frame.super_ctor;
-            frame.super_base = caller_frame.super_base;
-            frame.new_target = caller_frame.new_target;
-            frame.this_initialized = caller_frame.this_initialized;
-            frame.with_env = caller_frame.with_env.clone();
+        if let Some((super_ctor, super_base, new_target, this_initialized, with_env)) =
+            caller_frame_snapshot
+        {
+            frame.super_ctor = super_ctor;
+            frame.super_base = super_base;
+            frame.new_target = new_target;
+            frame.this_initialized = this_initialized;
+            frame.with_env = with_env;
         }
 
         self.frame_index = 0;
@@ -5703,12 +5720,11 @@ impl VM {
         };
         let mut allow_new_target = false;
         {
-            let mut vm_ptr = self as *mut VM;
+            let mut vm: &VM = self;
             loop {
-                let caller = unsafe { &*(vm_ptr as *const VM) };
                 let mut found = false;
-                for fi in (0..=caller.frame_index).rev() {
-                    if let Some(fptr) = caller.frames[fi].function_ptr {
+                for fi in (0..=vm.frame_index).rev() {
+                    if let Some(fptr) = vm.frames[fi].function_ptr {
                         let func = JSValue::new_function(fptr);
                         let func = func.as_function();
                         if !func.is_arrow() {
@@ -5721,8 +5737,8 @@ impl VM {
                     allow_new_target = true;
                     break;
                 }
-                match caller.caller_vm {
-                    Some(ptr) => vm_ptr = ptr as *mut VM,
+                match vm.caller_vm_ref() {
+                    Some(next) => vm = next,
                     None => break,
                 }
             }
