@@ -376,34 +376,6 @@ impl JSValue {
         }
     }
 
-    #[inline(always)]
-    pub fn as_object(&self) -> &crate::object::object::JSObject {
-        self.try_as_object()
-            .expect("JSValue does not hold an object")
-    }
-
-    #[inline(always)]
-    #[allow(clippy::mut_from_ref)]
-    pub fn as_object_mut(&self) -> &mut crate::object::object::JSObject {
-        // SAFETY: this legacy accessor is retained only until every call site uses the
-        // checked mutable accessor; the pointer comes from an object-tagged value.
-        unsafe { &mut *self.get_ptr() }
-    }
-
-    #[inline(always)]
-    pub fn as_function(&self) -> &crate::object::function::JSFunction {
-        self.try_as_function()
-            .expect("JSValue does not hold a function")
-    }
-
-    #[inline(always)]
-    #[allow(clippy::mut_from_ref)]
-    pub fn as_function_mut(&self) -> &mut crate::object::function::JSFunction {
-        // SAFETY: this legacy accessor is retained only until every call site uses the
-        // checked mutable accessor; the pointer comes from a function-tagged value.
-        unsafe { &mut *(self.get_ptr() as *mut crate::object::function::JSFunction) }
-    }
-
     /// # Safety
     ///
     /// The value must be tagged `TAG_OBJECT`, `TAG_FUNC`, or `TAG_BIGINT`, and its payload
@@ -719,9 +691,4 @@ mod tests {
         drop(unsafe { Box::from_raw(function_ptr) });
     }
 
-    #[test]
-    #[should_panic(expected = "JSValue does not hold an object")]
-    fn as_object_rejects_primitive_values() {
-        JSValue::new_int(1).as_object();
-    }
 }
