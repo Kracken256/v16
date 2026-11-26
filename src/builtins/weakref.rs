@@ -94,10 +94,9 @@ pub fn init_weakref(ctx: &mut JSContext) {
         let global_obj = global.as_object_mut();
         crate::builtins::global::set_non_enumerable(global_obj, weakref_atom, weakref_ctor);
     }
-    unsafe {
-        let proto_ref = &mut *(weakref_proto_ptr as *mut JSObject);
-        set_non_enumerable(proto_ref, ctx.common_atoms.constructor, weakref_ctor);
-    }
+    let weakref_proto_val = JSValue::new_object(weakref_proto_ptr);
+    let proto_ref = weakref_proto_val.as_object_mut();
+    set_non_enumerable(proto_ref, ctx.common_atoms.constructor, weakref_ctor);
 
     let mut fr_proto = JSObject::new();
     set_non_enumerable(
@@ -134,10 +133,9 @@ pub fn init_weakref(ctx: &mut JSContext) {
         let global_obj = global.as_object_mut();
         crate::builtins::global::set_non_enumerable(global_obj, fr_atom, fr_ctor);
     }
-    unsafe {
-        let proto_ref = &mut *(fr_proto_ptr as *mut JSObject);
-        set_non_enumerable(proto_ref, ctx.common_atoms.constructor, fr_ctor);
-    }
+    let fr_proto_val = JSValue::new_object(fr_proto_ptr);
+    let proto_ref = fr_proto_val.as_object_mut();
+    set_non_enumerable(proto_ref, ctx.common_atoms.constructor, fr_ctor);
 }
 
 pub fn weakref_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {

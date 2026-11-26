@@ -1146,7 +1146,7 @@ pub fn init_promise(ctx: &mut JSContext) {
 
     crate::builtins::symbol::install_species_accessor(ctx, &promise_value);
 
-    let proto_mut = unsafe { &mut *(proto_ptr as *mut JSObject) };
+    let proto_mut = proto_value.as_object_mut();
     proto_mut.set(ctx.intern("constructor"), promise_value);
 
     let global = ctx.global();

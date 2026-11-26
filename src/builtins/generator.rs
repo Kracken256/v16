@@ -167,15 +167,14 @@ pub fn init_generator(ctx: &mut JSContext) {
             false,
         );
     }
-    unsafe {
-        define_data_property(
-            &mut *(proto_ptr as *mut JSObject),
-            ctx.common_atoms.constructor,
-            JSValue::new_object(generator_function_proto_ptr),
-            false,
-            true,
-        );
-    }
+    let generator_proto_val = JSValue::new_object(proto_ptr);
+    define_data_property(
+        generator_proto_val.as_object_mut(),
+        ctx.common_atoms.constructor,
+        JSValue::new_object(generator_function_proto_ptr),
+        false,
+        true,
+    );
     ctx.set_generator_function_prototype(generator_function_proto_ptr);
 
     let mut async_gen_proto = JSObject::new();
@@ -265,15 +264,14 @@ pub fn init_generator(ctx: &mut JSContext) {
             false,
         );
     }
-    unsafe {
-        define_data_property(
-            &mut *(async_proto_ptr as *mut JSObject),
-            ctx.common_atoms.constructor,
-            JSValue::new_object(async_generator_function_proto_ptr),
-            false,
-            true,
-        );
-    }
+    let async_generator_proto_val = JSValue::new_object(async_proto_ptr);
+    define_data_property(
+        async_generator_proto_val.as_object_mut(),
+        ctx.common_atoms.constructor,
+        JSValue::new_object(async_generator_function_proto_ptr),
+        false,
+        true,
+    );
     ctx.set_async_generator_function_prototype(async_generator_function_proto_ptr);
 }
 

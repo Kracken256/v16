@@ -121,17 +121,20 @@ fn symbol_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let key = key_val.get_atom();
 
-    let reg = if let Some(ptr) = ctx.get_symbol_registry_ptr() {
-        unsafe { &mut *(ptr as *mut JSObject) }
-    } else {
-        let mut new_reg = JSObject::new_array();
-        new_reg.set(ctx.common_atoms.length, JSValue::new_int(0));
-        let reg_ptr = Box::into_raw(Box::new(new_reg)) as usize;
-        ctx.runtime_mut().gc_heap_mut().track(reg_ptr);
-        ctx.runtime_mut().gc_heap_mut().extra_roots.push(JSValue::new_object(reg_ptr));
-        ctx.set_symbol_registry_ptr(Some(reg_ptr));
-        unsafe { &mut *(reg_ptr as *mut JSObject) }
+    let reg_ptr = match ctx.get_symbol_registry_ptr() {
+        Some(ptr) => ptr,
+        None => {
+            let mut new_reg = JSObject::new_array();
+            new_reg.set(ctx.common_atoms.length, JSValue::new_int(0));
+            let reg_ptr = Box::into_raw(Box::new(new_reg)) as usize;
+            ctx.runtime_mut().gc_heap_mut().track(reg_ptr);
+            ctx.runtime_mut().gc_heap_mut().extra_roots.push(JSValue::new_object(reg_ptr));
+            ctx.set_symbol_registry_ptr(Some(reg_ptr));
+            reg_ptr
+        }
     };
+    let reg_val = JSValue::new_object(reg_ptr);
+    let reg = reg_val.as_object_mut();
 
     let len_atom = ctx.common_atoms.length;
     let len = reg.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
@@ -179,7 +182,8 @@ fn symbol_key_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     if let Some(ptr) = ctx.get_symbol_registry_ptr() {
-        let reg = unsafe { &*(ptr as *const JSObject) };
+        let reg_val = JSValue::new_object(ptr);
+        let reg = reg_val.as_object();
         let len_atom = ctx.common_atoms.length;
         let len = reg
             .get(len_atom)
