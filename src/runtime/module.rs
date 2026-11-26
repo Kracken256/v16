@@ -797,6 +797,64 @@ pub fn load_and_evaluate_module(ctx: &mut JSContext, specifier: &str) -> Result<
     load_and_evaluate_module_with_attributes(ctx, specifier, None)
 }
 
+fn find_errored_transitive_dependency(
+    ctx: &mut JSContext,
+    specifier: &str,
+) -> Option<(String, Option<JSValue>)> {
+    let mut queue: Vec<(String, String)> = Vec::new();
+    let mut visited: Vec<String> = vec![specifier.to_string()];
+    {
+        let registry = ctx.runtime().module_registry();
+        if let Some(module_cell) = registry.get(specifier) {
+            for import in &module_cell.borrow().imports {
+                queue.push((import.module_specifier.clone(), specifier.to_string()));
+            }
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let (raw, base) = queue[head].clone();
+        head += 1;
+        let resolved = if raw.starts_with("./") || raw.starts_with("../") {
+            resolve_specifier(&raw, &base)
+        } else {
+            raw
+        };
+        if visited.contains(&resolved) {
+            continue;
+        }
+        visited.push(resolved.clone());
+        let registry = ctx.runtime().module_registry();
+        let entry = match registry.get(&resolved) {
+            Some(module_cell) => {
+                let module = module_cell.borrow();
+                Some((
+                    module.state,
+                    module
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| format!("Module {} failed to evaluate", resolved)),
+                    module.error_value,
+                    module.imports.clone(),
+                ))
+            }
+            None => None,
+        };
+        match entry {
+            Some((state, message, value, imports)) => {
+                if state == ModuleState::Errored {
+                    return Some((message, value));
+                }
+                for import in imports {
+                    queue.push((import.module_specifier, resolved.clone()));
+                }
+            }
+            None => {}
+        }
+    }
+    None
+}
+
 pub fn load_and_evaluate_module_with_attributes(
     ctx: &mut JSContext,
     specifier: &str,
@@ -837,6 +895,12 @@ pub fn load_and_evaluate_module_with_attributes(
     };
 
     if already_evaluated {
+        if let Some((message, value)) = find_errored_transitive_dependency(ctx, &resolved) {
+            if let Some(value) = value {
+                ctx.pending_exception = Some(value);
+            }
+            return Err(message);
+        }
         return namespace_object_for(ctx, &resolved);
     }
 
