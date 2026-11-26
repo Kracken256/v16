@@ -120,6 +120,7 @@ pub fn init_error(ctx: &mut JSContext) {
     init_uri_error(ctx);
     init_eval_error(ctx);
     init_suppressed_error(ctx);
+    init_aggregate_error(ctx);
 
     let global = ctx.global();
     if global.is_object() {
@@ -127,7 +128,7 @@ pub fn init_error(ctx: &mut JSContext) {
         if let Some(error_ctor) = error_ctor_val {
             if error_ctor.is_function() {
                 let error_ctor_ptr = error_ctor.get_ptr() as *mut crate::object::object::JSObject;
-                for name in ["TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "SuppressedError"] {
+                for name in ["TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "SuppressedError", "AggregateError"] {
                     let atom = ctx.intern(name);
                     if let Some(ctor_val) = global.as_object().get(atom) {
                         if ctor_val.is_function() {
@@ -778,6 +779,106 @@ pub fn suppressed_error_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JS
     JSValue::new_object(ptr)
 }
 
+fn init_aggregate_error(ctx: &mut JSContext) {
+    let atom = ctx.intern("AggregateError");
+    let mut ctor = crate::object::function::JSFunction::new_builtin(atom, 2);
+    ctor.set_builtin_marker(ctx, "aggregate_error_constructor");
+    if let Some(func_proto) = ctx.get_function_prototype() {
+        ctor.base.prototype = Some(func_proto);
+    }
+    let ptr = Box::into_raw(Box::new(ctor)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track_function(ptr);
+    let value = JSValue::new_function(ptr);
+
+    let global = ctx.global();
+    if global.is_object() {
+        let global_obj = global.as_object_mut();
+        crate::builtins::global::set_non_enumerable(global_obj, atom, value);
+    }
+
+    let mut proto = JSObject::new();
+    set_own_ne(
+        &mut proto,
+        ctx.intern("name"),
+        JSValue::new_string(ctx.intern("AggregateError")),
+    );
+    set_own_ne(
+        &mut proto,
+        ctx.intern("message"),
+        JSValue::new_string(ctx.intern("")),
+    );
+    if let Some(error_proto_ptr) = ctx.get_error_prototype() {
+        proto.prototype = Some(error_proto_ptr);
+    }
+    set_own_ne(&mut proto, ctx.intern("constructor"), value);
+
+    let proto_ptr = Box::into_raw(Box::new(proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
+    ctx.set_aggregate_error_prototype(proto_ptr);
+    let proto_value = JSValue::new_object(proto_ptr);
+    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
+}
+
+pub fn aggregate_error_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
+    set_own_ne(
+        &mut err,
+        ctx.intern("name"),
+        JSValue::new_string(ctx.intern("AggregateError")),
+    );
+    if let Some(proto) = ctx.get_aggregate_error_prototype() {
+        err.prototype = Some(proto);
+    }
+    if let Some(msg) = args.get(1) {
+        if !msg.is_undefined() {
+            let s = match js_to_string_value(ctx, msg) {
+                Ok(s) => s,
+                Err(()) => return JSValue::undefined(),
+            };
+            set_own_ne(
+                &mut err,
+                ctx.intern("message"),
+                JSValue::new_string(ctx.intern(&s)),
+            );
+        }
+    }
+    if let Some(opts) = args.get(2) {
+        if opts.is_object() {
+            let cause_atom = ctx.intern("cause");
+            let opts_this = *opts;
+            let opts_obj = opts.as_object();
+            let cause = get_property(ctx, &opts_obj, cause_atom, &opts_this);
+            let _ = opts_obj;
+            if let Some(cause) = cause {
+                set_own_ne(&mut err, cause_atom, cause);
+            }
+        }
+    }
+    let errors = args.first().cloned().unwrap_or_else(JSValue::undefined);
+    let error_values = crate::builtins::map_set::iterate_values(ctx, errors);
+    let mut errors_array = crate::object::array_obj::JSArrayObject::with_capacity(error_values.len());
+    if let Some(proto_ptr) = ctx.get_array_prototype() {
+        errors_array.header.set_prototype_raw(proto_ptr);
+    }
+    for error_value in &error_values {
+        errors_array.push(*error_value);
+    }
+    errors_array
+        .header
+        .set(ctx.common_atoms.length, JSValue::new_int(error_values.len() as i64));
+    let errors_ptr = Box::into_raw(Box::new(errors_array)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track_array(errors_ptr);
+    set_own_ne(
+        &mut err,
+        ctx.intern("errors"),
+        JSValue::new_object(errors_ptr),
+    );
+    let ptr = Box::into_raw(Box::new(err)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
+}
+
 fn error_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
         let mut err =
@@ -902,6 +1003,10 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "suppressed_error_constructor",
         HostFunction::ctor("SuppressedError", 3, suppressed_error_constructor),
+    );
+    ctx.register_builtin(
+        "aggregate_error_constructor",
+        HostFunction::ctor("AggregateError", 2, aggregate_error_constructor),
     );
     ctx.register_builtin(
         "error_toString",

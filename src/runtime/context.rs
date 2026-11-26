@@ -292,6 +292,7 @@ pub struct JSContext {
     uri_error_prototype: Option<usize>,
     eval_error_prototype: Option<usize>,
     suppressed_error_prototype: Option<usize>,
+    aggregate_error_prototype: Option<usize>,
     pub eval_private_names: Option<Vec<crate::runtime::atom::Atom>>,
     symbol_prototype: Option<usize>,
     bool_prototype: Option<usize>,
@@ -386,6 +387,7 @@ impl JSContext {
             uri_error_prototype: None,
             eval_error_prototype: None,
             suppressed_error_prototype: None,
+            aggregate_error_prototype: None,
             eval_private_names: None,
             symbol_prototype: None,
             bool_prototype: None,
@@ -933,6 +935,14 @@ impl JSContext {
 
     pub fn get_suppressed_error_prototype(&self) -> Option<*mut JSObject> {
         self.suppressed_error_prototype.map(|p| p as *mut JSObject)
+    }
+
+    pub fn set_aggregate_error_prototype(&mut self, ptr: usize) {
+        self.aggregate_error_prototype = Some(ptr);
+    }
+
+    pub fn get_aggregate_error_prototype(&self) -> Option<*mut JSObject> {
+        self.aggregate_error_prototype.map(|p| p as *mut JSObject)
     }
 
     pub fn set_symbol_prototype(&mut self, ptr: usize) {
