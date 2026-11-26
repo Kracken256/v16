@@ -840,6 +840,7 @@ impl VM {
                 | "intl_collator_compare_call"
                 | "promise_internal_resolve"
                 | "promise_internal_reject"
+                | "proxy_revoke"
         )
     }
 
@@ -2767,6 +2768,31 @@ impl VM {
                         private_name,
                         crate::object::object::PrivateKind::Field,
                     );
+                }
+            } else if this_val.is_object() && unsafe { this_val.as_object() }.is_proxy() {
+                let desc = crate::object::object::PropertyDescriptor {
+                    value: Some(value),
+                    writable: true,
+                    enumerable: true,
+                    configurable: true,
+                    get: None,
+                    set: None,
+                };
+                match self.proxy_define_property_internal(ctx, this_val, key, desc) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot define property on non-extensible object",
+                        );
+                        return Err("".to_string());
+                    }
+                    Err(e) => {
+                        if self.pending_throw.is_none() {
+                            self.rethrow_last_caught(ctx);
+                        }
+                        return Err(e);
+                    }
                 }
             } else {
                 let js_obj = this_val.as_object_mut();
@@ -10122,6 +10148,33 @@ impl VM {
                         }
                         continue;
                     }
+                    if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+                        let Some(key) = self.canonical_property_key_value(ctx, key_val) else {
+                            if let Some(exc) = self.take_pending_exception(ctx) {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        };
+                        match self.proxy_has_internal(ctx, obj_val, key) {
+                            Ok(result) => {
+                                self.set_reg(dst, JSValue::bool(result));
+                            }
+                            Err(_) => {
+                                if let Some(exc) = self.take_pending_exception(ctx) {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     let js_obj = obj_val.as_object();
                     let result = if key_val.is_string() {
                         let atom = key_val.get_atom();
@@ -10607,6 +10660,46 @@ impl VM {
                             }
                             continue;
                         };
+                        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+                            let desc = crate::object::object::PropertyDescriptor {
+                                value: Some(value),
+                                writable: true,
+                                enumerable: true,
+                                configurable: true,
+                                get: None,
+                                set: None,
+                            };
+                            let defined = self
+                                .proxy_define_property_internal(ctx, obj_val, key_val, desc);
+                            let failed = match defined {
+                                Ok(true) => false,
+                                Ok(false) => true,
+                                Err(_) => {
+                                    if let Some(exc) = self.take_pending_exception(ctx) {
+                                        match self.dispatch_throw_value(ctx, exc) {
+                                            ThrowDispatch::Caught => continue,
+                                            ThrowDispatch::Uncaught(e) => return Err(e),
+                                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                        }
+                                    }
+                                    true
+                                }
+                            };
+                            if failed {
+                                self.set_pending_type_error(
+                                    ctx,
+                                    "Cannot define property on non-extensible object",
+                                );
+                                if let Some(exc) = self.take_pending_exception(ctx) {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         let mut failed = false;
                         if !obj_val.as_object().extensible() {
                             failed = true;
@@ -14194,6 +14287,10 @@ impl VM {
             }
             return Ok(JSValue::undefined());
         }
+        if obj.is_object() && unsafe { obj.as_object() }.is_proxy() {
+            let key = self.atom_to_key_value(ctx, atom);
+            return self.proxy_get_internal(ctx, obj, key, obj);
+        }
         let js_obj = unsafe { obj.as_object() };
         if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
             if let Some(getter) = entry.get {
@@ -14238,6 +14335,625 @@ impl VM {
             current = proto.prototype;
         }
         Ok(JSValue::undefined())
+    }
+
+    fn atom_to_key_value(&self, ctx: &JSContext, atom: crate::runtime::atom::Atom) -> JSValue {
+        if atom.0 & 0x40000000 != 0 {
+            let id = atom.0 & !0x40000000;
+            let description = ctx
+                .runtime()
+                .symbol_description(id)
+                .unwrap_or(crate::builtins::symbol::NO_DESCRIPTION);
+            JSValue::new_symbol_with_id(description, id)
+        } else {
+            JSValue::new_string(atom)
+        }
+    }
+
+    fn key_value_to_atom(
+        &mut self,
+        ctx: &mut JSContext,
+        key: JSValue,
+    ) -> crate::runtime::atom::Atom {
+        if key.is_symbol() {
+            crate::runtime::atom::Atom(0x40000000 | key.get_symbol_id())
+        } else if key.is_int() {
+            let index = key.get_int();
+            if index >= 0 {
+                self.int_atom(index as usize, ctx)
+            } else {
+                let text = index.to_string();
+                ctx.intern(&text)
+            }
+        } else if key.is_float() {
+            let s = VM::js_to_string(&key, ctx);
+            s.get_atom()
+        } else {
+            key.get_atom()
+        }
+    }
+
+    fn same_value_for_invariant(a: JSValue, b: JSValue) -> bool {
+        let a_number = a.is_int() || a.is_float();
+        let b_number = b.is_int() || b.is_float();
+        if a_number && b_number {
+            let af = if a.is_int() {
+                a.get_int() as f64
+            } else {
+                a.get_float()
+            };
+            let bf = if b.is_int() {
+                b.get_int() as f64
+            } else {
+                b.get_float()
+            };
+            if af.is_nan() && bf.is_nan() {
+                return true;
+            }
+            if af == 0.0 && bf == 0.0 {
+                return af.is_sign_negative() == bf.is_sign_negative();
+            }
+            return af == bf;
+        }
+        a.raw_bits() == b.raw_bits()
+    }
+
+    fn proxy_resolve(
+        &mut self,
+        ctx: &mut JSContext,
+        proxy: JSValue,
+    ) -> Result<(JSValue, JSValue), String> {
+        let obj = unsafe { proxy.as_object() };
+        match (obj.proxy_target(), obj.proxy_handler()) {
+            (Some(target), Some(handler)) => Ok((target, handler)),
+            _ => {
+                let msg = "Cannot perform operation on a revoked proxy".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                Err(msg)
+            }
+        }
+    }
+
+    fn proxy_trap_method(
+        &mut self,
+        ctx: &mut JSContext,
+        handler: JSValue,
+        trap_atom: crate::runtime::atom::Atom,
+    ) -> Result<Option<JSValue>, String> {
+        let method = match self.get_prop_value(ctx, handler, trap_atom) {
+            Ok(value) => value,
+            Err(e) => {
+                if self.pending_throw.is_none() && ctx.pending_exception.is_some() {
+                    self.adopt_pending_host_exception(ctx);
+                }
+                return Err(e);
+            }
+        };
+        if self.pending_throw.is_none() && ctx.pending_exception.is_some() {
+            self.adopt_pending_host_exception(ctx);
+        }
+        if self.pending_throw.is_some() {
+            return Err("proxy trap lookup failed".to_string());
+        }
+        if method.is_null() || method.is_undefined() {
+            return Ok(None);
+        }
+        if method.is_function() {
+            return Ok(Some(method));
+        }
+        let msg = format!("{} is not a function", ctx.get_atom_str(trap_atom));
+        self.set_pending_type_error(ctx, &msg);
+        Err(msg)
+    }
+
+    fn property_descriptor_value(
+        &mut self,
+        ctx: &mut JSContext,
+        desc: &crate::object::object::PropertyDescriptor,
+    ) -> JSValue {
+        let mut desc_obj = crate::object::object::JSObject::new();
+        desc_obj.prototype = ctx.get_object_prototype();
+        let get = desc.get;
+        let set = desc.set;
+        if get.is_some() || set.is_some() {
+            desc_obj.set(ctx.intern("get"), get.unwrap_or_else(JSValue::undefined));
+            desc_obj.set(ctx.intern("set"), set.unwrap_or_else(JSValue::undefined));
+        } else {
+            if let Some(value) = desc.value {
+                desc_obj.set(ctx.intern("value"), value);
+            }
+            let writable = desc.writable;
+            desc_obj.set(ctx.intern("writable"), JSValue::bool(writable));
+        }
+        let enumerable = desc.enumerable;
+        let configurable = desc.configurable;
+        desc_obj.set(ctx.intern("enumerable"), JSValue::bool(enumerable));
+        desc_obj.set(ctx.intern("configurable"), JSValue::bool(configurable));
+        let ptr = Box::into_raw(Box::new(desc_obj)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        JSValue::new_object(ptr)
+    }
+
+    fn proxy_get_internal(
+        &mut self,
+        ctx: &mut JSContext,
+        proxy: JSValue,
+        key: JSValue,
+        receiver: JSValue,
+    ) -> Result<JSValue, String> {
+        let (target, handler) = self.proxy_resolve(ctx, proxy)?;
+        let trap_atom = ctx.intern("get");
+        let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
+        let Some(trap) = trap else {
+            return self.ordinary_get_with_receiver(ctx, target, key, receiver);
+        };
+        let args = [target, key, receiver];
+        let result = self.call_function_with_this(ctx, trap, handler, &args)?;
+        let atom = self.key_value_to_atom(ctx, key);
+        let target_desc = if target.is_object_like() {
+            unsafe { target.as_object() }.get_own_descriptor(atom)
+        } else {
+            None
+        };
+        if let Some(d) = target_desc {
+            if !d.configurable && d.get.is_none() && d.set.is_none() && !d.writable {
+                if let Some(value) = d.value {
+                    if !Self::same_value_for_invariant(value, result) {
+                        let msg =
+                            "proxy get trap result conflicts with a non-configurable, non-writable property"
+                                .to_string();
+                        self.set_pending_type_error(ctx, &msg);
+                        return Err(msg);
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn ordinary_get_with_receiver(
+        &mut self,
+        ctx: &mut JSContext,
+        target: JSValue,
+        key: JSValue,
+        receiver: JSValue,
+    ) -> Result<JSValue, String> {
+        if !target.is_object_like() {
+            return Ok(JSValue::undefined());
+        }
+        if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+            return self.proxy_get_internal(ctx, target, key, receiver);
+        }
+        let atom = self.key_value_to_atom(ctx, key);
+        let ptr = target.get_ptr();
+        let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
+        if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
+            if let Some(getter) = entry.get {
+                if getter.is_function() {
+                    return self.call_function_with_this(ctx, getter, receiver, &[]);
+                }
+            }
+            return Ok(JSValue::undefined());
+        }
+        if let Some(v) = js_obj.get_own(atom) {
+            return Ok(v);
+        }
+        if js_obj.is_dense_array() {
+            if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                let array =
+                    unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
+                if let Some(v) = array.elements.get(index).copied() {
+                    return Ok(v);
+                }
+            }
+        }
+        let mut current = js_obj.prototype;
+        let mut depth = 0u32;
+        while let Some(proto_ptr) = current {
+            if proto_ptr.is_null() || depth > 1000 {
+                break;
+            }
+            depth += 1;
+            let proto = unsafe { &*proto_ptr };
+            if let Some(entry) = proto.get_own_accessor_entry(atom) {
+                if let Some(getter) = entry.get {
+                    if getter.is_function() {
+                        return self.call_function_with_this(ctx, getter, receiver, &[]);
+                    }
+                }
+                return Ok(JSValue::undefined());
+            }
+            if let Some(v) = proto.get_own(atom) {
+                return Ok(v);
+            }
+            if proto.is_dense_array() {
+                if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                    let array = unsafe {
+                        &*(proto_ptr as *const crate::object::array_obj::JSArrayObject)
+                    };
+                    if let Some(v) = array.elements.get(index).copied() {
+                        return Ok(v);
+                    }
+                }
+            }
+            current = proto.prototype;
+        }
+        Ok(JSValue::undefined())
+    }
+
+    fn proxy_set_internal(
+        &mut self,
+        ctx: &mut JSContext,
+        proxy: JSValue,
+        key: JSValue,
+        value: JSValue,
+        receiver: JSValue,
+    ) -> Result<bool, String> {
+        let (target, handler) = self.proxy_resolve(ctx, proxy)?;
+        let trap_atom = ctx.intern("set");
+        let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
+        let Some(trap) = trap else {
+            return self.ordinary_set_with_receiver(ctx, target, key, value, receiver);
+        };
+        let args = [target, key, value, receiver];
+        let result = self.call_function_with_this(ctx, trap, handler, &args)?;
+        if !result.is_truthy() {
+            return Ok(false);
+        }
+        let atom = self.key_value_to_atom(ctx, key);
+        let target_desc = if target.is_object_like() {
+            unsafe { target.as_object() }.get_own_descriptor(atom)
+        } else {
+            None
+        };
+        if let Some(d) = target_desc {
+            if !d.configurable {
+                if d.get.is_none() && d.set.is_none() && !d.writable {
+                    if let Some(existing) = d.value {
+                        if !Self::same_value_for_invariant(existing, value) {
+                            let msg =
+                                "proxy set trap result conflicts with a non-configurable, non-writable property"
+                                    .to_string();
+                            self.set_pending_type_error(ctx, &msg);
+                            return Err(msg);
+                        }
+                    }
+                }
+                if d.set.is_none() && (d.get.is_some() || d.value.is_none()) && !d.writable {
+                    let msg = "proxy set trap result conflicts with a non-configurable property without a setter".to_string();
+                    self.set_pending_type_error(ctx, &msg);
+                    return Err(msg);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn define_data_on_receiver(
+        &mut self,
+        ctx: &mut JSContext,
+        receiver: JSValue,
+        key: JSValue,
+        atom: crate::runtime::atom::Atom,
+        value: JSValue,
+    ) -> Result<bool, String> {
+        if !receiver.is_object_like() {
+            return Ok(false);
+        }
+        if receiver.is_object() && unsafe { receiver.as_object() }.is_proxy() {
+            let desc = crate::object::object::PropertyDescriptor {
+                value: Some(value),
+                writable: true,
+                enumerable: true,
+                configurable: true,
+                get: None,
+                set: None,
+            };
+            return self.proxy_define_property_internal(ctx, receiver, key, desc);
+        }
+        let obj = unsafe { receiver.as_object_mut() };
+        if let Some(d) = obj.get_own_descriptor(atom) {
+            if d.get.is_some() || d.set.is_some() || !d.writable {
+                return Ok(false);
+            }
+        }
+        obj.set(atom, value);
+        Ok(true)
+    }
+
+    fn ordinary_set_with_receiver(
+        &mut self,
+        ctx: &mut JSContext,
+        target: JSValue,
+        key: JSValue,
+        value: JSValue,
+        receiver: JSValue,
+    ) -> Result<bool, String> {
+        if !target.is_object_like() {
+            return Ok(false);
+        }
+        if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+            return self.proxy_set_internal(ctx, target, key, value, receiver);
+        }
+        let atom = self.key_value_to_atom(ctx, key);
+        let mut current = target;
+        let mut depth = 0u32;
+        while current.is_object_like() {
+            if current.is_object() && unsafe { current.as_object() }.is_proxy() {
+                return self.proxy_set_internal(ctx, current, key, value, receiver);
+            }
+            let obj = unsafe { current.as_object() };
+            if let Some(entry) = obj.get_own_accessor_entry(atom) {
+                if let Some(setter) = entry.set {
+                    if setter.is_function() {
+                        self.call_function_with_this(ctx, setter, receiver, &[value])?;
+                        return Ok(true);
+                    }
+                }
+                return Ok(false);
+            }
+            if let Some(d) = obj.get_own_descriptor(atom) {
+                if d.get.is_some() || d.set.is_some() {
+                    if let Some(setter) = d.set {
+                        if setter.is_function() {
+                            self.call_function_with_this(ctx, setter, receiver, &[value])?;
+                            return Ok(true);
+                        }
+                    }
+                    return Ok(false);
+                }
+                if !d.writable {
+                    return Ok(false);
+                }
+                return self.define_data_on_receiver(ctx, receiver, key, atom, value);
+            }
+            if obj.is_dense_array() {
+                if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                    let array = unsafe {
+                        &*(current.get_ptr()
+                            as *const crate::object::array_obj::JSArrayObject)
+                    };
+                    if index < array.elements.len() {
+                        return self.define_data_on_receiver(ctx, receiver, key, atom, value);
+                    }
+                }
+            }
+            match obj.prototype {
+                Some(p) if !p.is_null() => {
+                    current = JSValue::new_object(p as usize);
+                }
+                _ => break,
+            }
+            depth += 1;
+            if depth > 1000 {
+                break;
+            }
+        }
+        self.define_data_on_receiver(ctx, receiver, key, atom, value)
+    }
+
+    fn proxy_define_property_internal(
+        &mut self,
+        ctx: &mut JSContext,
+        proxy: JSValue,
+        key: JSValue,
+        desc: crate::object::object::PropertyDescriptor,
+    ) -> Result<bool, String> {
+        let (target, handler) = self.proxy_resolve(ctx, proxy)?;
+        let trap_atom = ctx.intern("defineProperty");
+        let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
+        let Some(trap) = trap else {
+            return self.ordinary_define_property(ctx, target, key, desc);
+        };
+        let desc_val = self.property_descriptor_value(ctx, &desc);
+        let args = [target, key, desc_val];
+        let result = self.call_function_with_this(ctx, trap, handler, &args)?;
+        if !result.is_truthy() {
+            return Ok(false);
+        }
+        let atom = self.key_value_to_atom(ctx, key);
+        if !target.is_object_like() {
+            return Ok(true);
+        }
+        let tobj = unsafe { target.as_object() };
+        let target_desc = tobj.get_own_descriptor(atom);
+        let target_extensible = tobj.extensible();
+        let Some(existing) = target_desc else {
+            if !target_extensible {
+                let msg =
+                    "proxy defineProperty trap cannot add a property to a non-extensible target"
+                        .to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            }
+            return Ok(true);
+        };
+        if existing.configurable {
+            return Ok(true);
+        }
+        if desc.configurable || desc.enumerable != existing.enumerable {
+            let msg = "proxy defineProperty trap result conflicts with a non-configurable property"
+                .to_string();
+            self.set_pending_type_error(ctx, &msg);
+            return Err(msg);
+        }
+        let existing_accessor = existing.get.is_some() || existing.set.is_some();
+        let desc_accessor = desc.get.is_some() || desc.set.is_some();
+        if existing_accessor != desc_accessor {
+            let msg = "proxy defineProperty trap result conflicts with a non-configurable property"
+                .to_string();
+            self.set_pending_type_error(ctx, &msg);
+            return Err(msg);
+        }
+        if existing_accessor {
+            let getters_match = desc.get.map_or(existing.get.is_none(), |g| {
+                existing.get.map_or(false, |e| g.raw_bits() == e.raw_bits())
+            });
+            let setters_match = desc.set.map_or(existing.set.is_none(), |s| {
+                existing.set.map_or(false, |e| s.raw_bits() == e.raw_bits())
+            });
+            if !getters_match || !setters_match {
+                let msg = "proxy defineProperty trap result conflicts with a non-configurable property".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            }
+        } else if !existing.writable {
+            if desc.writable {
+                let msg = "proxy defineProperty trap result conflicts with a non-configurable, non-writable property".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            }
+            if let Some(value) = desc.value {
+                if !existing
+                    .value
+                    .map_or(false, |v| Self::same_value_for_invariant(v, value))
+                {
+                    let msg = "proxy defineProperty trap result conflicts with a non-configurable, non-writable property".to_string();
+                    self.set_pending_type_error(ctx, &msg);
+                    return Err(msg);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn ordinary_define_property(
+        &mut self,
+        ctx: &mut JSContext,
+        target: JSValue,
+        key: JSValue,
+        desc: crate::object::object::PropertyDescriptor,
+    ) -> Result<bool, String> {
+        if !target.is_object_like() {
+            return Ok(false);
+        }
+        if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+            return self.proxy_define_property_internal(ctx, target, key, desc);
+        }
+        let atom = self.key_value_to_atom(ctx, key);
+        let ok = unsafe { target.as_object_mut() }.define_property(atom, desc);
+        Ok(ok)
+    }
+
+    fn proxy_own_keys(
+        &mut self,
+        ctx: &mut JSContext,
+        proxy: JSValue,
+    ) -> Result<Vec<JSValue>, String> {
+        let (target, handler) = self.proxy_resolve(ctx, proxy)?;
+        let trap_atom = ctx.intern("ownKeys");
+        let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
+        let Some(trap) = trap else {
+            let obj = unsafe { target.as_object() };
+            let mut keys: Vec<JSValue> = Vec::new();
+            for atom in obj.keys() {
+                keys.push(self.atom_to_key_value(ctx, atom));
+            }
+            for (atom, _) in obj.accessor_keys() {
+                if !keys
+                    .iter()
+                    .any(|k| k.is_string() && k.get_atom() == atom || k.is_symbol() && k.get_atom() == atom)
+                {
+                    keys.push(self.atom_to_key_value(ctx, atom));
+                }
+            }
+            return Ok(keys);
+        };
+        let args = [target];
+        let result = self.call_function_with_this(ctx, trap, handler, &args)?;
+        if !result.is_object_like() {
+            let msg = "proxy ownKeys trap result must be an object".to_string();
+            self.set_pending_type_error(ctx, &msg);
+            return Err(msg);
+        }
+        let len_val = self.get_prop_value(ctx, result, ctx.common_atoms.length)?;
+        let len = if len_val.is_int() {
+            len_val.get_int().max(0) as usize
+        } else {
+            let n = Self::js_to_number(&len_val, ctx);
+            if n.is_finite() && n >= 0.0 {
+                n as usize
+            } else {
+                0
+            }
+        };
+        let mut keys: Vec<JSValue> = Vec::with_capacity(len);
+        for i in 0..len {
+            let index_atom = self.int_atom(i, ctx);
+            let key = self.get_prop_value(ctx, result, index_atom)?;
+            if !key.is_string() && !key.is_symbol() {
+                let msg = "proxy ownKeys trap result contains a non-property key".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            }
+            if keys.iter().any(|k| k.raw_bits() == key.raw_bits()) {
+                let msg = "proxy ownKeys trap result contains duplicate keys".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            }
+            keys.push(key);
+        }
+        if !unsafe { target.as_object() }.extensible() {
+            let target_obj = unsafe { target.as_object() };
+            let mut target_keys: Vec<JSValue> = Vec::new();
+            for atom in target_obj.keys() {
+                target_keys.push(self.atom_to_key_value(ctx, atom));
+            }
+            for (atom, _) in target_obj.accessor_keys() {
+                target_keys.push(self.atom_to_key_value(ctx, atom));
+            }
+            for key in target_keys {
+                if !keys.iter().any(|k| k.raw_bits() == key.raw_bits()) {
+                    let msg = "proxy ownKeys trap result must contain all keys of a non-extensible target".to_string();
+                    self.set_pending_type_error(ctx, &msg);
+                    return Err(msg);
+                }
+            }
+        }
+        Ok(keys)
+    }
+
+    fn proxy_has_internal(
+        &mut self,
+        ctx: &mut JSContext,
+        proxy: JSValue,
+        key: JSValue,
+    ) -> Result<bool, String> {
+        let (target, handler) = self.proxy_resolve(ctx, proxy)?;
+        let trap_atom = ctx.intern("has");
+        let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
+        let Some(trap) = trap else {
+            let atom = self.key_value_to_atom(ctx, key);
+            if target.is_object() && unsafe { target.as_object() }.is_proxy() {
+                return self.proxy_has_internal(ctx, target, key);
+            }
+            return Ok(unsafe { target.as_object() }.has_property(atom));
+        };
+        let args = [target, key];
+        let result = self.call_function_with_this(ctx, trap, handler, &args)?;
+        let trap_result = result.is_truthy();
+        if !trap_result {
+            let atom = self.key_value_to_atom(ctx, key);
+            if target.is_object_like() {
+                let tobj = unsafe { target.as_object() };
+                if !tobj.extensible() {
+                    let target_has = tobj.get_own_descriptor(atom).is_some();
+                    if target_has {
+                        let msg = "proxy has trap result must be true for a non-extensible target".to_string();
+                        self.set_pending_type_error(ctx, &msg);
+                        return Err(msg);
+                    }
+                }
+                if let Some(d) = tobj.get_own_descriptor(atom) {
+                    if !d.configurable {
+                        let msg = "proxy has trap result must be true for a non-configurable property".to_string();
+                        self.set_pending_type_error(ctx, &msg);
+                        return Err(msg);
+                    }
+                }
+            }
+        }
+        Ok(trap_result)
     }
 
     fn await_settled_value(
@@ -14820,6 +15536,19 @@ impl VM {
         if obj_val.is_null_or_undefined() {
             self.set_pending_type_error(ctx, "Cannot read property of null or undefined");
             return None;
+        }
+        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+            let key = self.atom_to_key_value(ctx, atom);
+            match self.proxy_get_internal(ctx, obj_val, key, this_val) {
+                Ok(v) => {
+                    self.set_reg(dst, v);
+                    return Some(v);
+                }
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                    return None;
+                }
+            }
         }
         if !obj_val.is_object_like()
             && !obj_val.is_function()
@@ -15868,6 +16597,25 @@ impl VM {
                 self.set_pending_type_error(ctx, "Cannot assign to a primitive value");
             }
             return false;
+        }
+        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+            let key = self.atom_to_key_value(ctx, atom);
+            match self.proxy_set_internal(ctx, obj_val, key, value, obj_val) {
+                Ok(true) => {}
+                Ok(false) => {
+                    if self.frames[self.frame_index].is_strict_frame {
+                        let msg = format!(
+                            "Cannot assign to read only property '{}'",
+                            ctx.get_atom_str(atom)
+                        );
+                        self.set_pending_type_error(ctx, &msg);
+                    }
+                }
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                }
+            }
+            return true;
         }
         if obj_val.is_object_like() {
             let ptr = obj_val.get_ptr();

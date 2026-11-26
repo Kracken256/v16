@@ -596,6 +596,13 @@ impl GcHeap {
                 self.mark(proto_ptr as usize);
             }
 
+            if let Some(target) = obj.proxy_target() {
+                self.mark_value(&target);
+            }
+            if let Some(handler) = obj.proxy_handler() {
+                self.mark_value(&handler);
+            }
+
             if let Some(state) = obj.get_generator_state() {
                 for v in &state.snapshot {
                     self.mark_value(v);

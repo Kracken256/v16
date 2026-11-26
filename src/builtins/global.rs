@@ -19,6 +19,7 @@ use crate::builtins::parse::{global_parsefloat, global_parseint};
 #[cfg(feature = "process")]
 use crate::builtins::process;
 use crate::builtins::promise;
+use crate::builtins::proxy;
 use crate::builtins::regexp;
 use crate::builtins::string;
 use crate::builtins::symbol;
@@ -206,6 +207,8 @@ pub fn init_globals(ctx: &mut JSContext) {
     date::init_date_to_primitive(ctx);
     bigint::init_bigint(ctx);
     weakref::init_weakref(ctx);
+    proxy::register_builtins(ctx);
+    proxy::init_proxy(ctx);
     generator::init_generator(ctx);
     typedarray::init_typed_array(ctx);
     intl::init_intl(ctx);

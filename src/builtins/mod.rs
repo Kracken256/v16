@@ -22,6 +22,7 @@ pub mod parse;
 #[cfg(feature = "process")]
 pub mod process;
 pub mod promise;
+pub mod proxy;
 pub mod regexp;
 pub mod string;
 pub mod symbol;

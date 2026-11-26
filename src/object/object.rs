@@ -717,6 +717,9 @@ pub struct ObjectExtra {
 
     pub typed_array_kind: Option<TypedArrayKind>,
 
+    pub proxy_target: Option<JSValue>,
+    pub proxy_handler: Option<JSValue>,
+
     pub generator_state: Option<Box<GeneratorState>>,
 
     pub async_generator_state: Option<Box<AsyncGeneratorState>>,
@@ -777,6 +780,8 @@ impl JSObject {
                 compiled_regex: None,
                 array_buffer_data: None,
                 typed_array_kind: None,
+                proxy_target: None,
+                proxy_handler: None,
                 generator_state: None,
                 async_generator_state: None,
                 async_state: None,
@@ -1196,6 +1201,39 @@ impl JSObject {
 
     pub fn set_typed_array_kind(&mut self, kind: TypedArrayKind) {
         self.ensure_extra().typed_array_kind = Some(kind);
+    }
+
+    #[inline]
+    pub fn is_proxy(&self) -> bool {
+        self.obj_type == ObjectType::Proxy
+    }
+
+    #[inline]
+    pub fn proxy_target(&self) -> Option<JSValue> {
+        self.extra.as_ref().and_then(|e| e.proxy_target)
+    }
+
+    #[inline]
+    pub fn proxy_handler(&self) -> Option<JSValue> {
+        self.extra.as_ref().and_then(|e| e.proxy_handler)
+    }
+
+    #[inline]
+    pub fn is_revoked_proxy(&self) -> bool {
+        self.is_proxy() && self.proxy_handler().is_none()
+    }
+
+    pub fn set_proxy_slots(&mut self, target: JSValue, handler: JSValue) {
+        let extra = self.ensure_extra();
+        extra.proxy_target = Some(target);
+        extra.proxy_handler = Some(handler);
+    }
+
+    pub fn revoke_proxy(&mut self) {
+        if let Some(ref mut extra) = self.extra {
+            extra.proxy_target = None;
+            extra.proxy_handler = None;
+        }
     }
 
     #[inline]
