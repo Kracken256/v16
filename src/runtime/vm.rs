@@ -6175,17 +6175,10 @@ impl VM {
             }
 
             let instr_pc = self.pc;
-            let op_val = unsafe { *self.cached_code_ptr.add(instr_pc) };
-            self.pc = instr_pc + 1;
+            let op_val = self.read_u8();
             if op_val == 90 {
-                let dst = unsafe {
-                    std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const u16)
-                };
-                self.pc += 2;
-                let src = unsafe {
-                    std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const u16)
-                };
-                self.pc += 2;
+                let dst = self.read_u16_pc();
+                let src = self.read_u16_pc();
                 let val = self.get_reg(src);
                 self.set_reg(dst, val);
                 continue;
