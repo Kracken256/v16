@@ -3212,7 +3212,40 @@ impl VM {
                 .take()
                 .unwrap_or_else(JSValue::undefined));
         }
-        let keys = self.own_enumerable_keys_in_order(ctx, with_value);
+        let is_proxy = with_value.is_object() && unsafe { with_value.as_object() }.is_proxy();
+        let mut keys: Vec<crate::runtime::atom::Atom> = Vec::new();
+        if is_proxy {
+            let own_keys = match self.proxy_own_keys(ctx, with_value) {
+                Ok(own_keys) => own_keys,
+                Err(_) => {
+                    return Err(self
+                        .take_pending_exception(ctx)
+                        .unwrap_or_else(JSValue::undefined));
+                }
+            };
+            for key in own_keys {
+                if !key.is_string() {
+                    continue;
+                }
+                let descriptor = match self.proxy_get_own_descriptor(ctx, with_value, key) {
+                    Ok(descriptor) => descriptor,
+                    Err(_) => {
+                        return Err(self
+                            .take_pending_exception(ctx)
+                            .unwrap_or_else(JSValue::undefined));
+                    }
+                };
+                let Some(descriptor) = descriptor else {
+                    continue;
+                };
+                if !descriptor.enumerable {
+                    continue;
+                }
+                keys.push(key.get_atom());
+            }
+        } else {
+            keys = self.own_enumerable_keys_in_order(ctx, with_value);
+        }
         let mut attribute_type = None;
         for atom in keys {
             if atom.0 & 0x40000000 != 0 {
