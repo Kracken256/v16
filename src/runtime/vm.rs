@@ -4878,32 +4878,7 @@ impl VM {
             }
         }
 
-        macro_rules! push_proto {
-            ($getter:ident) => {
-                if let Some(ptr) = ctx.$getter() {
-                    roots.push(JSValue::new_object(ptr));
-                }
-            };
-        }
-        push_proto!(get_string_prototype);
-        push_proto!(get_number_prototype);
-        push_proto!(get_array_prototype);
-        push_proto!(get_regexp_prototype);
-        push_proto!(get_object_prototype);
-        push_proto!(get_function_prototype);
-        push_proto!(get_map_prototype);
-        push_proto!(get_set_prototype);
-        push_proto!(get_weakmap_prototype);
-        push_proto!(get_weakset_prototype);
-        push_proto!(get_error_prototype);
-        push_proto!(get_type_error_prototype);
-        push_proto!(get_weakref_prototype);
-        push_proto!(get_finalization_registry_prototype);
-        push_proto!(get_generator_prototype);
-        push_proto!(get_async_generator_prototype);
-        push_proto!(get_generator_function_prototype);
-        push_proto!(get_async_generator_function_prototype);
-        push_proto!(get_promise_prototype);
+        ctx.push_context_object_gc_roots(roots);
 
         for &v in &ctx.runtime().gc_heap().extra_roots {
             if v.is_object() || v.is_function() {
@@ -18740,6 +18715,28 @@ mod tests {
             then_fn,
         ] {
             assert!(is_rooted(value));
+        }
+    }
+
+    #[test]
+    fn test_gc_preserves_context_prototypes() {
+        let mut rt = JSRuntime::new();
+        let mut ctx = rt.new_context();
+        let mut vm = VM::new();
+        vm.run_gc(&mut ctx);
+        for source in [
+            "new Map([[1, 2]]).entries().next().value",
+            "new Set([1]).values().next().value",
+            "[1, 2].values().next().value",
+            "new Uint8Array(new ArrayBuffer(8)).values().next().value",
+            "new DataView(new ArrayBuffer(8))",
+            "Symbol('x')",
+            "Promise.resolve(1)",
+            "[...[1, 2]]",
+        ] {
+            let value = crate::eval(&mut ctx, source)
+                .unwrap_or_else(|message| panic!("{source}: {message}"));
+            assert!(!value.is_undefined() || source.starts_with("Symbol"));
         }
     }
 

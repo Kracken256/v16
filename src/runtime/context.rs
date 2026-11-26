@@ -1149,6 +1149,58 @@ impl JSContext {
         self.promise_prototype
     }
 
+    pub fn push_context_object_gc_roots(&self, roots: &mut Vec<JSValue>) {
+        let prototypes = [
+            self.string_prototype,
+            self.number_prototype,
+            self.bool_prototype,
+            self.bigint_prototype,
+            self.symbol_prototype,
+            self.array_prototype,
+            self.array_iterator_prototype,
+            self.regexp_prototype,
+            self.date_prototype,
+            self.object_prototype,
+            self.function_prototype,
+            self.map_prototype,
+            self.map_iterator_prototype,
+            self.set_prototype,
+            self.set_iterator_prototype,
+            self.weakmap_prototype,
+            self.weakset_prototype,
+            self.dataview_prototype,
+            self.typed_array_prototype,
+            self.typed_array_iterator_prototype,
+            self.array_buffer_prototype,
+            self.error_prototype,
+            self.type_error_prototype,
+            self.reference_error_prototype,
+            self.syntax_error_prototype,
+            self.range_error_prototype,
+            self.uri_error_prototype,
+            self.eval_error_prototype,
+            self.suppressed_error_prototype,
+            self.aggregate_error_prototype,
+            self.weakref_prototype,
+            self.finalization_registry_prototype,
+            self.generator_prototype,
+            self.async_generator_prototype,
+            self.generator_function_prototype,
+            self.async_generator_function_prototype,
+            self.promise_prototype,
+            self.array_iterator_fn,
+            self.promise_constructor,
+            self.import_meta_object,
+        ];
+        for ptr in prototypes
+            .into_iter()
+            .flatten()
+            .chain(self.typed_array_prototypes.into_iter().flatten())
+        {
+            roots.push(JSValue::new_object(ptr));
+        }
+    }
+
     pub fn set_promise_constructor(&mut self, ptr: *mut JSObject) {
         self.promise_constructor = Some(ptr);
     }
