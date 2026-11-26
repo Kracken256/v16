@@ -797,10 +797,27 @@ fn throw_desc_type_error(ctx: &mut JSContext, msg: &str) {
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct DescriptorPresence {
+    pub value: bool,
+    pub writable: bool,
+    pub enumerable: bool,
+    pub configurable: bool,
+    pub get: bool,
+    pub set: bool,
+}
+
 pub fn to_property_descriptor(
     ctx: &mut JSContext,
     desc_val: &JSValue,
 ) -> Option<crate::object::object::PropertyDescriptor> {
+    to_property_descriptor_with_presence(ctx, desc_val).map(|(desc, _)| desc)
+}
+
+pub fn to_property_descriptor_with_presence(
+    ctx: &mut JSContext,
+    desc_val: &JSValue,
+) -> Option<(crate::object::object::PropertyDescriptor, DescriptorPresence)> {
     if !desc_val.is_object_like() {
         throw_desc_type_error(ctx, "Property description must be an object");
         return None;
@@ -816,6 +833,13 @@ pub fn to_property_descriptor(
     let has_writable = object_has_property(desc_val, writable_atom);
     let has_get = object_has_property(desc_val, get_atom);
     let has_set = object_has_property(desc_val, set_atom);
+    let mut presence = DescriptorPresence {
+        value: has_value,
+        writable: has_writable,
+        get: has_get,
+        set: has_set,
+        ..Default::default()
+    };
 
     let value = if has_value {
         Some(object_get_property(ctx, desc_val, value_atom))
@@ -852,12 +876,14 @@ pub fn to_property_descriptor(
         return None;
     }
 
-    let enumerable = if object_has_property(desc_val, enumerable_atom) {
+    let has_enumerable = object_has_property(desc_val, enumerable_atom);
+    let enumerable = if has_enumerable {
         object_get_property(ctx, desc_val, enumerable_atom).is_truthy()
     } else {
         false
     };
-    let configurable = if object_has_property(desc_val, configurable_atom) {
+    let has_configurable = object_has_property(desc_val, configurable_atom);
+    let configurable = if has_configurable {
         object_get_property(ctx, desc_val, configurable_atom).is_truthy()
     } else {
         false
@@ -868,25 +894,29 @@ pub fn to_property_descriptor(
         false
     };
 
-    if is_accessor {
-        Some(crate::object::object::PropertyDescriptor {
+    presence.enumerable = has_enumerable;
+    presence.configurable = has_configurable;
+
+    let descriptor = if is_accessor {
+        crate::object::object::PropertyDescriptor {
             value: None,
             writable: false,
             enumerable,
             configurable,
             get: get.filter(|g| !g.is_undefined()),
             set: set.filter(|s| !s.is_undefined()),
-        })
+        }
     } else {
-        Some(crate::object::object::PropertyDescriptor {
+        crate::object::object::PropertyDescriptor {
             value,
             writable,
             enumerable,
             configurable,
             get: None,
             set: None,
-        })
-    }
+        }
+    };
+    Some((descriptor, presence))
 }
 
 fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {

@@ -10864,28 +10864,20 @@ impl VM {
                     let dst_val = self.get_reg(dst);
                     let src_val = self.get_reg(src);
                     if dst_val.is_object() || dst_val.is_function() {
-                        let keys = self.own_enumerable_keys_in_order(ctx, src_val);
-                        for atom in keys {
-                            let value = match self.get_copy_value(ctx, src_val, atom) {
-                                Ok(value) => value,
-                                Err(e) => {
-                                    let caught = self.last_caught_exception.take();
-                                    let host = ctx.pending_exception.take();
-                                    let exc = caught
-                                        .or(host)
-                                        .or_else(|| self.pending_throw.take());
-                                    if let Some(exc) = exc {
-                                        match self.dispatch_throw_value(ctx, exc) {
-                                            ThrowDispatch::Caught => continue,
-                                            ThrowDispatch::Uncaught(e) => return Err(e),
-                                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                        }
-                                    }
-                                    return Err(e);
+                        if let Err(e) =
+                            self.copy_data_properties(ctx, dst_val, src_val, None)
+                        {
+                            let caught = self.last_caught_exception.take();
+                            let host = ctx.pending_exception.take();
+                            let exc = caught.or(host).or_else(|| self.pending_throw.take());
+                            if let Some(exc) = exc {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
                                 }
-                            };
-                            let dst_obj = dst_val.as_object_mut();
-                            dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
+                            }
+                            return Err(e);
                         }
                     }
                 }
@@ -10954,31 +10946,23 @@ impl VM {
                                 }
                             }
                         }
-                        let entries = self.own_enumerable_keys_in_order(ctx, src_val);
-                        for atom in entries {
-                            if excluded.contains(&atom) {
-                                continue;
-                            }
-                            let value = match self.get_copy_value(ctx, src_val, atom) {
-                                Ok(value) => value,
-                                Err(e) => {
-                                    let caught = self.last_caught_exception.take();
-                                    let host = ctx.pending_exception.take();
-                                    let exc = caught
-                                        .or(host)
-                                        .or_else(|| self.pending_throw.take());
-                                    if let Some(exc) = exc {
-                                        match self.dispatch_throw_value(ctx, exc) {
-                                            ThrowDispatch::Caught => continue,
-                                            ThrowDispatch::Uncaught(e) => return Err(e),
-                                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
-                                        }
-                                    }
-                                    return Err(e);
+                        if let Err(e) = self.copy_data_properties(
+                            ctx,
+                            dst_val,
+                            src_val,
+                            Some(&excluded),
+                        ) {
+                            let caught = self.last_caught_exception.take();
+                            let host = ctx.pending_exception.take();
+                            let exc = caught.or(host).or_else(|| self.pending_throw.take());
+                            if let Some(exc) = exc {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
                                 }
-                            };
-                            let dst_obj = dst_val.as_object_mut();
-                            dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
+                            }
+                            return Err(e);
                         }
                     }
                 }
@@ -14226,6 +14210,51 @@ impl VM {
         result
     }
 
+    fn copy_data_properties(
+        &mut self,
+        ctx: &mut JSContext,
+        dst_val: JSValue,
+        src_val: JSValue,
+        excluded: Option<&std::collections::HashSet<crate::runtime::atom::Atom>>,
+    ) -> Result<(), String> {
+        if src_val.is_null_or_undefined() {
+            return Ok(());
+        }
+        if src_val.is_object() && unsafe { src_val.as_object() }.is_proxy() {
+            let keys = self.proxy_own_keys(ctx, src_val)?;
+            for key in keys {
+                let atom = self.key_value_to_atom(ctx, key);
+                if let Some(excluded) = excluded {
+                    if (key.is_string() || key.is_symbol()) && excluded.contains(&atom) {
+                        continue;
+                    }
+                }
+                let Some(desc) = self.proxy_get_own_descriptor(ctx, src_val, key)? else {
+                    continue;
+                };
+                if !desc.enumerable {
+                    continue;
+                }
+                let value = self.get_prop_value(ctx, src_val, atom)?;
+                let dst_obj = dst_val.as_object_mut();
+                dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
+            }
+            return Ok(());
+        }
+        let keys = self.own_enumerable_keys_in_order(ctx, src_val);
+        for atom in keys {
+            if let Some(excluded) = excluded {
+                if excluded.contains(&atom) {
+                    continue;
+                }
+            }
+            let value = self.get_copy_value(ctx, src_val, atom)?;
+            let dst_obj = dst_val.as_object_mut();
+            dst_obj.set_cached(atom, value, ctx.shape_cache_mut());
+        }
+        Ok(())
+    }
+
     fn get_copy_value(
         &mut self,
         ctx: &mut JSContext,
@@ -14734,6 +14763,204 @@ impl VM {
             }
         }
         self.define_data_on_receiver(ctx, receiver, key, atom, value)
+    }
+
+    fn ordinary_get_own_descriptor(
+        &mut self,
+        ctx: &mut JSContext,
+        obj_val: JSValue,
+        key: JSValue,
+    ) -> Result<Option<crate::object::object::PropertyDescriptor>, String> {
+        if obj_val.is_object() && unsafe { obj_val.as_object() }.is_proxy() {
+            return self.proxy_get_own_descriptor(ctx, obj_val, key);
+        }
+        if !obj_val.is_object_like() {
+            if obj_val.is_string() {
+                let atom = self.key_value_to_atom(ctx, key);
+                if atom == ctx.common_atoms.length {
+                    let count = ctx.string_code_unit_count(obj_val.get_atom()) as i64;
+                    return Ok(Some(crate::object::object::PropertyDescriptor {
+                        value: Some(JSValue::new_int(count)),
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                        get: None,
+                        set: None,
+                    }));
+                }
+                if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                    let text = ctx.get_atom_str(obj_val.get_atom()).to_string();
+                    if let Some(ch) = text.chars().nth(index) {
+                        return Ok(Some(crate::object::object::PropertyDescriptor {
+                            value: Some(JSValue::new_string(ctx.intern(&ch.to_string()))),
+                            writable: false,
+                            enumerable: true,
+                            configurable: false,
+                            get: None,
+                            set: None,
+                        }));
+                    }
+                }
+            }
+            return Ok(None);
+        }
+        let atom = self.key_value_to_atom(ctx, key);
+        let obj = unsafe { obj_val.as_object() };
+        if obj.is_dense_array() {
+            if let Some(index) = ctx.atom_table().get_array_index(atom) {
+                let array = unsafe {
+                    &*(obj_val.get_ptr()
+                        as *const crate::object::array_obj::JSArrayObject)
+                };
+                if let Some(v) = array.elements.get(index).copied() {
+                    return Ok(Some(crate::object::object::PropertyDescriptor {
+                        value: Some(v),
+                        writable: true,
+                        enumerable: true,
+                        configurable: true,
+                        get: None,
+                        set: None,
+                    }));
+                }
+            }
+        }
+        Ok(obj.get_own_descriptor(atom))
+    }
+
+    fn proxy_get_own_descriptor(
+        &mut self,
+        ctx: &mut JSContext,
+        proxy: JSValue,
+        key: JSValue,
+    ) -> Result<Option<crate::object::object::PropertyDescriptor>, String> {
+        let (target, handler) = self.proxy_resolve(ctx, proxy)?;
+        let trap_atom = ctx.intern("getOwnPropertyDescriptor");
+        let trap = self.proxy_trap_method(ctx, handler, trap_atom)?;
+        let Some(trap) = trap else {
+            return self.ordinary_get_own_descriptor(ctx, target, key);
+        };
+        let args = [target, key];
+        let trap_result = self.call_function_with_this(ctx, trap, handler, &args)?;
+        let target_desc = self.ordinary_get_own_descriptor(ctx, target, key)?;
+        let extensible_target =
+            target.is_object_like() && unsafe { target.as_object() }.extensible();
+        if trap_result.is_undefined() {
+            if let Some(td) = &target_desc {
+                if !td.configurable {
+                    let msg = "proxy getOwnPropertyDescriptor trap result must not be undefined for a non-configurable property".to_string();
+                    self.set_pending_type_error(ctx, &msg);
+                    return Err(msg);
+                }
+                if !extensible_target {
+                    let msg = "proxy getOwnPropertyDescriptor trap result must not be undefined for a non-extensible target".to_string();
+                    self.set_pending_type_error(ctx, &msg);
+                    return Err(msg);
+                }
+            }
+            return Ok(None);
+        }
+        if !trap_result.is_object_like() {
+            let msg = "proxy getOwnPropertyDescriptor trap result must be an object or undefined"
+                .to_string();
+            self.set_pending_type_error(ctx, &msg);
+            return Err(msg);
+        }
+        let Some((mut result_desc, presence)) =
+            crate::builtins::object::to_property_descriptor_with_presence(ctx, &trap_result)
+        else {
+            return Err("invalid property descriptor".to_string());
+        };
+        let is_accessor = presence.get || presence.set;
+        if is_accessor {
+            result_desc.get = Some(result_desc.get.unwrap_or_else(JSValue::undefined));
+            result_desc.set = Some(result_desc.set.unwrap_or_else(JSValue::undefined));
+        } else {
+            result_desc.value = Some(result_desc.value.unwrap_or_else(JSValue::undefined));
+        }
+        if !Self::is_compatible_property_descriptor(
+            extensible_target,
+            &result_desc,
+            &presence,
+            target_desc.as_ref(),
+        ) {
+            let msg = "proxy getOwnPropertyDescriptor trap result is not compatible with the target"
+                .to_string();
+            self.set_pending_type_error(ctx, &msg);
+            return Err(msg);
+        }
+        if !result_desc.configurable {
+            let Some(td) = target_desc.as_ref() else {
+                let msg = "proxy getOwnPropertyDescriptor trap result is not compatible with the target".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            };
+            if td.configurable {
+                let msg = "proxy getOwnPropertyDescriptor trap result is not compatible with the target".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            }
+            if presence.writable && !result_desc.writable && td.writable {
+                let msg = "proxy getOwnPropertyDescriptor trap result is not compatible with the target".to_string();
+                self.set_pending_type_error(ctx, &msg);
+                return Err(msg);
+            }
+        }
+        Ok(Some(result_desc))
+    }
+
+    fn is_compatible_property_descriptor(
+        extensible: bool,
+        desc: &crate::object::object::PropertyDescriptor,
+        presence: &crate::builtins::object::DescriptorPresence,
+        current: Option<&crate::object::object::PropertyDescriptor>,
+    ) -> bool {
+        let Some(current) = current else {
+            return extensible;
+        };
+        if current.configurable {
+            return true;
+        }
+        if presence.configurable && desc.configurable {
+            return false;
+        }
+        if presence.enumerable && desc.enumerable != current.enumerable {
+            return false;
+        }
+        let desc_accessor = presence.get || presence.set;
+        let desc_data = presence.value || presence.writable;
+        let desc_generic = !desc_accessor && !desc_data;
+        let current_accessor = current.get.is_some() || current.set.is_some();
+        if !desc_generic && desc_accessor != current_accessor {
+            return false;
+        }
+        if current_accessor {
+            if presence.get {
+                let dg = desc.get.unwrap_or_else(JSValue::undefined);
+                let cg = current.get.unwrap_or_else(JSValue::undefined);
+                if !Self::same_value_for_invariant(dg, cg) {
+                    return false;
+                }
+            }
+            if presence.set {
+                let ds = desc.set.unwrap_or_else(JSValue::undefined);
+                let cs = current.set.unwrap_or_else(JSValue::undefined);
+                if !Self::same_value_for_invariant(ds, cs) {
+                    return false;
+                }
+            }
+        } else if !current.writable {
+            if presence.writable && desc.writable {
+                return false;
+            }
+            if presence.value {
+                let dv = desc.value.unwrap_or_else(JSValue::undefined);
+                let cv = current.value.unwrap_or_else(JSValue::undefined);
+                if !Self::same_value_for_invariant(dv, cv) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn proxy_define_property_internal(
