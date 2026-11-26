@@ -3399,6 +3399,16 @@ impl Parser {
                 }
             });
         }
+        if self.cur_type() == Some(TokenType::BigInt) {
+            let raw = self.cur_value().to_string();
+            self.advance();
+            let decimal = bigint_literal_to_decimal_string(&raw);
+            return Ok((
+                PropertyKey::Literal(Literal::String(decimal, false, false)),
+                false,
+                false,
+            ));
+        }
         if self.has_invalid_identifier_escape() {
             return Err(self.error("Invalid escaped identifier"));
         }
@@ -3731,6 +3741,54 @@ fn parse_regex_value(value: &str) -> (String, String) {
 enum NumberLit {
     Normal(f64),
     LegacyOctal(i64),
+}
+
+fn bigint_literal_to_decimal_string(raw: &str) -> String {
+    let (radix, digits) = if let Some(rest) = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+    {
+        (16u32, rest)
+    } else if let Some(rest) = raw
+        .strip_prefix("0o")
+        .or_else(|| raw.strip_prefix("0O"))
+    {
+        (8u32, rest)
+    } else if let Some(rest) = raw
+        .strip_prefix("0b")
+        .or_else(|| raw.strip_prefix("0B"))
+    {
+        (2u32, rest)
+    } else {
+        (10u32, raw)
+    };
+    let digits = digits.replace('_', "");
+    let mut limbs: Vec<u64> = vec![0];
+    for ch in digits.chars() {
+        let d = match ch.to_digit(radix) {
+            Some(d) => d as u64,
+            None => continue,
+        };
+        let mut carry = d;
+        for limb in limbs.iter_mut() {
+            let value = *limb * radix as u64 + carry;
+            *limb = value % 1_000_000_000;
+            carry = value / 1_000_000_000;
+        }
+        while carry > 0 {
+            limbs.push(carry % 1_000_000_000);
+            carry /= 1_000_000_000;
+        }
+    }
+    let mut out = String::new();
+    for (i, limb) in limbs.iter().enumerate().rev() {
+        if i + 1 == limbs.len() {
+            out.push_str(&limb.to_string());
+        } else {
+            out.push_str(&format!("{:09}", limb));
+        }
+    }
+    out
 }
 
 fn parse_number_literal(raw: &str) -> NumberLit {
