@@ -1562,11 +1562,11 @@ impl VM {
                 frame.saved_args.clear();
             }
             frame.saved_args.reserve(arg_regs.len());
-            let caller_ptr = self.cached_registers_ptr;
+            let caller_base = self.cached_registers_base;
             for r in arg_regs.iter() {
                 frame
                     .saved_args
-                    .push(unsafe { *caller_ptr.add(*r as usize) });
+                    .push(self.registers[caller_base + *r as usize]);
             }
         } else if !is_new_frame && !frame.saved_args.is_empty() {
             frame.saved_args.clear();
