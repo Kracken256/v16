@@ -241,7 +241,14 @@ fn array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn data_view_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    if args.is_empty() || !args[0].is_object() {
+    if args.is_empty()
+        || !args[0].is_object()
+        || args[0].as_object().obj_type() != ObjectType::ArrayBuffer
+    {
+        throw_type_error(
+            ctx,
+            "First argument to DataView constructor must be an ArrayBuffer",
+        );
         return JSValue::undefined();
     }
 
