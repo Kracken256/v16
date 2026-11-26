@@ -4999,9 +4999,7 @@ impl VM {
 
                 if do_minor && !skip_minor {
                     self.fill_gc_roots(ctx);
-                    let roots_len = self.gc_roots.len();
-                    let roots_ptr = self.gc_roots.as_mut_ptr();
-                    let roots = unsafe { std::slice::from_raw_parts_mut(roots_ptr, roots_len) };
+                    let roots = &self.gc_roots;
                     let _ = ctx.runtime_mut().minor_gc(roots);
                 }
 
@@ -5014,17 +5012,13 @@ impl VM {
 
     pub fn minor_gc(&mut self, ctx: &mut JSContext) -> usize {
         self.fill_gc_roots(ctx);
-        let roots_ptr = self.gc_roots.as_ptr();
-        let roots_len = self.gc_roots.len();
-        let roots = unsafe { std::slice::from_raw_parts(roots_ptr, roots_len) };
+        let roots = &self.gc_roots;
         ctx.runtime_mut().minor_gc(roots)
     }
 
     pub fn run_gc(&mut self, ctx: &mut JSContext) -> usize {
         self.fill_gc_roots(ctx);
-        let roots_ptr = self.gc_roots.as_ptr();
-        let roots_len = self.gc_roots.len();
-        let roots = unsafe { std::slice::from_raw_parts(roots_ptr, roots_len) };
+        let roots = &self.gc_roots;
         let freed = ctx.runtime_mut().run_gc(roots);
 
         if ctx.runtime().gc_heap().deleted_props_count > 0 {
