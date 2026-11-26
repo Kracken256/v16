@@ -9076,6 +9076,64 @@ impl VM {
                         } else {
                             JSValue::undefined()
                         }
+                    } else if !obj_val.is_object_like()
+                        && !obj_val.is_function()
+                        && key_val.is_string()
+                    {
+                        let atom = key_val.get_atom();
+                        if let Some(v) =
+                            self.get_named_prop_result(ctx, dst, obj_val, atom, usize::MAX)
+                        {
+                            v
+                        } else {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    } else if !obj_val.is_object_like()
+                        && !obj_val.is_function()
+                        && key_val.is_int()
+                    {
+                        let atom = self.int_atom(key_val.get_int() as usize, ctx);
+                        if let Some(v) =
+                            self.get_named_prop_result(ctx, dst, obj_val, atom, usize::MAX)
+                        {
+                            v
+                        } else {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
+                    } else if !obj_val.is_object_like()
+                        && !obj_val.is_function()
+                        && key_val.is_float()
+                    {
+                        let s = VM::js_to_string(&key_val, ctx);
+                        let atom = s.get_atom();
+                        if let Some(v) =
+                            self.get_named_prop_result(ctx, dst, obj_val, atom, usize::MAX)
+                        {
+                            v
+                        } else {
+                            if let Some(exc) = self.pending_throw.take() {
+                                match self.dispatch_throw_value(ctx, exc) {
+                                    ThrowDispatch::Caught => continue,
+                                    ThrowDispatch::Uncaught(e) => return Err(e),
+                                    ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                }
+                            }
+                            continue;
+                        }
                     } else {
                         JSValue::undefined()
                     };
