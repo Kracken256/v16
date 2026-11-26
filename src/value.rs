@@ -130,8 +130,28 @@ impl JSValue {
         JSValue(Self::pack(TAG_OBJECT, Self::compress_ptr(ptr as usize)))
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must be non-null, correctly aligned, and point to a live `JSObject`
+    /// allocation that is tracked by the runtime GC heap for as long as the
+    /// returned value can be observed.
+    #[inline(always)]
+    pub unsafe fn new_object_unchecked(ptr: *mut crate::object::object::JSObject) -> Self {
+        JSValue(Self::pack(TAG_OBJECT, Self::compress_ptr(ptr as usize)))
+    }
+
     #[inline(always)]
     pub fn new_function(ptr: *mut crate::object::function::JSFunction) -> Self {
+        JSValue(Self::pack(TAG_FUNC, Self::compress_ptr(ptr as usize)))
+    }
+
+    /// # Safety
+    ///
+    /// `ptr` must be non-null, correctly aligned, and point to a live `JSFunction`
+    /// allocation whose embedded `JSObject` base is tracked by the runtime GC heap
+    /// for as long as the returned value can be observed.
+    #[inline(always)]
+    pub unsafe fn new_function_unchecked(ptr: *mut crate::object::function::JSFunction) -> Self {
         JSValue(Self::pack(TAG_FUNC, Self::compress_ptr(ptr as usize)))
     }
 
@@ -149,6 +169,15 @@ impl JSValue {
     }
 
     pub fn new_bigint(ptr: *mut crate::object::object::JSObject) -> Self {
+        JSValue(Self::pack(TAG_BIGINT, Self::compress_ptr(ptr as usize)))
+    }
+
+    /// # Safety
+    ///
+    /// `ptr` must be non-null and point to a live BigInt object allocation that
+    /// remains alive for as long as the returned value can be observed.
+    #[inline(always)]
+    pub unsafe fn new_bigint_unchecked(ptr: *mut crate::object::object::JSObject) -> Self {
         JSValue(Self::pack(TAG_BIGINT, Self::compress_ptr(ptr as usize)))
     }
 

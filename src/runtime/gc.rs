@@ -16,6 +16,56 @@ pub struct WeakObjectHandle {
     generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrackedAllocation<T> {
+    ptr: std::ptr::NonNull<T>,
+    slot: usize,
+}
+
+impl<T> TrackedAllocation<T> {
+    fn new(ptr: *mut T, slot: usize) -> Self {
+        Self {
+            ptr: std::ptr::NonNull::new(ptr).expect("tracked allocation must not be null"),
+            slot,
+        }
+    }
+
+    #[inline(always)]
+    pub fn ptr(self) -> *mut T {
+        self.ptr.as_ptr()
+    }
+
+    #[inline(always)]
+    pub fn slot(self) -> usize {
+        self.slot
+    }
+}
+
+impl TrackedAllocation<JSObject> {
+    #[inline(always)]
+    pub fn value(self) -> JSValue {
+        // SAFETY: the allocation was produced by `GcHeap::allocate_object`, which boxes and tracks a live object.
+        unsafe { JSValue::new_object_unchecked(self.ptr()) }
+    }
+}
+
+impl TrackedAllocation<JSFunction> {
+    #[inline(always)]
+    pub fn value(self) -> JSValue {
+        // SAFETY: the allocation was produced by `GcHeap::allocate_function`, which boxes and tracks a live function.
+        unsafe { JSValue::new_function_unchecked(self.ptr()) }
+    }
+}
+
+impl TrackedAllocation<JSArrayObject> {
+    #[inline(always)]
+    pub fn value(self) -> JSValue {
+        // SAFETY: the allocation was produced by `GcHeap::allocate_array`, which boxes and tracks a live array;
+        // `JSArrayObject` is `#[repr(C)]` with its `JSObject` header first.
+        unsafe { JSValue::new_object_unchecked(self.ptr().cast::<JSObject>()) }
+    }
+}
+
 const COLOR_WHITE: u8 = 0;
 const COLOR_GRAY: u8 = 1;
 const COLOR_BLACK: u8 = 2;
@@ -318,6 +368,24 @@ impl GcHeap {
 
     pub fn track_function(&mut self, ptr: *mut JSFunction) -> usize {
         self.track_tenured(ptr.cast::<JSObject>(), TAG_FUNCTION)
+    }
+
+    pub fn allocate_object(&mut self, object: JSObject) -> TrackedAllocation<JSObject> {
+        let ptr = Box::into_raw(Box::new(object));
+        let slot = self.track_tenured(ptr, TAG_OBJECT);
+        TrackedAllocation::new(ptr, slot)
+    }
+
+    pub fn allocate_function(&mut self, function: JSFunction) -> TrackedAllocation<JSFunction> {
+        let ptr = Box::into_raw(Box::new(function));
+        let slot = self.track_tenured(ptr.cast::<JSObject>(), TAG_FUNCTION);
+        TrackedAllocation::new(ptr, slot)
+    }
+
+    pub fn allocate_array(&mut self, array: JSArrayObject) -> TrackedAllocation<JSArrayObject> {
+        let ptr = Box::into_raw(Box::new(array));
+        let slot = self.track_tenured(ptr.cast::<JSObject>(), TAG_ARRAY);
+        TrackedAllocation::new(ptr, slot)
     }
 
     #[inline]

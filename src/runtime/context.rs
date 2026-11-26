@@ -6,6 +6,8 @@ use crate::builtins;
 use crate::builtins::promise::{Microtask, MicrotaskQueue};
 use crate::compiler::codegen::OptLevel;
 use crate::host::HostFunction;
+use crate::object::array_obj::JSArrayObject;
+use crate::object::function::JSFunction;
 use crate::object::JSObject;
 use crate::object::ShapeCache;
 use crate::util::FxHashMap;
@@ -477,6 +479,27 @@ impl JSContext {
     pub fn runtime_mut(&mut self) -> &mut JSRuntime {
         // SAFETY: the runtime pointer is set at context construction, is valid for the context's lifetime, and `&mut self` serializes access.
         unsafe { &mut *self.runtime }
+    }
+
+    pub fn allocate_object(&mut self, object: JSObject) -> JSValue {
+        self.runtime_mut()
+            .gc_heap_mut()
+            .allocate_object(object)
+            .value()
+    }
+
+    pub fn allocate_function(&mut self, function: JSFunction) -> JSValue {
+        self.runtime_mut()
+            .gc_heap_mut()
+            .allocate_function(function)
+            .value()
+    }
+
+    pub fn allocate_array(&mut self, array: JSArrayObject) -> JSValue {
+        self.runtime_mut()
+            .gc_heap_mut()
+            .allocate_array(array)
+            .value()
     }
 
     pub fn array_index_has_own(&self, value: &JSValue, atom: Atom) -> bool {
