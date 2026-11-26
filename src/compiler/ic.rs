@@ -39,9 +39,6 @@ impl InlineCacheWrite {
     }
 }
 
-unsafe impl Send for InlineCacheWrite {}
-unsafe impl Sync for InlineCacheWrite {}
-
 const IC_POLY: usize = 2;
 
 #[derive(Clone, Debug)]

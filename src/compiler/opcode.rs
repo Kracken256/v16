@@ -643,9 +643,6 @@ pub struct Bytecode {
     pub cached_constructor_final_shape: Option<std::ptr::NonNull<crate::object::shape::Shape>>,
 }
 
-unsafe impl Send for Bytecode {}
-unsafe impl Sync for Bytecode {}
-
 pub struct NestedBytecode {
     pub code: Vec<u8>,
     pub constants: Vec<crate::value::JSValue>,
@@ -672,9 +669,6 @@ pub struct NestedBytecode {
 
     pub nested_bytecodes: std::cell::UnsafeCell<Vec<(u32, std::sync::Arc<NestedBytecode>)>>,
 }
-
-unsafe impl Sync for NestedBytecode {}
-unsafe impl Send for NestedBytecode {}
 
 impl std::fmt::Debug for NestedBytecode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

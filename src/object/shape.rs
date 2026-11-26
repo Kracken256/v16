@@ -29,9 +29,6 @@ pub struct Shape {
     children: UnsafeCell<Vec<(Atom, NonNull<Shape>)>>,
 }
 
-unsafe impl Send for Shape {}
-unsafe impl Sync for Shape {}
-
 impl Shape {
     pub fn root() -> Self {
         Shape {
