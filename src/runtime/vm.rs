@@ -9257,6 +9257,9 @@ impl VM {
                                         setter_found = entry.set;
                                         break;
                                     }
+                                    if pobj.has_own(key_atom) {
+                                        break;
+                                    }
                                     proto = pobj.prototype;
                                 }
                                 if let Some(setter) = setter_found {
@@ -9333,30 +9336,7 @@ impl VM {
                         } else {
                             let idx = key_val.get_int();
                             let atom = self.int_atom(idx as usize, ctx);
-                            let setter = {
-                                let mut found =
-                                    js_obj.get_own_accessor_entry(atom).and_then(|e| e.set);
-                                if found.is_none() {
-                                    let mut proto = js_obj.prototype;
-                                    while let Some(p) = proto {
-                                        let pobj = unsafe { &*p };
-                                        if let Some(e) = pobj.get_own_accessor_entry(atom) {
-                                            found = e.set;
-                                            break;
-                                        }
-                                        proto = pobj.prototype;
-                                    }
-                                }
-                                found
-                            };
-                            if let Some(s) = setter {
-                                if s.is_function() {
-                                    match self.call_function_with_this(ctx, s, obj_val, &[value]) {
-                                        Ok(_) => {}
-                                        Err(_) => {}
-                                    }
-                                }
-                            } else if idx >= 0 && js_obj.maybe_set_indexed(idx as usize, value) {
+                            if idx >= 0 && js_obj.maybe_set_indexed(idx as usize, value) {
                             } else {
                                 let pre_offset = js_obj.find_offset(atom);
                                 let own_accessor =
@@ -15524,6 +15504,9 @@ impl VM {
             if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
                 return (true, entry.set);
             }
+            if js_obj.has_own(atom) {
+                return (false, None);
+            }
             let mut proto = js_obj.prototype;
             while let Some(proto_ptr) = proto {
                 if proto_ptr.is_null() {
@@ -15532,6 +15515,9 @@ impl VM {
                 let proto_obj = unsafe { &*proto_ptr };
                 if let Some(entry) = proto_obj.get_own_accessor_entry(atom) {
                     return (true, entry.set);
+                }
+                if proto_obj.has_own(atom) {
+                    return (false, None);
                 }
                 proto = proto_obj.prototype;
             }
@@ -15903,7 +15889,9 @@ impl VM {
                 return false;
             }
 
-            let (has_accessor, setter) = if !ic_table_ptr.is_null() {
+            let (has_accessor, setter) = if pre_offset.is_some() {
+                (false, None)
+            } else if !ic_table_ptr.is_null() {
                 let ic_table = unsafe { &*ic_table_ptr };
                 if let Some(shape_id) = js_obj.get_shape_id() {
                     if ic_table.get_write_no_accessor(ic_pc, shape_id) {
