@@ -8919,12 +8919,25 @@ impl CodeGenerator {
                     return Ok(current);
                 }
 
+                let resolved = self.resolve_var(name, ctx);
+                if resolved.is_none() && self.is_strict && !self.suppress_ref_error {
+                    let atom = ctx.intern(name);
+                    let idx = self.add_constant(JSValue::new_string(atom));
+                    let check = self.alloc_register();
+                    self.emit(Opcode::GetGlobal);
+                    self.emit_u16(check);
+                    self.emit_u32(idx);
+                    self.emit(Opcode::CheckRef);
+                    self.emit_u16(check);
+                    self.emit_u32(idx);
+                    self.free_register(check);
+                }
                 let val = if assign.lhs_parenthesized {
                     self.gen_expression(&assign.right, ctx)?
                 } else {
                     self.gen_expression_with_assign_name(&assign.right, name, ctx)?
                 };
-                match self.resolve_var(name, ctx) {
+                match resolved {
                     Some(VarLocation::Local(slot)) => {
                         // Check TDZ for let/const variables on assignment
                         if let Some(entry) = self.lookup_var(name) {
