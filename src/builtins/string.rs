@@ -180,28 +180,28 @@ fn this_to_string(ctx: &mut JSContext, this: &JSValue) -> Option<String> {
                 });
             }
         }
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let ts_fn = obj.get(ctx.common_atoms.to_string);
-            if let Some(ts) = ts_fn {
-                if ts.is_function() {
-                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                    if let Ok(r) = vm.call_function_with_this(ctx, ts, *this, &[]) {
-                        if r.is_string() {
-                            return Some(ctx.get_atom_str(r.get_atom()).to_string());
-                        }
-                        if r.is_int() {
-                            return Some(format!("{}", r.get_int()));
-                        }
-                        if r.is_float() {
-                            return Some(js_float_to_string(r.get_float()));
-                        }
-                        if r.is_bool() {
-                            return Some(if r.get_bool() {
-                                "true".to_string()
-                            } else {
-                                "false".to_string()
-                            });
-                        }
+        let ts_fn = obj.get(ctx.common_atoms.to_string);
+        if let Some(ts) = ts_fn {
+            if ts.is_function() {
+                let r = ctx
+                    .with_vm(|vm, ctx| vm.call_function_with_this(ctx, ts, *this, &[]).ok())
+                    .flatten();
+                if let Some(r) = r {
+                    if r.is_string() {
+                        return Some(ctx.get_atom_str(r.get_atom()).to_string());
+                    }
+                    if r.is_int() {
+                        return Some(format!("{}", r.get_int()));
+                    }
+                    if r.is_float() {
+                        return Some(js_float_to_string(r.get_float()));
+                    }
+                    if r.is_bool() {
+                        return Some(if r.get_bool() {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        });
                     }
                 }
             }
@@ -1278,12 +1278,8 @@ fn string_split(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             };
 
             let mut parts: Vec<String> = Vec::new();
-            let compiled_re = args[1]
-                .as_object()
-                .get_compiled_regex()
-                .map(|re| re as *const crate::regexp::Regex);
-            if let Some(re_ptr) = compiled_re {
-                let re = unsafe { &*re_ptr };
+            let compiled_re = args[1].as_object().get_compiled_regex();
+            if let Some(re) = compiled_re {
                 let mut last = 0usize;
                 let mut search_start = 0usize;
                 loop {
@@ -1818,15 +1814,10 @@ fn call_replace_function(
     }
     args.push(JSValue::new_int(position as i64));
     args.push(JSValue::new_string(ctx.intern(full)));
-    let val = if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        match vm.call_function_with_this(ctx, func, JSValue::undefined(), &args) {
-            Ok(v) => v,
-            Err(_) => JSValue::undefined(),
-        }
-    } else {
-        JSValue::undefined()
-    };
+    let val = ctx
+        .with_vm(|vm, ctx| vm.call_function_with_this(ctx, func, JSValue::undefined(), &args))
+        .map(|r| r.unwrap_or_else(|_| JSValue::undefined()))
+        .unwrap_or_else(JSValue::undefined);
     js_to_string_arg(&val, ctx)
 }
 
