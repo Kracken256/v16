@@ -571,7 +571,7 @@ impl Parser {
             _ => return Err(self.error("expected function name")),
         };
         self.expect("(")?;
-        let params = self.parse_parameter_list()?;
+        let params = self.parse_parameter_list(generator, is_async)?;
         self.expect(")")?;
         let body = self.parse_function_body(generator, is_async)?;
         Ok(ASTNode::FunctionDeclaration(FunctionDeclaration {
@@ -606,7 +606,7 @@ impl Parser {
             None
         };
         self.expect("(")?;
-        let params = self.parse_parameter_list()?;
+        let params = self.parse_parameter_list(generator, is_async)?;
         self.expect(")")?;
         let body = self.parse_function_body(generator, is_async)?;
         Ok(Expression::FunctionExpression(FunctionExpression {
@@ -618,7 +618,22 @@ impl Parser {
         }))
     }
 
-    fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, String> {
+    fn parse_parameter_list(
+        &mut self,
+        generator: bool,
+        is_async: bool,
+    ) -> Result<Vec<Parameter>, String> {
+        let saved_generator = self.in_generator;
+        let saved_async = self.in_async;
+        self.in_generator = generator;
+        self.in_async = is_async;
+        let result = self.parse_parameter_list_inner();
+        self.in_generator = saved_generator;
+        self.in_async = saved_async;
+        result
+    }
+
+    fn parse_parameter_list_inner(&mut self) -> Result<Vec<Parameter>, String> {
         let mut params = Vec::new();
         while !self.at_punct(")") && !self.is_eof() {
             if self.at_punct("...") {
@@ -926,7 +941,7 @@ impl Parser {
             }
 
             self.expect("(")?;
-            let params = self.parse_parameter_list()?;
+            let params = self.parse_parameter_list(is_generator, is_async)?;
             self.expect(")")?;
             let body = self.parse_function_body(is_generator, is_async)?;
 
@@ -1986,7 +2001,7 @@ impl Parser {
             String::new()
         };
         self.expect("(")?;
-        let params = self.parse_parameter_list()?;
+        let params = self.parse_parameter_list(generator, is_async)?;
         self.expect(")")?;
         let body = self.parse_function_body(generator, is_async)?;
         Ok(FunctionDeclaration {
@@ -2117,7 +2132,7 @@ impl Parser {
 
         let params = if self.at_punct("(") {
             self.advance();
-            let p = match self.parse_parameter_list() {
+            let p = match self.parse_parameter_list(self.in_generator, self.in_async) {
                 Ok(p) => p,
                 Err(_) => {
                     self.restore(saved_pos, saved_kind, saved_cur, saved_peek);
@@ -3218,7 +3233,7 @@ impl Parser {
 
             if self.at_punct("(") && !shorthand {
                 self.expect("(")?;
-                let params = self.parse_parameter_list()?;
+                let params = self.parse_parameter_list(is_generator, is_async)?;
                 self.expect(")")?;
                 let body = self.parse_function_body(is_generator, is_async)?;
                 properties.push(Property::Property {
@@ -3259,7 +3274,7 @@ impl Parser {
                         }
                         if self.at_punct("(") {
                             self.expect("(")?;
-                            let params = self.parse_parameter_list()?;
+                            let params = self.parse_parameter_list(false, false)?;
                             self.expect(")")?;
                             let body = self.parse_function_body(false, false)?;
 
