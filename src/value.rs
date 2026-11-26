@@ -329,28 +329,122 @@ impl JSValue {
     }
 
     #[inline(always)]
+    fn has_object_payload(&self) -> bool {
+        Self::is_tagged(self.0)
+            && matches!(self.get_tag(), TAG_OBJECT | TAG_FUNC | TAG_BIGINT)
+    }
+
+    #[inline(always)]
+    pub fn try_as_object(&self) -> Option<&crate::object::object::JSObject> {
+        if self.has_object_payload() {
+            // SAFETY: the tag check above restricts the payload to the object-pointer tags.
+            Some(unsafe { self.as_object_unchecked() })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_object_mut(&mut self) -> Option<&mut crate::object::object::JSObject> {
+        if self.has_object_payload() {
+            // SAFETY: the tag check above restricts the payload to the object-pointer tags,
+            // and the mutable borrow of the value prevents aliasing through this handle.
+            Some(unsafe { self.as_object_mut_unchecked() })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_function(&self) -> Option<&crate::object::function::JSFunction> {
+        if self.is_function() {
+            // SAFETY: the tag check above restricts the payload to function objects.
+            Some(unsafe { self.as_function_unchecked() })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_function_mut(&mut self) -> Option<&mut crate::object::function::JSFunction> {
+        if self.is_function() {
+            // SAFETY: the tag check above restricts the payload to function objects,
+            // and the mutable borrow of the value prevents aliasing through this handle.
+            Some(unsafe { self.as_function_mut_unchecked() })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
     pub fn as_object(&self) -> &crate::object::object::JSObject {
-        // SAFETY: the value was constructed with a live GC-tracked object pointer and its tag is one of the object tags checked by the accessor's callers.
-        unsafe { &*self.get_ptr() }
+        self.try_as_object()
+            .expect("JSValue does not hold an object")
     }
 
     #[inline(always)]
     #[allow(clippy::mut_from_ref)]
     pub fn as_object_mut(&self) -> &mut crate::object::object::JSObject {
-        // SAFETY: the value holds a live GC-tracked object pointer; the engine mutates objects only through single-threaded VM/context paths that hold the unique execution borrow.
+        // SAFETY: this legacy accessor is retained only until every call site uses the
+        // checked mutable accessor; the pointer comes from an object-tagged value.
         unsafe { &mut *self.get_ptr() }
     }
 
     #[inline(always)]
     pub fn as_function(&self) -> &crate::object::function::JSFunction {
-        // SAFETY: only values tagged TAG_FUNC reach this accessor, and JSFunction starts with a #[repr(C)] JSObject header, so the object pointer is a valid JSFunction pointer.
-        unsafe { &*(self.get_ptr() as *const crate::object::function::JSFunction) }
+        self.try_as_function()
+            .expect("JSValue does not hold a function")
     }
 
     #[inline(always)]
     #[allow(clippy::mut_from_ref)]
     pub fn as_function_mut(&self) -> &mut crate::object::function::JSFunction {
-        // SAFETY: only values tagged TAG_FUNC reach this accessor, JSFunction starts with a #[repr(C)] JSObject header, and mutation is serialized by the single-threaded VM/context borrow.
+        // SAFETY: this legacy accessor is retained only until every call site uses the
+        // checked mutable accessor; the pointer comes from a function-tagged value.
+        unsafe { &mut *(self.get_ptr() as *mut crate::object::function::JSFunction) }
+    }
+
+    /// # Safety
+    ///
+    /// The value must be tagged `TAG_OBJECT`, `TAG_FUNC`, or `TAG_BIGINT`, and its payload
+    /// must be a live object pointer owned by the active runtime.
+    #[inline(always)]
+    pub unsafe fn as_object_unchecked(&self) -> &crate::object::object::JSObject {
+        // SAFETY: the caller guarantees the tag and pointer invariants.
+        unsafe { &*self.get_ptr() }
+    }
+
+    /// # Safety
+    ///
+    /// The value must be tagged `TAG_OBJECT`, `TAG_FUNC`, or `TAG_BIGINT`, its payload
+    /// must be a live object pointer owned by the active runtime, and no other reference
+    /// to the same object may exist for the returned lifetime.
+    #[inline(always)]
+    pub unsafe fn as_object_mut_unchecked(&mut self) -> &mut crate::object::object::JSObject {
+        // SAFETY: the caller guarantees the tag, pointer and aliasing invariants.
+        unsafe { &mut *self.get_ptr() }
+    }
+
+    /// # Safety
+    ///
+    /// The value must be tagged `TAG_FUNC`, and its payload must be a live function
+    /// pointer owned by the active runtime.
+    #[inline(always)]
+    pub unsafe fn as_function_unchecked(&self) -> &crate::object::function::JSFunction {
+        // SAFETY: the caller guarantees the tag and pointer invariants.
+        unsafe { &*(self.get_ptr() as *const crate::object::function::JSFunction) }
+    }
+
+    /// # Safety
+    ///
+    /// The value must be tagged `TAG_FUNC`, its payload must be a live function pointer
+    /// owned by the active runtime, and no other reference to the same function may
+    /// exist for the returned lifetime.
+    #[inline(always)]
+    pub unsafe fn as_function_mut_unchecked(
+        &mut self,
+    ) -> &mut crate::object::function::JSFunction {
+        // SAFETY: the caller guarantees the tag, pointer and aliasing invariants.
         unsafe { &mut *(self.get_ptr() as *mut crate::object::function::JSFunction) }
     }
 
@@ -370,7 +464,9 @@ impl JSValue {
             TAG_INT => self.get_int() != 0,
             TAG_BOOL => self.get_bool(),
             TAG_STRING => self.get_payload() != 0,
-            TAG_BIGINT => !self.as_object().get_bigint_value().is_zero(),
+            TAG_BIGINT => self
+                .try_as_object()
+                .is_some_and(|object| !object.get_bigint_value().is_zero()),
             TAG_OBJECT | TAG_FUNC | TAG_SYMBOL => true,
             _ => false,
         }
@@ -386,9 +482,10 @@ impl JSValue {
         }
 
         if self.is_bigint() && other.is_bigint() {
-            let obj_a = self.as_object();
-            let obj_b = other.as_object();
-            return obj_a.get_bigint_value() == obj_b.get_bigint_value();
+            if let (Some(obj_a), Some(obj_b)) = (self.try_as_object(), other.try_as_object()) {
+                return obj_a.get_bigint_value() == obj_b.get_bigint_value();
+            }
+            return false;
         }
 
         if self.is_int() && other.is_float() {
@@ -541,5 +638,90 @@ impl<T: IntoJSValue> IntoJSValue for Option<T> {
             Some(v) => v.into_jsvalue(ctx),
             None => JSValue::null(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::function::JSFunction;
+    use crate::object::object::JSObject;
+
+    #[test]
+    fn checked_object_accessors_reject_types_without_object_payloads() {
+        let primitive_values = [
+            JSValue::undefined(),
+            JSValue::null(),
+            JSValue::bool(true),
+            JSValue::new_int(7),
+            JSValue::new_float(1.5),
+            JSValue::new_string(Atom(1)),
+            JSValue::new_symbol(Atom(2)),
+            JSValue::new_tdz(),
+        ];
+        for value in primitive_values {
+            assert!(value.try_as_object().is_none());
+            assert!(value.try_as_function().is_none());
+        }
+    }
+
+    #[test]
+    fn checked_object_accessors_accept_object_tags() {
+        let object_ptr = Box::into_raw(Box::new(JSObject::new()));
+        let object_value = JSValue::new_object(object_ptr);
+        assert_eq!(
+            object_value.try_as_object().unwrap() as *const JSObject,
+            object_ptr as *const JSObject
+        );
+        assert!(object_value.try_as_function().is_none());
+
+        let function_ptr = Box::into_raw(Box::new(JSFunction::new()));
+        let function_value = JSValue::new_function(function_ptr);
+        assert_eq!(
+            function_value.try_as_function().unwrap() as *const JSFunction,
+            function_ptr as *const JSFunction
+        );
+        assert_eq!(
+            function_value.try_as_object().unwrap() as *const JSObject,
+            function_ptr as *const JSObject
+        );
+
+        let bigint_ptr = Box::into_raw(Box::new(JSObject::new_bigint()));
+        let bigint_value = JSValue::new_bigint(bigint_ptr);
+        assert_eq!(
+            bigint_value.try_as_object().unwrap() as *const JSObject,
+            bigint_ptr as *const JSObject
+        );
+        assert!(bigint_value.try_as_function().is_none());
+
+        drop(unsafe { Box::from_raw(object_ptr) });
+        drop(unsafe { Box::from_raw(function_ptr) });
+        drop(unsafe { Box::from_raw(bigint_ptr) });
+    }
+
+    #[test]
+    fn checked_mutable_accessors_require_the_matching_tag() {
+        let mut object_value = JSValue::new_int(1);
+        assert!(object_value.try_as_object_mut().is_none());
+        assert!(object_value.try_as_function_mut().is_none());
+
+        let object_ptr = Box::into_raw(Box::new(JSObject::new()));
+        let mut object_value = JSValue::new_object(object_ptr);
+        assert!(object_value.try_as_object_mut().is_some());
+        assert!(object_value.try_as_function_mut().is_none());
+
+        let function_ptr = Box::into_raw(Box::new(JSFunction::new()));
+        let mut function_value = JSValue::new_function(function_ptr);
+        assert!(function_value.try_as_function_mut().is_some());
+        assert!(function_value.try_as_object_mut().is_some());
+
+        drop(unsafe { Box::from_raw(object_ptr) });
+        drop(unsafe { Box::from_raw(function_ptr) });
+    }
+
+    #[test]
+    #[should_panic(expected = "JSValue does not hold an object")]
+    fn as_object_rejects_primitive_values() {
+        JSValue::new_int(1).as_object();
     }
 }
