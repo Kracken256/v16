@@ -514,8 +514,7 @@ fn get_property(
 ) -> Option<JSValue> {
     if let Some(val) = obj.get_own_accessor_value(prop) {
         if val.is_function() {
-            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+            if let Some(r) = ctx.with_vm(|vm, ctx| {
                 let saved_exception = ctx.pending_exception.take();
                 let result = vm.call_function_with_this(ctx, val, this.clone(), &[]);
                 if result.is_err() {
@@ -530,7 +529,9 @@ fn get_property(
                     return None;
                 }
                 ctx.pending_exception = saved_exception;
-                return result.ok();
+                result.ok()
+            }) {
+                return r;
             }
         }
         return Some(val);
@@ -580,35 +581,35 @@ fn js_to_string_value(ctx: &mut JSContext, val: &JSValue) -> Result<String, ()> 
         return Err(());
     }
     if val.is_object_like() {
-        let Some(vm_ptr) = ctx.get_register_vm_ptr() else {
-            return Ok(String::new());
-        };
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        let prim = vm.ordinary_to_primitive(val, "string", ctx);
-        if let Some(exc) = ctx
-            .pending_exception
-            .take()
-            .or_else(|| vm.pending_throw.take())
-            .or_else(|| vm.last_caught_exception.take())
-        {
-            ctx.pending_exception = Some(exc);
-            return Err(());
-        }
-        if !prim.is_object_like() {
-            return js_to_string_value(ctx, &prim);
-        }
-        let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
-        if let Some(proto) = ctx.get_type_error_prototype() {
-            err.prototype = Some(proto);
-        }
-        err.set(
-            ctx.common_atoms.message,
-            JSValue::new_string(ctx.intern("Cannot convert object to primitive value")),
-        );
-        let ptr = Box::into_raw(Box::new(err)) as usize;
-        ctx.runtime_mut().gc_heap_mut().track(ptr);
-        ctx.pending_exception = Some(JSValue::new_object(ptr));
-        return Err(());
+        return ctx
+            .with_vm(|vm, ctx| {
+                let prim = vm.ordinary_to_primitive(val, "string", ctx);
+                if let Some(exc) = ctx
+                    .pending_exception
+                    .take()
+                    .or_else(|| vm.pending_throw.take())
+                    .or_else(|| vm.last_caught_exception.take())
+                {
+                    ctx.pending_exception = Some(exc);
+                    return Err(());
+                }
+                if !prim.is_object_like() {
+                    return js_to_string_value(ctx, &prim);
+                }
+                let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
+                if let Some(proto) = ctx.get_type_error_prototype() {
+                    err.prototype = Some(proto);
+                }
+                err.set(
+                    ctx.common_atoms.message,
+                    JSValue::new_string(ctx.intern("Cannot convert object to primitive value")),
+                );
+                let ptr = Box::into_raw(Box::new(err)) as usize;
+                ctx.runtime_mut().gc_heap_mut().track(ptr);
+                ctx.pending_exception = Some(JSValue::new_object(ptr));
+                Err(())
+            })
+            .unwrap_or(Ok(String::new()));
     }
     Ok(String::new())
 }
