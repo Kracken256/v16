@@ -243,6 +243,10 @@ fn array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     create_array_buffer(ctx, length)
 }
 
+fn shared_array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    array_buffer_constructor(ctx, args)
+}
+
 fn data_view_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty()
         || !args[0].is_object()
@@ -1998,6 +2002,44 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     crate::builtins::symbol::install_species_accessor(ctx, &ab_func);
     crate::builtins::global::set_non_enumerable(global_obj, ctx.intern("ArrayBuffer"), ab_func);
 
+    let sab_func = create_builtin_function(ctx, "SharedArrayBuffer");
+    let mut sab_proto = JSObject::new();
+    let sab_byte_length = create_builtin_function(ctx, "arraybuffer_byteLength");
+    sab_proto.define_accessor_flags(
+        ctx.intern("byteLength"),
+        Some(sab_byte_length),
+        None,
+        false,
+        true,
+    );
+    sab_proto.set(
+        ctx.intern("slice"),
+        create_builtin_function(ctx, "arraybuffer_slice"),
+    );
+    sab_proto.set(ctx.intern("constructor"), sab_func);
+    let sab_to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+    sab_proto.set(
+        sab_to_string_tag_key,
+        JSValue::new_string(ctx.intern("SharedArrayBuffer")),
+    );
+    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
+        sab_proto.prototype = Some(obj_proto_ptr);
+    }
+    let sab_proto_ptr = Box::into_raw(Box::new(sab_proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(sab_proto_ptr);
+    if sab_func.is_function() {
+        sab_func.as_function_mut().base.set(
+            ctx.intern("prototype"),
+            JSValue::new_object(sab_proto_ptr),
+        );
+    }
+    crate::builtins::symbol::install_species_accessor(ctx, &sab_func);
+    crate::builtins::global::set_non_enumerable(
+        global_obj,
+        ctx.intern("SharedArrayBuffer"),
+        sab_func,
+    );
+
     let mut dv_proto = JSObject::new();
     dv_proto.set(ctx.intern("buffer"), create_builtin_function(ctx, "dataview_buffer"));
     dv_proto.set(
@@ -2276,6 +2318,10 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "ArrayBuffer",
         HostFunction::ctor("ArrayBuffer", 1, array_buffer_constructor),
+    );
+    ctx.register_builtin(
+        "SharedArrayBuffer",
+        HostFunction::ctor("SharedArrayBuffer", 1, shared_array_buffer_constructor),
     );
     ctx.register_builtin(
         "arraybuffer_isView",
