@@ -40,6 +40,8 @@ pub enum Microtask {
     Reaction(Reaction, JSValue),
 
     UserCallback(JSValue, Vec<JSValue>),
+
+    ResolveThenable(JSValue, JSValue, JSValue),
 }
 
 impl MicrotaskQueue {
@@ -936,23 +938,8 @@ fn resolve_promise_value(
             }
         };
         if then_val.is_function() {
-            let then_fn = then_val;
-            let (resolve_val, reject_val) = create_resolve_reject_fns(ctx, target);
-            match vm.call_function_with_this(ctx, then_fn, value, &[resolve_val, reject_val]) {
-                Ok(_) => return,
-                Err(_) => {
-                    let exc = vm
-                        .last_caught_exception
-                        .take()
-                        .or_else(|| ctx.pending_exception.take())
-                        .unwrap_or_else(JSValue::undefined);
-                    let t = target.as_object_mut();
-                    if t.is_promise() && get_promise_state(ctx, t).is_pending() {
-                        reject_promise(ctx, t, exc);
-                    }
-                    return;
-                }
-            }
+            ctx.microtask_enqueue(Microtask::ResolveThenable(target, value, then_val));
+            return;
         }
     }
     let t = target.as_object_mut();
@@ -1351,6 +1338,21 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
             Microtask::UserCallback(callback, args) => {
                 if callback.is_function() {
                     let _result = vm.call_function(ctx, callback, &args);
+                }
+            }
+            Microtask::ResolveThenable(target, thenable, then_fn) => {
+                let (resolve_val, reject_val) = create_resolve_reject_fns(ctx, target);
+                match vm.call_function_with_this(ctx, then_fn, thenable, &[resolve_val, reject_val]) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        let exc = vm
+                            .last_caught_exception
+                            .take()
+                            .or_else(|| ctx.pending_exception.take())
+                            .unwrap_or_else(JSValue::undefined);
+                        ctx.pending_exception = None;
+                        let _ = vm.call_function(ctx, reject_val, &[exc]);
+                    }
                 }
             }
         }
