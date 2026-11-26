@@ -1790,18 +1790,34 @@ fn typed_array_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let search = args.get(1).copied().unwrap_or(JSValue::undefined());
     let obj = args[0].as_object();
     let len = ta_get_length(ctx, obj);
-    let from_index = if args.len() >= 3 {
-        let v = args[2].to_number() as i64;
-        if v < 0 { 0 } else { (v as usize).min(len.saturating_sub(1)) }
+    if len == 0 {
+        return JSValue::new_int(-1);
+    }
+    let n = if args.len() >= 3 {
+        let v = match crate::builtins::global::js_to_number_value(ctx, &args[2]) {
+            Ok(v) => v,
+            Err(()) => return JSValue::undefined(),
+        };
+        if v.is_nan() { 0.0 } else { v.trunc() }
     } else {
-        len.saturating_sub(1)
+        (len - 1) as f64
     };
-    for i in (0..=from_index).rev() {
-        if let Some(val) = ta_get_element(ctx, obj, i) {
+    let k = if n >= 0.0 {
+        n.min((len - 1) as f64)
+    } else {
+        len as f64 + n
+    };
+    if k < 0.0 {
+        return JSValue::new_int(-1);
+    }
+    let mut i = k as i64;
+    while i >= 0 {
+        if let Some(val) = ta_get_element(ctx, obj, i as usize) {
             if val.strict_eq(&search) {
-                return JSValue::new_int(i as i64);
+                return JSValue::new_int(i);
             }
         }
+        i -= 1;
     }
     JSValue::new_int(-1)
 }
