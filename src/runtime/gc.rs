@@ -465,6 +465,12 @@ impl GcHeap {
         self.mark_value(&func.realm_global);
 
         self.mark_value(&func.arrow_this);
+
+        if let Some(ref cell) = func.arrow_this_cell {
+            let (this_value, _) = cell.get();
+            self.mark_value(&this_value);
+        }
+
         self.mark_value(&func.arrow_super);
         self.mark_value(&func.arrow_new_target);
         self.mark_value(&func.home_object);
@@ -1416,6 +1422,36 @@ mod tests {
         unsafe {
             let _ = Box::from_raw(func_ptr);
             let _ = Box::from_raw(realm_global_ptr);
+        }
+    }
+
+    #[test]
+    fn test_gc_trace_function_arrow_this_cell() {
+        let mut heap = GcHeap::new();
+
+        let this_obj = JSObject::new();
+        let this_ptr = Box::into_raw(Box::new(this_obj));
+        heap.track(this_ptr);
+
+        let mut func = JSFunction::new_builtin(Atom(0), 0);
+        func.arrow_this_cell = Some(std::rc::Rc::new(std::cell::Cell::new((
+            JSValue::new_object(this_ptr),
+            true,
+        ))));
+        let func_ptr = Box::into_raw(Box::new(func));
+        heap.track_function(func_ptr);
+
+        let roots = vec![JSValue::new_function(func_ptr)];
+
+        let freed = heap.run_gc(&roots);
+
+        assert_eq!(freed, 0);
+        assert_eq!(heap.object_count(), 2);
+
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(func_ptr);
+            let _ = Box::from_raw(this_ptr);
         }
     }
 
