@@ -11788,17 +11788,21 @@ impl VM {
                     let atom = crate::runtime::atom::Atom(self.read_u32_pc());
                     let object = self.get_reg(obj_reg);
                     if object.is_object_like() {
-                        let exists = unsafe { JSValue::object_from_ptr(object.get_ptr()) }
-                            .has_property(atom);
-                        if exists {
-                            self.get_named_prop_result(ctx, dst, object, atom, instr_pc);
-                        } else if self.frames[self.frame_index].is_strict_frame {
-                            self.set_pending_reference_error(
-                                ctx,
-                                "Cannot access variable before initialization",
-                            );
-                        } else {
-                            self.set_reg(dst, JSValue::undefined());
+                        match self.object_has_property_checked(ctx, object, atom) {
+                            Some(true) => {
+                                self.get_named_prop_result(ctx, dst, object, atom, instr_pc);
+                            }
+                            Some(false) => {
+                                if self.frames[self.frame_index].is_strict_frame {
+                                    self.set_pending_reference_error(
+                                        ctx,
+                                        "Cannot access variable before initialization",
+                                    );
+                                } else {
+                                    self.set_reg(dst, JSValue::undefined());
+                                }
+                            }
+                            None => {}
                         }
                     } else {
                         self.set_reg(dst, JSValue::undefined());
@@ -11818,27 +11822,35 @@ impl VM {
                     let object = self.get_reg(obj_reg);
                     let value = self.get_reg(val_reg);
                     if object.is_object_like() {
-                        let exists = unsafe { JSValue::object_from_ptr(object.get_ptr()) }
-                            .has_property(atom);
-                        if !exists && self.frames[self.frame_index].is_strict_frame {
-                            self.set_pending_reference_error(
-                                ctx,
-                                "Cannot assign to undeclared variable",
-                            );
-                        } else if !exists {
-                            if self.prototype_rejects_typed_array_set(ctx, object, atom) {
-                                if self.frames[self.frame_index].is_strict_frame {
-                                    self.set_pending_type_error(
-                                        ctx,
-                                        "Cannot create property on typed array prototype",
-                                    );
-                                }
-                            } else {
-                                unsafe { JSValue::object_from_ptr_mut(object.get_ptr()) }
-                                    .set(atom, value);
+                        let is_proxy =
+                            object.is_object() && unsafe { object.as_object() }.is_proxy();
+                        match self.object_has_property_checked(ctx, object, atom) {
+                            Some(true) => {
+                                self.set_named_prop(ctx, object, value, atom, usize::MAX);
                             }
-                        } else {
-                            self.set_named_prop(ctx, object, value, atom, usize::MAX);
+                            Some(false) => {
+                                if self.frames[self.frame_index].is_strict_frame {
+                                    self.set_pending_reference_error(
+                                        ctx,
+                                        "Cannot assign to undeclared variable",
+                                    );
+                                } else if is_proxy {
+                                    self.set_named_prop(ctx, object, value, atom, usize::MAX);
+                                } else if self.prototype_rejects_typed_array_set(
+                                    ctx, object, atom,
+                                ) {
+                                    if self.frames[self.frame_index].is_strict_frame {
+                                        self.set_pending_type_error(
+                                            ctx,
+                                            "Cannot create property on typed array prototype",
+                                        );
+                                    }
+                                } else {
+                                    unsafe { JSValue::object_from_ptr_mut(object.get_ptr()) }
+                                        .set(atom, value);
+                                }
+                            }
+                            None => {}
                         }
                     }
                     if let Some(exc) = self.pending_throw.take() {
@@ -14674,6 +14686,22 @@ impl VM {
             return Ok(false);
         }
         if receiver.is_object() && unsafe { receiver.as_object() }.is_proxy() {
+            match self.proxy_get_own_descriptor(ctx, receiver, key)? {
+                Some(existing) => {
+                    let is_accessor = existing.get.is_some() || existing.set.is_some();
+                    if is_accessor || !existing.writable {
+                        return Ok(false);
+                    }
+                }
+                None => {
+                    let (target, _handler) = self.proxy_resolve(ctx, receiver)?;
+                    let extensible =
+                        target.is_object_like() && unsafe { target.as_object() }.extensible();
+                    if !extensible {
+                        return Ok(false);
+                    }
+                }
+            }
             let desc = crate::object::object::PropertyDescriptor {
                 value: Some(value),
                 writable: true,
@@ -14689,12 +14717,14 @@ impl VM {
             if d.get.is_some() || d.set.is_some() || !d.writable {
                 return Ok(false);
             }
+        } else if !obj.extensible() {
+            return Ok(false);
         }
         obj.set(atom, value);
         Ok(true)
     }
 
-    fn ordinary_set_with_receiver(
+    pub fn ordinary_set_with_receiver(
         &mut self,
         ctx: &mut JSContext,
         target: JSValue,
@@ -15567,6 +15597,28 @@ impl VM {
         unsafe { JSValue::object_from_ptr(env.get_ptr()) }.get_own(atom)
     }
 
+    fn object_has_property_checked(
+        &mut self,
+        ctx: &mut JSContext,
+        object_val: JSValue,
+        atom: crate::runtime::atom::Atom,
+    ) -> Option<bool> {
+        if object_val.is_object() && unsafe { object_val.as_object() }.is_proxy() {
+            let key = self.atom_to_key_value(ctx, atom);
+            match self.proxy_has_internal(ctx, object_val, key) {
+                Ok(found) => Some(found),
+                Err(_) => {
+                    self.rethrow_last_caught(ctx);
+                    None
+                }
+            }
+        } else if object_val.is_object_like() {
+            Some(unsafe { JSValue::object_from_ptr(object_val.get_ptr()) }.has_property(atom))
+        } else {
+            Some(false)
+        }
+    }
+
     fn with_is_unscopable(
         &mut self,
         ctx: &mut JSContext,
@@ -15619,18 +15671,22 @@ impl VM {
             let parent = env_obj.get_own(parent_atom);
             if let Some(object_val) = object {
                 if object_val.is_object_like() {
-                    let has = unsafe { JSValue::object_from_ptr(object_val.get_ptr()) }
-                        .has_property(atom);
-                    if has
-                        && !self.with_is_unscopable(ctx, object_val, atom, instr_pc, scratch)
-                    {
-                        if self.pending_throw.is_none() {
-                            result = Some(object_val);
+                    match self.object_has_property_checked(ctx, object_val, atom) {
+                        Some(true) => {
+                            if !self.with_is_unscopable(
+                                ctx, object_val, atom, instr_pc, scratch,
+                            ) {
+                                if self.pending_throw.is_none() {
+                                    result = Some(object_val);
+                                }
+                                break;
+                            }
+                            if self.pending_throw.is_some() {
+                                break;
+                            }
                         }
-                        break;
-                    }
-                    if self.pending_throw.is_some() {
-                        break;
+                        Some(false) => {}
+                        None => break,
                     }
                 }
             }
@@ -15676,8 +15732,10 @@ impl VM {
             if self.pending_throw.is_some() {
                 return;
             }
-            let exists = unsafe { JSValue::object_from_ptr(object.get_ptr()) }
-                .has_property(atom);
+            let exists = match self.object_has_property_checked(ctx, object, atom) {
+                Some(exists) => exists,
+                None => return,
+            };
             if !exists && self.frames[self.frame_index].is_strict_frame {
                 self.set_pending_reference_error(ctx, "Cannot access variable before initialization");
                 return;
@@ -15746,6 +15804,17 @@ impl VM {
     ) {
         if let Some(object) = self.with_find_object(ctx, atom, instr_pc, u16::MAX) {
             if self.pending_throw.is_none() {
+                let exists = match self.object_has_property_checked(ctx, object, atom) {
+                    Some(exists) => exists,
+                    None => return,
+                };
+                if !exists && self.frames[self.frame_index].is_strict_frame {
+                    self.set_pending_reference_error(
+                        ctx,
+                        "Cannot assign to undeclared variable",
+                    );
+                    return;
+                }
                 self.set_named_prop(ctx, object, value, atom, usize::MAX);
             }
             return;

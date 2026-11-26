@@ -1007,85 +1007,29 @@ fn reflect_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.intern(&s)
     };
     let receiver = if args.len() >= 4 { args[3] } else { target };
-    if !receiver.is_object_like() {
+    let key_value = if key_val.is_symbol() {
+        *key_val
+    } else {
+        JSValue::new_string(key)
+    };
+    let Some(vm_ptr) = ctx.get_register_vm_ptr() else {
         return JSValue::bool(false);
-    }
-
-    let mut found_accessor: Option<Option<JSValue>> = None;
-    let mut found_data_writable: Option<bool> = None;
-    {
-        let mut current = Some(target.get_ptr() as *mut JSObject);
-        let mut depth = 0;
-        while let Some(ptr) = current {
-            let obj = unsafe { &*ptr };
-            if let Some(desc) = obj.get_own_descriptor(key) {
-                if desc.get.is_some() || desc.set.is_some() {
-                    found_accessor = Some(desc.set);
-                } else {
-                    found_data_writable = Some(desc.writable);
-                }
-                break;
+    };
+    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    match vm.ordinary_set_with_receiver(ctx, target, key_value, value, receiver) {
+        Ok(result) => JSValue::bool(result),
+        Err(_) => {
+            if let Some(exc) = ctx
+                .pending_exception
+                .take()
+                .or_else(|| vm.pending_throw.take())
+                .or_else(|| vm.last_caught_exception.take())
+            {
+                ctx.pending_exception = Some(exc);
             }
-            current = obj.prototype;
-            depth += 1;
-            if depth > 1000 {
-                break;
-            }
+            JSValue::undefined()
         }
     }
-
-    if let Some(setter) = found_accessor {
-        if let Some(s) = setter {
-            if s.is_function() {
-                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                    if vm.call_function_with_this(ctx, s, receiver, &[value]).is_err() {
-                        return JSValue::undefined();
-                    }
-                    return JSValue::bool(true);
-                }
-            }
-        }
-        return JSValue::bool(false);
-    }
-
-    if let Some(writable) = found_data_writable {
-        if !writable {
-            return JSValue::bool(false);
-        }
-    }
-
-    let mut receiver_setter: Option<Option<JSValue>> = None;
-    {
-        let receiver_obj = receiver.as_object();
-        if let Some(desc) = receiver_obj.get_own_descriptor(key) {
-            if desc.get.is_some() || desc.set.is_some() {
-                receiver_setter = Some(desc.set);
-            } else if !desc.writable {
-                return JSValue::bool(false);
-            }
-        }
-    }
-
-    if let Some(setter) = receiver_setter {
-        if let Some(s) = setter {
-            if s.is_function() {
-                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                    let _ = vm.call_function_with_this(ctx, s, receiver, &[value]);
-                    return JSValue::bool(true);
-                }
-            }
-        }
-        return JSValue::bool(false);
-    }
-
-    let receiver_obj = receiver.as_object_mut();
-    if !receiver_obj.extensible() && receiver_obj.get_own_descriptor(key).is_none() {
-        return JSValue::bool(false);
-    }
-    receiver_obj.set(key, value);
-    JSValue::bool(true)
 }
 
 fn reflect_has(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
