@@ -117,20 +117,16 @@ struct GcDebugEntry {
 }
 
 pub struct Nursery {
-    base: *mut u8,
+    backing: Vec<u64>,
     capacity: usize,
     offset: usize,
 }
 
 impl Nursery {
     pub fn new(capacity: usize) -> Self {
-        let layout = std::alloc::Layout::from_size_align(capacity, 8).unwrap();
-        let base = unsafe { std::alloc::alloc(layout) };
-        if base.is_null() {
-            panic!("failed to allocate nursery memory");
-        }
+        let words = capacity.div_ceil(std::mem::size_of::<u64>());
         Self {
-            base,
+            backing: Vec::with_capacity(words),
             capacity,
             offset: 0,
         }
@@ -141,11 +137,13 @@ impl Nursery {
         let layout = std::alloc::Layout::new::<T>();
         let align = layout.align();
         let size = layout.size();
+        debug_assert!(align <= std::mem::align_of::<u64>());
         let aligned = (self.offset + align - 1) & !(align - 1);
         if aligned + size > self.capacity {
             return None;
         }
-        let ptr = unsafe { self.base.add(aligned) as *mut T };
+        let base = self.backing.as_mut_ptr() as *mut u8;
+        let ptr = unsafe { base.add(aligned) as *mut T };
         unsafe {
             std::ptr::write(ptr, value);
         }
@@ -177,21 +175,10 @@ impl Nursery {
 
     #[inline]
     pub fn contains<T>(&self, ptr: *const T) -> bool {
-        let start = self.base as usize;
+        let start = self.backing.as_ptr() as usize;
         let end = start + self.capacity;
         let p = ptr as usize;
         p >= start && p < end
-    }
-}
-
-impl Drop for Nursery {
-    fn drop(&mut self) {
-        if !self.base.is_null() {
-            let layout = std::alloc::Layout::from_size_align(self.capacity, 8).unwrap();
-            unsafe {
-                std::alloc::dealloc(self.base, layout);
-            }
-        }
     }
 }
 
