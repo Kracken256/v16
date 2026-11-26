@@ -939,6 +939,11 @@ impl JSObject {
     }
 
     #[inline(always)]
+    pub fn prototype_object(&self) -> Option<&JSObject> {
+        self.prototype.map(|ptr| unsafe { &*ptr })
+    }
+
+    #[inline(always)]
     pub fn extensible(&self) -> bool {
         self.flags & FLAG_EXTENSIBLE != 0
     }

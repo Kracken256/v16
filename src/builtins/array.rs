@@ -1304,10 +1304,9 @@ fn get_property_with_getter(
     prop: crate::runtime::atom::Atom,
 ) -> Result<JSValue, String> {
     if obj_val.is_object_like() {
-        let mut current = Some(obj_val.get_ptr() as *mut JSObject);
+        let mut current = Some(obj_val.as_object());
         let mut depth = 0u32;
-        while let Some(ptr) = current {
-            let obj = unsafe { &*ptr };
+        while let Some(obj) = current {
             if let Some(entry) = obj.get_own_accessor_entry(prop) {
                 if let Some(getter) = entry.get {
                     if getter.is_function() {
@@ -1319,7 +1318,7 @@ fn get_property_with_getter(
             if let Some(v) = obj.get_own(prop) {
                 return Ok(v);
             }
-            current = obj.prototype;
+            current = obj.prototype_object();
             depth += 1;
             if depth > 1000 {
                 break;

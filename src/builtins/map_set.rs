@@ -286,13 +286,12 @@ pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
     };
 
     let iter_fn = iter_obj.get(sym_atom).or_else(|| {
-        let mut current = iter_obj.prototype;
-        while let Some(p) = current {
-            let pobj = unsafe { &*p };
+        let mut current = iter_obj.prototype_object();
+        while let Some(pobj) = current {
             if let Some(v) = pobj.get(sym_atom) {
                 return Some(v);
             }
-            current = pobj.prototype;
+            current = pobj.prototype_object();
         }
         None
     });
@@ -350,13 +349,12 @@ pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
     } else {
         let next_atom = ctx.intern("next");
         let next_fn = iter_obj.get(next_atom).or_else(|| {
-            let mut proto = iter_obj.prototype;
-            while let Some(p) = proto {
-                let pobj = unsafe { &*p };
+            let mut proto = iter_obj.prototype_object();
+            while let Some(pobj) = proto {
                 if let Some(v) = pobj.get(next_atom) {
                     return Some(v);
                 }
-                proto = pobj.prototype;
+                proto = pobj.prototype_object();
             }
             None
         });
@@ -417,13 +415,12 @@ pub fn create_iterator_from_iterable(ctx: &mut JSContext, iterable: JSValue) -> 
     };
 
     let iter_fn = iter_obj.get(sym_atom).or_else(|| {
-        let mut current = iter_obj.prototype;
-        while let Some(p) = current {
-            let pobj = unsafe { &*p };
+        let mut current = iter_obj.prototype_object();
+        while let Some(pobj) = current {
             if let Some(v) = pobj.get(sym_atom) {
                 return Some(v);
             }
-            current = pobj.prototype;
+            current = pobj.prototype_object();
         }
         None
     });
@@ -485,13 +482,12 @@ pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue,
 
     let next_atom = ctx.intern("next");
     let next_fn = iter_obj.get(next_atom).or_else(|| {
-        let mut proto = iter_obj.prototype;
-        while let Some(p) = proto {
-            let pobj = unsafe { &*p };
+        let mut proto = iter_obj.prototype_object();
+        while let Some(pobj) = proto {
             if let Some(v) = pobj.get(next_atom) {
                 return Some(v);
             }
-            proto = pobj.prototype;
+            proto = pobj.prototype_object();
         }
         None
     });
@@ -532,13 +528,12 @@ pub fn iterator_return(ctx: &mut JSContext, iterator: JSValue) {
     let iter_obj = iterator.as_object();
     let return_atom = ctx.intern("return");
     let return_fn = iter_obj.get(return_atom).or_else(|| {
-        let mut proto = iter_obj.prototype;
-        while let Some(p) = proto {
-            let pobj = unsafe { &*p };
+        let mut proto = iter_obj.prototype_object();
+        while let Some(pobj) = proto {
             if let Some(v) = pobj.get(return_atom) {
                 return Some(v);
             }
-            proto = pobj.prototype;
+            proto = pobj.prototype_object();
         }
         None
     });
@@ -567,13 +562,12 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(iterator) = create_iterator_from_iterable(ctx, *iterable) {
                 let set_atom = ctx.intern("set");
                 let adder = this_val.as_object().get(set_atom).or_else(|| {
-                    let mut proto = this_val.as_object().prototype;
-                    while let Some(p) = proto {
-                        let pobj = unsafe { &*p };
+                    let mut proto = this_val.as_object().prototype_object();
+                    while let Some(pobj) = proto {
                         if let Some(v) = pobj.get(set_atom) {
                             return Some(v);
                         }
-                        proto = pobj.prototype;
+                        proto = pobj.prototype_object();
                     }
                     None
                 });
@@ -1577,13 +1571,12 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if let Some(iterator) = create_iterator_from_iterable(ctx, *iterable) {
                 let add_atom = ctx.intern("add");
                 let adder = this_val.as_object().get(add_atom).or_else(|| {
-                    let mut proto = this_val.as_object().prototype;
-                    while let Some(p) = proto {
-                        let pobj = unsafe { &*p };
+                    let mut proto = this_val.as_object().prototype_object();
+                    while let Some(pobj) = proto {
                         if let Some(v) = pobj.get(add_atom) {
                             return Some(v);
                         }
-                        proto = pobj.prototype;
+                        proto = pobj.prototype_object();
                     }
                     None
                 });
