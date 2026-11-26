@@ -974,6 +974,40 @@ pub fn load_and_evaluate_module_with_attributes(
         return namespace_object_for(ctx, &resolved);
     }
 
+    if attribute_type == Some("json") {
+        let registered = ctx.runtime().module_registry().has(&resolved);
+        if !registered {
+            let text = std::fs::read_to_string(&resolved)
+                .map_err(|e| format!("Failed to load module '{}': {}", resolved, e))?;
+            let value =
+                match crate::builtins::json_parser::JsonParser::new(&text).parse_root(ctx) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        let error = create_syntax_error(ctx, &message);
+                        ctx.pending_exception = Some(error);
+                        return Err(message);
+                    }
+                };
+            ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
+            let module = Module::new(resolved.clone(), text);
+            ctx.runtime_mut().module_registry_mut().register(module);
+            {
+                let registry = ctx.runtime_mut().module_registry_mut();
+                if let Some(module_cell) = registry.get_mut(&resolved) {
+                    let mut module = module_cell.borrow_mut();
+                    module.add_export("default".to_string(), value, false);
+                }
+            }
+        }
+        {
+            let registry = ctx.runtime_mut().module_registry_mut();
+            if let Some(module_cell) = registry.get_mut(&resolved) {
+                module_cell.borrow_mut().state = ModuleState::Evaluated;
+            }
+        }
+        return namespace_object_for(ctx, &resolved);
+    }
+
     let is_manually_registered = {
         let registry = ctx.runtime().module_registry();
         registry
