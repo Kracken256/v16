@@ -9400,10 +9400,9 @@ impl VM {
                                 }
                             } else {
                                 // Check prototype chain for setters when EXTENDING the array
-                                let mut proto = arr.header.prototype;
+                                let mut proto = arr.header.prototype_object();
                                 let mut setter_found = None;
-                                while let Some(p) = proto {
-                                    let pobj = unsafe { &*p };
+                                while let Some(pobj) = proto {
                                     let key_atom = self.int_atom(idx, ctx);
                                     if let Some(entry) = pobj.get_own_accessor_entry(key_atom) {
                                         setter_found = entry.set;
@@ -9412,7 +9411,7 @@ impl VM {
                                     if pobj.has_own(key_atom) {
                                         break;
                                     }
-                                    proto = pobj.prototype;
+                                    proto = pobj.prototype_object();
                                 }
                                 if let Some(setter) = setter_found {
                                     if self
@@ -14407,14 +14406,13 @@ impl VM {
                 }
             }
         }
-        let mut current = js_obj.prototype;
+        let mut current = js_obj.prototype_object();
         let mut depth = 0u32;
-        while let Some(proto_ptr) = current {
-            if proto_ptr.is_null() || depth > 1000 {
+        while let Some(proto) = current {
+            if depth > 1000 {
                 break;
             }
             depth += 1;
-            let proto = unsafe { &*proto_ptr };
             if let Some(entry) = proto.get_own_accessor_entry(atom) {
                 if let Some(getter) = entry.get {
                     if getter.is_function() {
@@ -14426,7 +14424,7 @@ impl VM {
             if let Some(v) = proto.get(atom) {
                 return Ok(v);
             }
-            current = proto.prototype;
+            current = proto.prototype_object();
         }
         Ok(JSValue::undefined())
     }
@@ -14638,14 +14636,13 @@ impl VM {
                 }
             }
         }
-        let mut current = js_obj.prototype;
+        let mut current = js_obj.prototype_object();
         let mut depth = 0u32;
-        while let Some(proto_ptr) = current {
-            if proto_ptr.is_null() || depth > 1000 {
+        while let Some(proto) = current {
+            if depth > 1000 {
                 break;
             }
             depth += 1;
-            let proto = unsafe { &*proto_ptr };
             if let Some(entry) = proto.get_own_accessor_entry(atom) {
                 if let Some(getter) = entry.get {
                     if getter.is_function() {
@@ -14664,7 +14661,7 @@ impl VM {
                     }
                 }
             }
-            current = proto.prototype;
+            current = proto.prototype_object();
         }
         Ok(JSValue::undefined())
     }
@@ -16465,9 +16462,10 @@ impl VM {
                             self.set_reg(dst, val);
                             return true;
                         } else {
-                            if let Some(proto_raw) = js_obj.prototype {
-                                if proto_raw as usize == r0_proto {
-                                    let proto_obj = unsafe { &*proto_raw };
+                            if let Some(proto_obj) = js_obj.prototype_object() {
+                                if proto_obj as *const crate::object::object::JSObject as usize
+                                    == r0_proto
+                                {
                                     let off = r0_offset as usize;
                                     let v = if off < crate::object::object::INLINE_PROPS
                                         && proto_obj.has_no_deleted_props()
@@ -16532,9 +16530,8 @@ impl VM {
                     self.set_reg(dst, val);
                     return true;
                 } else {
-                    if let Some(p) = js_obj.prototype {
-                        if p as usize == r_proto {
-                            let proto_obj = unsafe { &*p };
+                    if let Some(proto_obj) = js_obj.prototype_object() {
+                        if proto_obj as *const crate::object::object::JSObject as usize == r_proto {
                             let off = r_offset as usize;
                             let v = if off < crate::object::object::INLINE_PROPS
                                 && proto_obj.has_no_deleted_props()
@@ -16570,14 +16567,13 @@ impl VM {
         proto_ptr: usize,
     ) -> bool {
         let js_obj = obj_val.as_object();
-        let mut cur = js_obj.prototype;
+        let mut cur = js_obj.prototype_object();
         let mut depth = 0u32;
-        while let Some(p) = cur {
+        while let Some(proto_obj) = cur {
             if depth > 1000 {
                 break;
             }
-            if p as usize == proto_ptr {
-                let proto_obj = unsafe { &*p };
+            if proto_obj as *const crate::object::object::JSObject as usize == proto_ptr {
                 if let Some(v) = proto_obj.get_by_offset(offset as usize) {
                     self.set_reg(dst, v);
                     return true;
@@ -16586,7 +16582,7 @@ impl VM {
                 break;
             }
             depth += 1;
-            cur = unsafe { (*p).prototype };
+            cur = proto_obj.prototype_object();
         }
 
         self.get_named_prop_slow(ctx, dst, obj_val, atom, instr_pc)
@@ -16713,19 +16709,15 @@ impl VM {
             if js_obj.has_own(atom) {
                 return (false, None);
             }
-            let mut proto = js_obj.prototype;
-            while let Some(proto_ptr) = proto {
-                if proto_ptr.is_null() {
-                    break;
-                }
-                let proto_obj = unsafe { &*proto_ptr };
+            let mut proto = js_obj.prototype_object();
+            while let Some(proto_obj) = proto {
                 if let Some(entry) = proto_obj.get_own_accessor_entry(atom) {
                     return (true, entry.set);
                 }
                 if proto_obj.has_own(atom) {
                     return (false, None);
                 }
-                proto = proto_obj.prototype;
+                proto = proto_obj.prototype_object();
             }
         }
         (false, None)
@@ -16761,12 +16753,8 @@ impl VM {
         atom: crate::runtime::atom::Atom,
     ) -> bool {
         let js_obj = obj_val.as_object();
-        let mut current = js_obj.prototype;
-        while let Some(proto_ptr) = current {
-            if proto_ptr.is_null() {
-                return false;
-            }
-            let proto = unsafe { &*proto_ptr };
+        let mut current = js_obj.prototype_object();
+        while let Some(proto) = current {
             if proto.obj_type() == crate::object::object::ObjectType::TypedArray {
                 let length_atom = ctx.intern("length");
                 let name = ctx.get_atom_str(atom);
@@ -16784,7 +16772,7 @@ impl VM {
                     && index < length as f64;
                 return !valid;
             }
-            current = proto.prototype;
+            current = proto.prototype_object();
         }
         false
     }
@@ -17174,12 +17162,8 @@ impl VM {
             }
 
             if pre_offset.is_none() {
-                let mut proto = js_obj.prototype;
-                while let Some(proto_ptr) = proto {
-                    if proto_ptr.is_null() {
-                        break;
-                    }
-                    let proto_obj = unsafe { &*proto_ptr };
+                let mut proto = js_obj.prototype_object();
+                while let Some(proto_obj) = proto {
                     if let Some(desc) = proto_obj.get_own_descriptor(atom) {
                         if desc.get.is_none() && desc.set.is_none() && !desc.writable {
                             if self.frames[self.frame_index].is_strict_frame {
@@ -17193,7 +17177,7 @@ impl VM {
                         }
                         break;
                     }
-                    proto = proto_obj.prototype;
+                    proto = proto_obj.prototype_object();
                 }
             }
 
