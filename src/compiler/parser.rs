@@ -3018,7 +3018,13 @@ impl Parser {
             }));
         }
 
-        if self.at_keyword("async") && self.peek_at("function") {
+        if self.at_keyword("async")
+            && self.peek_at("function")
+            && !self
+                .peek_token
+                .as_ref()
+                .map_or(false, |t| t.line_terminator_before)
+        {
             self.advance();
             self.expect("function")?;
             let generator = self.at_punct("*");
