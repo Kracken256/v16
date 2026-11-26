@@ -942,15 +942,17 @@ fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         };
         let key = normalize_key(&key_val);
 
-        let result_obj = unsafe { &mut *(result_ptr as *mut JSObject) };
+        let result_obj = result_val.as_object_mut();
         if let Some(idx) = map_find(ctx, result_obj, &key) {
             let mv_atom = map_val_atom(ctx, idx);
             let group_arr_val = result_obj.get(mv_atom).unwrap_or_else(JSValue::undefined);
             if group_arr_val.is_object() {
-                let group_ptr = group_arr_val.get_ptr();
-                let group_obj = unsafe { &*(group_ptr as *const JSObject) };
-                let len = group_obj.get(ctx.common_atoms.length).map(|v| v.get_int() as usize).unwrap_or(0);
-                let group_obj_mut = unsafe { &mut *(group_ptr as *mut JSObject) };
+                let len = group_arr_val
+                    .as_object()
+                    .get(ctx.common_atoms.length)
+                    .map(|v| v.get_int() as usize)
+                    .unwrap_or(0);
+                let group_obj_mut = group_arr_val.as_object_mut();
                 let key_atom = ctx.intern(&len.to_string());
                 group_obj_mut.set(key_atom, item);
                 group_obj_mut.set(ctx.common_atoms.length, JSValue::new_int((len + 1) as i64));
@@ -966,7 +968,7 @@ fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let result_obj = unsafe { &mut *(result_ptr as *mut JSObject) };
+    let result_obj = result_val.as_object_mut();
     sync_map_size(ctx, result_obj);
     result_val
 }
@@ -1850,7 +1852,7 @@ fn throw_range_error(ctx: &mut JSContext, msg: &str) {
     ctx.pending_exception = Some(JSValue::new_object(ptr));
 }
 
-fn create_empty_set(ctx: &mut JSContext) -> (JSValue, usize) {
+fn create_empty_set(ctx: &mut JSContext) -> JSValue {
     let mut obj = JSObject::new();
     if let Some(proto_ptr) = ctx.get_set_prototype() {
         obj.prototype = Some(proto_ptr);
@@ -1858,7 +1860,7 @@ fn create_empty_set(ctx: &mut JSContext) -> (JSValue, usize) {
     obj.set(ctx.intern("__set_size__"), JSValue::new_int(0));
     let ptr = Box::into_raw(Box::new(obj)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(ptr);
-    (JSValue::new_object(ptr), ptr)
+    JSValue::new_object(ptr)
 }
 
 fn set_elements(ctx: &mut JSContext, obj: &JSObject) -> Vec<JSValue> {
@@ -1873,8 +1875,8 @@ fn set_elements(ctx: &mut JSContext, obj: &JSObject) -> Vec<JSValue> {
     out
 }
 
-fn set_add_value(ctx: &mut JSContext, obj_ptr: usize, value: JSValue) {
-    let obj = unsafe { &mut *(obj_ptr as *mut JSObject) };
+fn set_add_value(ctx: &mut JSContext, obj_val: JSValue, value: JSValue) {
+    let obj = obj_val.as_object_mut();
     if set_find(ctx, obj, &value).is_none() {
         let cur = set_size(ctx, obj);
         obj.set(set_val_atom(ctx, cur), value);
@@ -1882,8 +1884,8 @@ fn set_add_value(ctx: &mut JSContext, obj_ptr: usize, value: JSValue) {
     }
 }
 
-fn set_remove_value(ctx: &mut JSContext, obj_ptr: usize, value: JSValue) {
-    let obj = unsafe { &mut *(obj_ptr as *mut JSObject) };
+fn set_remove_value(ctx: &mut JSContext, obj_val: JSValue, value: JSValue) {
+    let obj = obj_val.as_object_mut();
     let size = set_size(ctx, obj);
     let elems = set_elements(ctx, obj);
     let filtered: Vec<JSValue> = elems
@@ -1905,7 +1907,7 @@ fn set_remove_value(ctx: &mut JSContext, obj_ptr: usize, value: JSValue) {
 
 struct SetRecord {
     is_set: bool,
-    set_ptr: usize,
+    set_val: JSValue,
     has_fn: JSValue,
     keys_fn: JSValue,
 }
@@ -1920,7 +1922,7 @@ fn get_set_record(ctx: &mut JSContext, other: JSValue) -> Option<SetRecord> {
         if has_setdata_slot(ctx, obj) {
             return Some(SetRecord {
                 is_set: true,
-                set_ptr: other.get_ptr(),
+                set_val: other,
                 has_fn: JSValue::undefined(),
                 keys_fn: JSValue::undefined(),
             });
@@ -1963,7 +1965,7 @@ fn get_set_record(ctx: &mut JSContext, other: JSValue) -> Option<SetRecord> {
     }
     Some(SetRecord {
         is_set: false,
-        set_ptr: 0,
+        set_val: JSValue::undefined(),
         has_fn,
         keys_fn,
     })
@@ -1976,7 +1978,7 @@ fn record_has(
     value: JSValue,
 ) -> Option<bool> {
     if record.is_set {
-        let obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        let obj = record.set_val.as_object();
         Some(set_find(ctx, obj, &value).is_some())
     } else {
         match call_callback_with_this(ctx, record.has_fn, other, &[value]) {
@@ -2010,7 +2012,7 @@ fn iterate_set_like_keys(
     Some(out)
 }
 
-fn require_set_receiver(ctx: &mut JSContext, args: &[JSValue], method: &str) -> Option<usize> {
+fn require_set_receiver(ctx: &mut JSContext, args: &[JSValue], method: &str) -> Option<JSValue> {
     let this = args.first().copied().unwrap_or(JSValue::undefined());
     if !this.is_object() {
         throw_type_error(
@@ -2026,56 +2028,56 @@ fn require_set_receiver(ctx: &mut JSContext, args: &[JSValue], method: &str) -> 
         );
         return None;
     }
-    Some(this.get_ptr())
+    Some(this)
 }
 
 fn set_union(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let Some(this_ptr) = require_set_receiver(ctx, args, "union") else {
+    let Some(this_val) = require_set_receiver(ctx, args, "union") else {
         return JSValue::undefined();
     };
     let other = args.get(1).copied().unwrap_or(JSValue::undefined());
     let Some(record) = get_set_record(ctx, other) else {
         return JSValue::undefined();
     };
-    let (result, result_ptr) = create_empty_set(ctx);
+    let result = create_empty_set(ctx);
     {
-        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        let this_obj = this_val.as_object();
         for e in set_elements(ctx, this_obj) {
-            set_add_value(ctx, result_ptr, e);
+            set_add_value(ctx, result, e);
         }
     }
     if record.is_set {
-        let other_obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        let other_obj = record.set_val.as_object();
         for e in set_elements(ctx, other_obj) {
-            set_add_value(ctx, result_ptr, e);
+            set_add_value(ctx, result, e);
         }
     } else {
         let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
             return JSValue::undefined();
         };
         for k in keys {
-            set_add_value(ctx, result_ptr, k);
+            set_add_value(ctx, result, k);
         }
     }
     result
 }
 
 fn set_intersection(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let Some(this_ptr) = require_set_receiver(ctx, args, "intersection") else {
+    let Some(this_val) = require_set_receiver(ctx, args, "intersection") else {
         return JSValue::undefined();
     };
     let other = args.get(1).copied().unwrap_or(JSValue::undefined());
     let Some(record) = get_set_record(ctx, other) else {
         return JSValue::undefined();
     };
-    let (result, result_ptr) = create_empty_set(ctx);
+    let result = create_empty_set(ctx);
     let this_elems = {
-        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        let this_obj = this_val.as_object();
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
         match record_has(ctx, &record, other, e) {
-            Some(true) => set_add_value(ctx, result_ptr, e),
+            Some(true) => set_add_value(ctx, result, e),
             Some(false) => {}
             None => return JSValue::undefined(),
         }
@@ -2084,22 +2086,22 @@ fn set_intersection(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn set_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let Some(this_ptr) = require_set_receiver(ctx, args, "difference") else {
+    let Some(this_val) = require_set_receiver(ctx, args, "difference") else {
         return JSValue::undefined();
     };
     let other = args.get(1).copied().unwrap_or(JSValue::undefined());
     let Some(record) = get_set_record(ctx, other) else {
         return JSValue::undefined();
     };
-    let (result, result_ptr) = create_empty_set(ctx);
+    let result = create_empty_set(ctx);
     let this_elems = {
-        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        let this_obj = this_val.as_object();
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
         match record_has(ctx, &record, other, e) {
             Some(true) => {}
-            Some(false) => set_add_value(ctx, result_ptr, e),
+            Some(false) => set_add_value(ctx, result, e),
             None => return JSValue::undefined(),
         }
     }
@@ -2107,23 +2109,23 @@ fn set_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn set_symmetric_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let Some(this_ptr) = require_set_receiver(ctx, args, "symmetricDifference") else {
+    let Some(this_val) = require_set_receiver(ctx, args, "symmetricDifference") else {
         return JSValue::undefined();
     };
     let other = args.get(1).copied().unwrap_or(JSValue::undefined());
     let Some(record) = get_set_record(ctx, other) else {
         return JSValue::undefined();
     };
-    let (result, result_ptr) = create_empty_set(ctx);
+    let result = create_empty_set(ctx);
     let this_elems = {
-        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        let this_obj = this_val.as_object();
         set_elements(ctx, this_obj)
     };
     for e in &this_elems {
-        set_add_value(ctx, result_ptr, *e);
+        set_add_value(ctx, result, *e);
     }
     let other_elems: Vec<JSValue> = if record.is_set {
-        let other_obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        let other_obj = record.set_val.as_object();
         set_elements(ctx, other_obj)
     } else {
         let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
@@ -2134,16 +2136,16 @@ fn set_symmetric_difference(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     for e in other_elems {
         let in_this = this_elems.iter().any(|x| key_same_value_zero(x, &e));
         if in_this {
-            set_remove_value(ctx, result_ptr, e);
+            set_remove_value(ctx, result, e);
         } else {
-            set_add_value(ctx, result_ptr, e);
+            set_add_value(ctx, result, e);
         }
     }
     result
 }
 
 fn set_is_subset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let Some(this_ptr) = require_set_receiver(ctx, args, "isSubsetOf") else {
+    let Some(this_val) = require_set_receiver(ctx, args, "isSubsetOf") else {
         return JSValue::undefined();
     };
     let other = args.get(1).copied().unwrap_or(JSValue::undefined());
@@ -2151,7 +2153,7 @@ fn set_is_subset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     };
     let this_elems = {
-        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        let this_obj = this_val.as_object();
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
@@ -2165,7 +2167,7 @@ fn set_is_subset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn set_is_superset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let Some(this_ptr) = require_set_receiver(ctx, args, "isSupersetOf") else {
+    let Some(this_val) = require_set_receiver(ctx, args, "isSupersetOf") else {
         return JSValue::undefined();
     };
     let other = args.get(1).copied().unwrap_or(JSValue::undefined());
@@ -2173,7 +2175,7 @@ fn set_is_superset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     };
     let other_elems: Vec<JSValue> = if record.is_set {
-        let other_obj = unsafe { &*(record.set_ptr as *const JSObject) };
+        let other_obj = record.set_val.as_object();
         set_elements(ctx, other_obj)
     } else {
         let Some(keys) = iterate_set_like_keys(ctx, &record, other) else {
@@ -2181,7 +2183,7 @@ fn set_is_superset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         };
         keys
     };
-    let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+    let this_obj = this_val.as_object();
     for e in other_elems {
         if set_find(ctx, this_obj, &e).is_none() {
             return JSValue::bool(false);
@@ -2191,7 +2193,7 @@ fn set_is_superset_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn set_is_disjoint_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let Some(this_ptr) = require_set_receiver(ctx, args, "isDisjointFrom") else {
+    let Some(this_val) = require_set_receiver(ctx, args, "isDisjointFrom") else {
         return JSValue::undefined();
     };
     let other = args.get(1).copied().unwrap_or(JSValue::undefined());
@@ -2199,7 +2201,7 @@ fn set_is_disjoint_from(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     };
     let this_elems = {
-        let this_obj = unsafe { &*(this_ptr as *const JSObject) };
+        let this_obj = this_val.as_object();
         set_elements(ctx, this_obj)
     };
     for e in this_elems {
