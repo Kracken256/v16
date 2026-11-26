@@ -1379,6 +1379,9 @@ impl CodeGenerator {
     }
 
     fn resolve_var(&mut self, name: &str, ctx: &mut JSContext) -> Option<VarLocation> {
+        if self.is_global_lexical(name) {
+            return None;
+        }
         if let Some(entry) = self.lookup_var(name) {
             return Some(VarLocation::Local(entry.slot));
         }
