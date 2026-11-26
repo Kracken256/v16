@@ -9499,15 +9499,6 @@ impl VM {
                         } else {
                             self.set_named_prop(ctx, obj_val, value, atom, usize::MAX);
                         }
-                    } else if !obj_val.is_object_like() && self.frames[self.frame_index].is_strict_frame {
-                        self.set_pending_type_error(ctx, "Cannot assign to a primitive value");
-                        if let Some(exc) = self.pending_throw.take() {
-                            match self.dispatch_throw_value(ctx, exc) {
-                                ThrowDispatch::Caught => {}
-                                ThrowDispatch::Uncaught(e) => return Err(e),
-                                _ => {}
-                            }
-                        }
                     }
                     if let Some(exc) = self.pending_throw.take() {
                         match self.dispatch_throw_value(ctx, exc) {
@@ -9713,16 +9704,30 @@ impl VM {
                         }
                     }
 
+                    if !obj_val.is_object_like() {
+                        let atom = self.key_value_to_atom(ctx, key_val);
+                        self.set_named_prop(ctx, obj_val, value, atom, usize::MAX);
+                        self.set_reg(obj_reg, obj_val);
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(_) => continue,
+                            }
+                        }
+                        continue;
+                    }
+
                     if key_val.is_string() {
                         self.set_named_prop(ctx, obj_val, value, key_val.get_atom(), usize::MAX);
-                    } else if key_val.is_symbol() && obj_val.is_object_like() {
+                    } else if key_val.is_symbol() {
                         let sym_key =
                             crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
                         self.set_named_prop(ctx, obj_val, value, sym_key, usize::MAX);
-                    } else if key_val.is_int() && obj_val.is_object_like() {
+                    } else if key_val.is_int() {
                         let atom = self.int_atom(key_val.get_int() as usize, ctx);
                         self.set_named_prop(ctx, obj_val, value, atom, usize::MAX);
-                    } else if key_val.is_float() && obj_val.is_object_like() {
+                    } else if key_val.is_float() {
                         let s = VM::js_to_string(&key_val, ctx);
                         let atom = s.get_atom();
                         self.set_named_prop(ctx, obj_val, value, atom, usize::MAX);
@@ -16957,7 +16962,20 @@ impl VM {
             return false;
         }
         if !obj_val.is_object_like() {
-            if self.frames[self.frame_index].is_strict_frame {
+            let wrapper = crate::builtins::object::object_to_object(ctx, &obj_val);
+            if !wrapper.is_object_like() {
+                return false;
+            }
+            let key = self.atom_to_key_value(ctx, atom);
+            let succeeded =
+                match self.ordinary_set_with_receiver(ctx, wrapper, key, value, obj_val) {
+                    Ok(succeeded) => succeeded,
+                    Err(_) => {
+                        self.rethrow_last_caught(ctx);
+                        false
+                    }
+                };
+            if !succeeded && self.frames[self.frame_index].is_strict_frame {
                 self.set_pending_type_error(ctx, "Cannot assign to a primitive value");
             }
             return false;
