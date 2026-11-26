@@ -11406,6 +11406,9 @@ impl VM {
                     let ctor_val = self.get_reg(ctor_reg);
                     let proto_val = self.get_reg(proto_reg);
                     if ctor_val.is_object_like() && proto_val.is_object_like() {
+                        if ctor_val.is_function() {
+                            ctor_val.as_function_mut().home_object = proto_val;
+                        }
                         let ctor_obj =
                             unsafe { JSValue::object_from_ptr_mut(ctor_val.get_ptr()) };
                         let proto_obj =
