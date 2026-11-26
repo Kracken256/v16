@@ -23,33 +23,16 @@ pub fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
 }
 
 fn memchr_swar(needle: u8, haystack: &[u8]) -> Option<usize> {
-    let len = haystack.len();
-    let ptr = haystack.as_ptr();
+    let pattern = needle as u64 * 0x0101010101010101u64;
+    let mut chunks = haystack.chunks_exact(8);
     let mut i = 0usize;
 
-    while i < len {
-        if (ptr.wrapping_add(i) as usize) % 8 == 0 {
-            break;
-        }
-        unsafe {
-            if *ptr.add(i) == needle {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-
-    let pattern = needle as u64 * 0x0101010101010101u64;
-    let remaining = len - i;
-    let chunks = remaining / 8;
-
-    for _ in 0..chunks {
-        let chunk = unsafe { (ptr.add(i) as *const u64).read_unaligned() };
-        let xor = chunk ^ pattern;
+    for chunk in &mut chunks {
+        let word = u64::from_le_bytes(chunk.try_into().unwrap());
+        let xor = word ^ pattern;
         if has_zero_byte(xor) {
-            let bytes = xor.to_le_bytes();
-            for j in 0..8 {
-                if bytes[j] == 0 {
+            for (j, byte) in xor.to_le_bytes().iter().enumerate() {
+                if *byte == 0 {
                     return Some(i + j);
                 }
             }
@@ -57,13 +40,10 @@ fn memchr_swar(needle: u8, haystack: &[u8]) -> Option<usize> {
         i += 8;
     }
 
-    while i < len {
-        unsafe {
-            if *ptr.add(i) == needle {
-                return Some(i);
-            }
+    for (j, byte) in chunks.remainder().iter().enumerate() {
+        if *byte == needle {
+            return Some(i + j);
         }
-        i += 1;
     }
 
     None
@@ -169,27 +149,27 @@ pub fn memchr2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
 }
 
 fn memchr2_swar(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
-    let len = haystack.len();
-    let ptr = haystack.as_ptr();
-    let mut i = 0usize;
-
     let p1 = n1 as u64 * 0x0101010101010101u64;
     let p2 = n2 as u64 * 0x0101010101010101u64;
+    let mut chunks = haystack.chunks_exact(8);
+    let mut i = 0usize;
 
-    while i + 8 <= len {
-        let chunk = unsafe { (ptr.add(i) as *const u64).read_unaligned() };
-        if has_zero_byte(chunk ^ p1) || has_zero_byte(chunk ^ p2) {
-            break;
+    for chunk in &mut chunks {
+        let word = u64::from_le_bytes(chunk.try_into().unwrap());
+        if has_zero_byte(word ^ p1) || has_zero_byte(word ^ p2) {
+            for (j, byte) in chunk.iter().enumerate() {
+                if *byte == n1 || *byte == n2 {
+                    return Some(i + j);
+                }
+            }
         }
         i += 8;
     }
 
-    while i < len {
-        let b = unsafe { *ptr.add(i) };
-        if b == n1 || b == n2 {
-            return Some(i);
+    for (j, byte) in chunks.remainder().iter().enumerate() {
+        if *byte == n1 || *byte == n2 {
+            return Some(i + j);
         }
-        i += 1;
     }
 
     None
@@ -542,6 +522,36 @@ mod tests {
         s.push(b'x');
         s.extend_from_slice(&[b'b'; 1000]);
         assert_eq!(memchr(b'x', &s), Some(1000));
+    }
+
+    #[test]
+    fn test_memchr_swar_matches_scalar() {
+        for len in 0..80usize {
+            let mut haystack = vec![0u8; len];
+            for (i, b) in haystack.iter_mut().enumerate() {
+                *b = (i as u8).wrapping_mul(37).wrapping_add(11);
+            }
+            for needle in [0u8, 1, 11, 0xAB, 0xFF] {
+                let expected = haystack.iter().position(|&b| b == needle);
+                assert_eq!(memchr_swar(needle, &haystack), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_memchr2_swar_matches_scalar() {
+        for len in 0..80usize {
+            let mut haystack = vec![0u8; len];
+            for (i, b) in haystack.iter_mut().enumerate() {
+                *b = (i as u8).wrapping_mul(53).wrapping_add(7);
+            }
+            for n1 in [0u8, 7, 0xCD] {
+                for n2 in [0u8, 9, 0xEF] {
+                    let expected = haystack.iter().position(|&b| b == n1 || b == n2);
+                    assert_eq!(memchr2_swar(n1, n2, &haystack), expected);
+                }
+            }
+        }
     }
 
     #[test]
