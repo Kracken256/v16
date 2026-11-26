@@ -1200,14 +1200,10 @@ impl GcHeap {
             }
             let tag = self.tags[idx];
             match tag {
-                TAG_OBJECT | TAG_FUNCTION => {
+                TAG_OBJECT | TAG_FUNCTION | TAG_ARRAY => {
                     JSValue::new_object(self.objects[idx])
                         .as_object_mut()
                         .clean_stale_properties(self);
-                }
-                TAG_ARRAY => {
-                    let arr = unsafe { &mut *(self.objects[idx] as *mut JSArrayObject) };
-                    arr.header.clean_stale_properties(self);
                 }
                 _ => {}
             }
