@@ -2213,6 +2213,7 @@ impl VM {
                     self.frames[self.frame_index].this_cell = js_func.arrow_this_cell.clone();
                     self.frames[self.frame_index].super_ctor = js_func.arrow_super;
                     self.frames[self.frame_index].super_base = js_func.arrow_super_base;
+                    self.frames[self.frame_index].new_target = js_func.arrow_new_target;
                     if let Some(cell) = &js_func.arrow_this_cell {
                         let (tv, init) = cell.get();
                         self.frames[self.frame_index].this_value = tv;
@@ -5312,12 +5313,16 @@ impl VM {
             let saved_r0 = self.get_reg(0);
             let saved_handlers: Vec<_> = std::mem::take(&mut self.exception_handlers);
 
-            let fn_this =
-                if !js_func.is_strict() && (this_value.is_undefined() || this_value.is_null()) {
-                    ctx.global()
-                } else {
-                    this_value
-                };
+            let fn_this = if js_func.is_arrow() {
+                match &js_func.arrow_this_cell {
+                    Some(cell) => cell.get().0,
+                    None => js_func.arrow_this,
+                }
+            } else if !js_func.is_strict() && (this_value.is_undefined() || this_value.is_null()) {
+                ctx.global()
+            } else {
+                this_value
+            };
             self.push_frame_raw(
                 rb.locals_count,
                 rb.effective_code_ptr(),
@@ -5335,7 +5340,20 @@ impl VM {
                 js_func.uses_arguments(),
             );
 
-            {
+            if js_func.is_arrow() {
+                let frame = &mut self.frames[self.frame_index];
+                frame.this_cell = js_func.arrow_this_cell.clone();
+                frame.super_ctor = js_func.arrow_super;
+                frame.super_base = js_func.arrow_super_base;
+                frame.new_target = js_func.arrow_new_target;
+                if let Some(cell) = &js_func.arrow_this_cell {
+                    let (tv, init) = cell.get();
+                    frame.this_value = tv;
+                    frame.this_initialized = init;
+                } else {
+                    frame.this_initialized = js_func.arrow_this_initialized;
+                }
+            } else {
                 let super_key = ctx.common_atoms.__super__;
                 if let Some(super_val) = js_func.base.get(super_key) {
                     self.frames[self.frame_index].super_ctor = super_val;
@@ -5974,6 +5992,7 @@ impl VM {
                     self.frames[0].this_cell = js_func.arrow_this_cell.clone();
                     self.frames[0].super_ctor = js_func.arrow_super;
                     self.frames[0].super_base = js_func.arrow_super_base;
+                    self.frames[0].new_target = js_func.arrow_new_target;
                     if let Some(cell) = &js_func.arrow_this_cell {
                         let (tv, init) = cell.get();
                         self.frames[0].this_value = tv;
@@ -12240,6 +12259,7 @@ impl VM {
                                 self.frames[self.frame_index].this_cell = js_func.arrow_this_cell.clone();
                                 self.frames[self.frame_index].super_ctor = js_func.arrow_super;
                                 self.frames[self.frame_index].super_base = js_func.arrow_super_base;
+                                self.frames[self.frame_index].new_target = js_func.arrow_new_target;
                                 if let Some(cell) = &js_func.arrow_this_cell {
                                     let (tv, init) = cell.get();
                                     self.frames[self.frame_index].this_value = tv;
@@ -12662,6 +12682,7 @@ impl VM {
                         func.arrow_this_initialized = parent.this_initialized;
                         func.arrow_super = parent.super_ctor;
                         func.arrow_super_base = parent.super_base;
+                        func.arrow_new_target = parent.new_target;
                     }
                     func.line_number_table = line_number_table_opt.clone();
                     func.bytecode = Some(Bytecode {
