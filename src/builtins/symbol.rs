@@ -74,7 +74,7 @@ pub(crate) fn to_string_via_vm(ctx: &mut JSContext, value: JSValue) -> Option<At
     if value.is_object() {
         return ctx
             .with_vm(|vm, ctx| {
-                let obj = value.as_object();
+                let obj = value.try_as_object().expect("object value");
                 let to_string_val = obj.get(ctx.common_atoms.to_string);
                 let to_string_is_callable = to_string_val.map_or(false, |v| v.is_function());
                 if to_string_is_callable {
@@ -134,8 +134,8 @@ fn symbol_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             reg_ptr
         }
     };
-    let reg_val = JSValue::new_object(reg_ptr);
-    let reg = reg_val.as_object_mut();
+    let mut reg_val = JSValue::new_object(reg_ptr);
+    let reg = reg_val.try_as_object_mut().expect("symbol registry");
 
     let len_atom = ctx.common_atoms.length;
     let len = reg.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
@@ -143,7 +143,8 @@ fn symbol_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let idx_atom = ctx.intern(&i.to_string());
         if let Some(entry) = reg.get(idx_atom) {
             if entry.is_object() {
-                let entry_obj = entry.as_object_mut();
+                let mut entry = entry;
+                let entry_obj = entry.try_as_object_mut().expect("symbol registry entry");
                 let desc_atom = ctx.intern("description");
                 if let Some(desc) = entry_obj.get(desc_atom) {
                     if desc.is_string() && desc.get_atom() == key {
@@ -184,7 +185,7 @@ fn symbol_key_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     if let Some(ptr) = ctx.get_symbol_registry_ptr() {
         let reg_val = JSValue::new_object(ptr);
-        let reg = reg_val.as_object();
+        let reg = reg_val.try_as_object().expect("symbol registry");
         let len_atom = ctx.common_atoms.length;
         let len = reg
             .get(len_atom)
@@ -194,7 +195,7 @@ fn symbol_key_for(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let idx_atom = ctx.intern(&i.to_string());
             if let Some(entry) = reg.get(idx_atom) {
                 if entry.is_object() {
-                    let entry_obj = entry.as_object();
+                    let entry_obj = entry.try_as_object().expect("symbol registry entry");
                     let sym_atom = ctx.intern("symbol");
                     if let Some(sym) = entry_obj.get(sym_atom) {
                         if sym.strict_eq(&sym_val) {
@@ -223,8 +224,8 @@ fn symbol_description(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_val = &args[0];
     let sym = if this_val.is_symbol() {
         this_val.clone()
-    } else if this_val.is_object() {
-        if let Some(v) = this_val.as_object().get(ctx.common_atoms.__value__) {
+    } else if let Some(object) = this_val.try_as_object() {
+        if let Some(v) = object.get(ctx.common_atoms.__value__) {
             if v.is_symbol() {
                 v
             } else {
@@ -269,8 +270,8 @@ fn symbol_to_primitive(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if this_val.is_symbol() {
         return this_val.clone();
     }
-    if this_val.is_object() {
-        if let Some(v) = this_val.as_object().get(ctx.common_atoms.__value__) {
+    if let Some(object) = this_val.try_as_object() {
+        if let Some(v) = object.get(ctx.common_atoms.__value__) {
             if v.is_symbol() {
                 return v;
             }
@@ -295,8 +296,8 @@ fn symbol_value_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if this_val.is_symbol() {
         return this_val.clone();
     }
-    if this_val.is_object() {
-        if let Some(v) = this_val.as_object().get(ctx.common_atoms.__value__) {
+    if let Some(object) = this_val.try_as_object() {
+        if let Some(v) = object.get(ctx.common_atoms.__value__) {
             if v.is_symbol() {
                 return v;
             }
@@ -318,8 +319,8 @@ fn symbol_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let sym = if this_val.is_symbol() {
         this_val.clone()
-    } else if this_val.is_object() {
-        let inner = this_val.as_object().get(ctx.common_atoms.__value__);
+    } else if let Some(object) = this_val.try_as_object() {
+        let inner = object.get(ctx.common_atoms.__value__);
         if let Some(v) = inner {
             if v.is_symbol() {
                 v
@@ -372,9 +373,9 @@ const SYMBOL_DISPOSE_DESC: &str = "Symbol.dispose";
 
 pub fn get_or_create_well_known_symbol(ctx: &mut JSContext, description: &str) -> JSValue {
     let desc_atom = ctx.intern(description);
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("global object");
         if let Some(sym) = global_obj.get(desc_atom) {
             return sym;
         }
@@ -388,8 +389,8 @@ pub fn get_or_create_well_known_symbol(ctx: &mut JSContext, description: &str) -
 pub fn init_symbol(ctx: &mut JSContext) {
     let symbol_atom = ctx.intern("Symbol");
     let global = ctx.global();
-    if global.is_object() {
-        if global.as_object().get(symbol_atom).is_some() {
+    if let Some(global_obj) = global.try_as_object() {
+        if global_obj.get(symbol_atom).is_some() {
             return;
         }
     }
@@ -631,13 +632,13 @@ pub fn init_symbol(ctx: &mut JSContext) {
 
     let proto_ptr = Box::into_raw(Box::new(sym_proto));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
-    let proto_value = JSValue::new_object(proto_ptr);
+    let mut proto_value = JSValue::new_object(proto_ptr);
     symbol_ctor.base.set(ctx.intern("prototype"), proto_value);
     ctx.set_symbol_prototype(proto_ptr);
 
     let symbol_to_string_tag = get_or_create_well_known_symbol(ctx, SYMBOL_TO_STRING_TAG_DESC);
     let tag_key = crate::runtime::atom::Atom(0x40000000 | symbol_to_string_tag.get_symbol_id());
-    proto_value.as_object_mut().define_property(
+    proto_value.try_as_object_mut().expect("symbol prototype").define_property(
         tag_key,
         crate::object::object::PropertyDescriptor {
             value: Some(JSValue::new_string(ctx.intern("Symbol"))),
@@ -653,7 +654,7 @@ pub fn init_symbol(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(symbol_ptr);
     let symbol_ctor_val = JSValue::new_function(symbol_ptr);
 
-    proto_value.as_object_mut().define_property(
+    proto_value.try_as_object_mut().expect("symbol prototype").define_property(
         ctx.intern("constructor"),
         crate::object::object::PropertyDescriptor {
             value: Some(symbol_ctor_val.clone()),
@@ -664,7 +665,7 @@ pub fn init_symbol(ctx: &mut JSContext) {
             set: None,
         },
     );
-    proto_value.as_object_mut().define_property(
+    proto_value.try_as_object_mut().expect("symbol prototype").define_property(
         ctx.intern("toString"),
         crate::object::object::PropertyDescriptor {
             value: Some(to_string_fn),
@@ -675,7 +676,7 @@ pub fn init_symbol(ctx: &mut JSContext) {
             set: None,
         },
     );
-    proto_value.as_object_mut().define_property(
+    proto_value.try_as_object_mut().expect("symbol prototype").define_property(
         ctx.intern("valueOf"),
         crate::object::object::PropertyDescriptor {
             value: Some(value_of_fn),
@@ -686,7 +687,7 @@ pub fn init_symbol(ctx: &mut JSContext) {
             set: None,
         },
     );
-    proto_value.as_object_mut().define_property(
+    proto_value.try_as_object_mut().expect("symbol prototype").define_property(
         ctx.intern("description"),
         crate::object::object::PropertyDescriptor {
             value: None,
@@ -701,7 +702,7 @@ pub fn init_symbol(ctx: &mut JSContext) {
     let symbol_to_primitive_sym = get_or_create_well_known_symbol(ctx, SYMBOL_TO_PRIMITIVE_DESC);
     let to_prim_key =
         crate::runtime::atom::Atom(0x40000000 | symbol_to_primitive_sym.get_symbol_id());
-    proto_value.as_object_mut().define_property(
+    proto_value.try_as_object_mut().expect("symbol prototype").define_property(
         to_prim_key,
         crate::object::object::PropertyDescriptor {
             value: Some(to_primitive_fn),
@@ -714,9 +715,9 @@ pub fn init_symbol(ctx: &mut JSContext) {
     );
 
     let symbol_atom = ctx.intern("Symbol");
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("global object");
         crate::builtins::global::set_non_enumerable(global_obj, symbol_atom, symbol_ctor_val);
     }
 }
@@ -756,8 +757,8 @@ pub fn register_builtins(ctx: &mut JSContext) {
 pub fn fix_prototype_chain(ctx: &mut JSContext) {
     if let Some(sym_proto_ptr) = ctx.get_symbol_prototype() {
         if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
-            let sym_proto_val = JSValue::new_object(sym_proto_ptr);
-            sym_proto_val.as_object_mut().prototype = Some(obj_proto_ptr);
+            let mut sym_proto_val = JSValue::new_object(sym_proto_ptr);
+            sym_proto_val.try_as_object_mut().expect("symbol prototype").prototype = Some(obj_proto_ptr);
         }
     }
 }
@@ -888,7 +889,8 @@ pub fn install_species_accessor(ctx: &mut JSContext, ctor_val: &JSValue) {
         JSValue::new_function(ptr)
     };
 
-    let func_mut = ctor_val.as_function_mut();
+    let mut ctor_val = *ctor_val;
+    let func_mut = ctor_val.try_as_function_mut().expect("species constructor");
     let entry = crate::object::object::AccessorEntry {
         get: Some(getter_fn),
         set: None,
