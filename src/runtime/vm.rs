@@ -737,7 +737,6 @@ pub struct VM {
     cached_code_len: usize,
     cached_const_ptr: *const JSValue,
     cached_registers_base: usize,
-    cached_registers_ptr: *mut JSValue,
     cached_has_upvalue_sync: bool,
 
     cached_upvalue_sync_bitset: u64,
@@ -853,7 +852,6 @@ impl VM {
             cached_code_len: 0,
             cached_const_ptr: std::ptr::null(),
             cached_registers_base: 0,
-            cached_registers_ptr: std::ptr::null_mut(),
             cached_has_upvalue_sync: false,
             cached_upvalue_sync_bitset: 0,
             cached_ic_table_ptr: std::ptr::null_mut(),
@@ -913,7 +911,6 @@ impl VM {
             self.registers.push(JSValue::undefined());
         }
         self.cached_registers_base = 0;
-        self.cached_registers_ptr = self.registers.as_mut_ptr();
         self.frame_index = 0;
         self.pc = 0;
     }
@@ -1228,8 +1225,6 @@ impl VM {
         self.cached_registers_base = frame.registers_base;
         self.cached_has_upvalue_sync = frame.upvalue_sync_map.is_some();
         self.cached_upvalue_sync_bitset = frame.upvalue_sync_bitset;
-        self.cached_registers_ptr =
-            unsafe { self.registers.as_mut_ptr().add(self.cached_registers_base) };
         self.cached_ic_table_ptr = frame.ic_table_ptr;
 
         if frame.has_upvalues {
@@ -1312,8 +1307,6 @@ impl VM {
         let total = base + needed;
         if total > self.registers.len() {
             self.registers.resize(total, JSValue::undefined());
-            self.cached_registers_ptr =
-                unsafe { self.registers.as_mut_ptr().add(self.cached_registers_base) };
         }
 
         self.registers[base] = this_value;
@@ -1407,7 +1400,6 @@ impl VM {
         self.cached_registers_base = base;
         self.cached_has_upvalue_sync = false;
         self.cached_upvalue_sync_bitset = 0;
-        self.cached_registers_ptr = unsafe { self.registers.as_mut_ptr().add(base) };
         self.cached_ic_table_ptr = frame.ic_table_ptr;
         if let Some(fptr) = function_ptr {
             if frame.has_upvalues {
@@ -1463,8 +1455,6 @@ impl VM {
 
         if total > self.registers.len() {
             self.registers.resize(total, JSValue::undefined());
-            self.cached_registers_ptr =
-                unsafe { self.registers.as_mut_ptr().add(self.cached_registers_base) };
         }
 
         self.registers[base] = this_value;
@@ -1563,7 +1553,6 @@ impl VM {
         self.cached_registers_base = base;
         self.cached_has_upvalue_sync = false;
         self.cached_upvalue_sync_bitset = 0;
-        self.cached_registers_ptr = unsafe { self.registers.as_mut_ptr().add(base) };
         self.cached_ic_table_ptr = ic_table_ptr;
         if let Some(fptr) = function_ptr {
             if frame.has_upvalues {
@@ -2552,7 +2541,7 @@ impl VM {
         if self.cached_has_upvalue_sync {
             return self.get_reg_upvalue_slow(idx);
         }
-        unsafe { *self.cached_registers_ptr.add(idx as usize) }
+        self.registers[self.cached_registers_base + idx as usize]
     }
 
     #[cold]
@@ -2569,14 +2558,12 @@ impl VM {
                 return cell.get();
             }
         }
-        unsafe { *self.cached_registers_ptr.add(idx as usize) }
+        self.registers[self.cached_registers_base + idx as usize]
     }
 
     #[inline(always)]
     fn set_reg(&mut self, idx: u16, val: JSValue) {
-        unsafe {
-            *self.cached_registers_ptr.add(idx as usize) = val;
-        }
+        self.registers[self.cached_registers_base + idx as usize] = val;
         if self.cached_has_upvalue_sync {
             self.set_reg_upvalue_slow(idx, val);
         }
