@@ -2585,6 +2585,14 @@ impl VM {
         }
     }
 
+    #[inline(always)]
+    fn const_at(&self, idx: usize) -> JSValue {
+        if idx >= self.frames[self.frame_index].constants_len {
+            return JSValue::undefined();
+        }
+        unsafe { *self.cached_const_ptr.add(idx) }
+    }
+
     fn format_stack_trace(&self, ctx: &JSContext) -> String {
         let mut frames = Vec::new();
         for fi in (0..=self.frame_index).rev() {
@@ -5617,16 +5625,12 @@ impl VM {
         if count == 0 {
             return false;
         }
-        let frame = &self.frames[self.frame_index];
-        if frame.constants_ptr.is_null() {
-            return false;
-        }
         let start = self.eval_direct_scope_start as usize;
         for index in start..start.saturating_add(count) {
-            if index >= frame.constants_len {
+            if index >= self.frames[self.frame_index].constants_len {
                 break;
             }
-            let value = unsafe { *frame.constants_ptr.add(index) };
+            let value = self.const_at(index);
             if value.is_string() && value.get_atom().0 == name_atom {
                 return true;
             }
@@ -6428,11 +6432,7 @@ impl VM {
                 Opcode::LoadConst => {
                     let dst = self.read_u16_pc();
                     let idx = self.read_u32() as usize;
-                    let val = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let val = self.const_at(idx);
                     self.set_reg(dst, val);
                 }
                 Opcode::LoadInt => {
@@ -7768,11 +7768,7 @@ impl VM {
                     let ic_pc = self.pc - 1;
                     let dst = self.read_u16_pc();
                     let idx = self.read_u32() as usize;
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     let mut resolved = false;
                     if self.eval_binding_frames > 0 {
@@ -7927,11 +7923,7 @@ impl VM {
                     let idx = self.read_u32() as usize;
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     let is_strict = self.frames[self.frame_index].is_strict_frame;
 
@@ -8163,11 +8155,7 @@ impl VM {
                     let idx = self.read_u32() as usize;
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     let is_strict = self.frames[self.frame_index].is_strict_frame;
                     if ctx.global_lexical_kinds.contains_key(&atom.0) {
@@ -8332,11 +8320,7 @@ impl VM {
                     let idx = self.read_u32() as usize;
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     if ctx.global_lexical_kinds.contains_key(&atom.0) {
                         let name_str = ctx.get_atom_str(atom).to_string();
@@ -8391,11 +8375,7 @@ impl VM {
                     let mode = self.read_u8();
                     let idx = self.read_u32() as usize;
                     let src = self.read_u16_pc();
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     match mode {
                         0 => {
@@ -8754,11 +8734,7 @@ impl VM {
                     let idx = self.read_u32() as usize;
                     let src = self.read_u16_pc();
                     let val = self.get_reg(src);
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     let global = ctx.global();
                     if global.is_object() {
@@ -8769,11 +8745,7 @@ impl VM {
                 Opcode::DeleteGlobal => {
                     let dst = self.read_u16_pc();
                     let idx = self.read_u32() as usize;
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     let global = ctx.global();
                     let result = if global.is_object() {
@@ -8804,11 +8776,7 @@ impl VM {
                 }
                 Opcode::ThrowConstAssignment => {
                     let msg_idx = self.read_u32() as usize;
-                    let msg_const = if msg_idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(msg_idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let msg_const = self.const_at(msg_idx);
                     let name = if msg_const.is_string() {
                         ctx.get_atom_str(msg_const.get_atom()).to_string()
                     } else {
@@ -8827,11 +8795,7 @@ impl VM {
                 }
                 Opcode::ThrowReferenceError => {
                     let msg_idx = self.read_u32() as usize;
-                    let msg_const = if msg_idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(msg_idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let msg_const = self.const_at(msg_idx);
                     let err_msg = if msg_const.is_string() {
                         ctx.get_atom_str(msg_const.get_atom()).to_string()
                     } else {
@@ -10295,17 +10259,8 @@ impl VM {
                     let dst = self.read_u16_pc();
                     let pattern_idx = self.read_u32() as usize;
                     let flags_idx = self.read_u32() as usize;
-                    let constants_len = self.frames[self.frame_index].constants_len;
-                    let pattern_val = if pattern_idx < constants_len {
-                        unsafe { *self.cached_const_ptr.add(pattern_idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
-                    let flags_val = if flags_idx < constants_len {
-                        unsafe { *self.cached_const_ptr.add(flags_idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let pattern_val = self.const_at(pattern_idx);
+                    let flags_val = self.const_at(flags_idx);
                     let pattern = if pattern_val.is_string() {
                         ctx.get_atom_str(pattern_val.get_atom()).to_string()
                     } else {
@@ -13139,11 +13094,7 @@ impl VM {
                     {
                         continue;
                     }
-                    let name = if idx < self.frames[self.frame_index].constants_len {
-                        unsafe { *self.cached_const_ptr.add(idx) }
-                    } else {
-                        JSValue::undefined()
-                    };
+                    let name = self.const_at(idx);
                     let atom = name.get_atom();
                     let mut exists = false;
                     let has_eval = self.eval_binding_frames > 0 || self.caller_vm.is_some();
