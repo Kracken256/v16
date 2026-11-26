@@ -1179,8 +1179,20 @@ pub fn ta_set_element(ctx: &mut JSContext, obj: &mut JSObject, index: usize, val
             let v = num;
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
-        TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => {
-            let v = to_int_modulo(num, 64);
+        TypedArrayKind::BigInt64 => {
+            let v = if value.is_bigint() {
+                value.as_object().get_bigint_value().to_i64_wrapping() as u64
+            } else {
+                to_int_modulo(num, 64)
+            };
+            data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
+        }
+        TypedArrayKind::BigUint64 => {
+            let v = if value.is_bigint() {
+                value.as_object().get_bigint_value().to_u64_wrapping()
+            } else {
+                to_int_modulo(num, 64)
+            };
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
     }
