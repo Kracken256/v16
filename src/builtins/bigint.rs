@@ -54,7 +54,7 @@ fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
 fn create_bigint_value(value: BigInt) -> JSValue {
     let mut bigint_obj = JSObject::new_bigint();
     bigint_obj.set_bigint_value(value);
-    JSValue::new_bigint(Box::into_raw(Box::new(bigint_obj)))
+    JSValue::new_bigint_boxed(Box::new(bigint_obj))
 }
 
 fn to_primitive_number(ctx: &mut JSContext, value: JSValue) -> Option<JSValue> {

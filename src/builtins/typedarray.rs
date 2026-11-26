@@ -1172,7 +1172,7 @@ fn data_view_get_bigint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let val = i64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
             let mut obj = crate::object::object::JSObject::new_bigint();
             obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(obj)))
+            JSValue::new_bigint_boxed(Box::new(obj))
         }
         None => JSValue::undefined(),
     }
@@ -1184,7 +1184,7 @@ fn data_view_get_biguint64(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             let val = u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
             let mut obj = crate::object::object::JSObject::new_bigint();
             obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(obj)))
+            JSValue::new_bigint_boxed(Box::new(obj))
         }
         None => JSValue::undefined(),
     }
@@ -1344,13 +1344,13 @@ pub fn ta_get_element(ctx: &mut JSContext, obj: &JSObject, index: usize) -> Opti
             let val = i64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
             let mut bi_obj = crate::object::object::JSObject::new_bigint();
             bi_obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(bi_obj)))
+            JSValue::new_bigint_boxed(Box::new(bi_obj))
         }
         TypedArrayKind::BigUint64 => {
             let val = u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
             let mut bi_obj = crate::object::object::JSObject::new_bigint();
             bi_obj.set_bigint_value(val);
-            JSValue::new_bigint(Box::into_raw(Box::new(bi_obj)))
+            JSValue::new_bigint_boxed(Box::new(bi_obj))
         }
     })
 }

@@ -1895,7 +1895,9 @@ mod tests {
         for value in [
             crate::value::JSValue::new_object(0x1000 as *mut crate::object::object::JSObject),
             crate::value::JSValue::new_function(0x2000 as *mut crate::object::function::JSFunction),
-            crate::value::JSValue::new_bigint(0x3000 as *mut crate::object::object::JSObject),
+            crate::value::JSValue::new_bigint_boxed(Box::new(
+                crate::object::object::JSObject::new_bigint(),
+            )),
         ] {
             let mut bytecode = Bytecode::new();
             bytecode.constants = vec![value];

@@ -18017,8 +18017,7 @@ impl VM {
     fn create_bigint(value: crate::builtins::bignum::BigInt) -> JSValue {
         let mut bigint_obj = crate::object::object::JSObject::new_bigint();
         bigint_obj.set_bigint_value(value);
-        let ptr = Box::into_raw(Box::new(bigint_obj));
-        JSValue::new_bigint(ptr)
+        JSValue::new_bigint_boxed(Box::new(bigint_obj))
     }
 
     fn js_add_string(b: &JSValue, a: &JSValue, ctx: &mut JSContext) -> JSValue {

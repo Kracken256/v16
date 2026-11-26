@@ -168,8 +168,10 @@ impl JSValue {
         (self.get_payload() >> 32) as u32
     }
 
-    pub fn new_bigint(ptr: *mut crate::object::object::JSObject) -> Self {
-        JSValue(Self::pack(TAG_BIGINT, Self::compress_ptr(ptr as usize)))
+    pub fn new_bigint_boxed(bigint: Box<crate::object::object::JSObject>) -> Self {
+        let ptr = Box::leak(bigint);
+        // SAFETY: `Box::leak` yields a valid pointer to an allocation that is never dropped.
+        unsafe { Self::new_bigint_unchecked(ptr) }
     }
 
     /// # Safety
@@ -687,8 +689,8 @@ mod tests {
             function_ptr as *const JSObject
         );
 
-        let bigint_ptr = Box::into_raw(Box::new(JSObject::new_bigint()));
-        let bigint_value = JSValue::new_bigint(bigint_ptr);
+        let bigint_value = JSValue::new_bigint_boxed(Box::new(JSObject::new_bigint()));
+        let bigint_ptr = bigint_value.get_ptr();
         assert_eq!(
             bigint_value.try_as_object().unwrap() as *const JSObject,
             bigint_ptr as *const JSObject
@@ -697,7 +699,6 @@ mod tests {
 
         drop(unsafe { Box::from_raw(object_ptr) });
         drop(unsafe { Box::from_raw(function_ptr) });
-        drop(unsafe { Box::from_raw(bigint_ptr) });
     }
 
     #[test]
