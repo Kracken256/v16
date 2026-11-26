@@ -733,14 +733,13 @@ fn object_has_property(obj_val: &JSValue, prop: Atom) -> bool {
     if !obj_val.is_object_like() {
         return false;
     }
-    let mut current = Some(obj_val.get_ptr() as *mut JSObject);
+    let mut current = Some(obj_val.as_object());
     let mut depth = 0;
-    while let Some(ptr) = current {
-        let obj = unsafe { &*ptr };
+    while let Some(obj) = current {
         if obj.get_own(prop).is_some() {
             return true;
         }
-        current = obj.prototype;
+        current = obj.prototype_object();
         depth += 1;
         if depth > 1000 {
             break;
@@ -753,10 +752,9 @@ pub fn object_get_property(ctx: &mut JSContext, obj_val: &JSValue, prop: Atom) -
     if !obj_val.is_object_like() {
         return JSValue::undefined();
     }
-    let mut current = Some(obj_val.get_ptr() as *mut JSObject);
+    let mut current = Some(obj_val.as_object());
     let mut depth = 0;
-    while let Some(ptr) = current {
-        let obj = unsafe { &*ptr };
+    while let Some(obj) = current {
         if let Some(entry) = obj.get_own_accessor_entry(prop) {
             if let Some(getter) = entry.get {
                 if getter.is_function() {
@@ -774,7 +772,7 @@ pub fn object_get_property(ctx: &mut JSContext, obj_val: &JSValue, prop: Atom) -
         if let Some(v) = obj.get_own(prop) {
             return v;
         }
-        current = obj.prototype;
+        current = obj.prototype_object();
         depth += 1;
         if depth > 1000 {
             break;
@@ -1198,21 +1196,16 @@ fn object_is_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         crate::builtins::global::throw_type_error(ctx, "isPrototypeOf called on incompatible receiver");
         return JSValue::undefined();
     }
-    let this_ptr = this.get_ptr() as *mut JSObject;
-    let mut current = v.get_ptr() as *mut JSObject;
+    let this_obj = this.as_object();
+    let target = this_obj as *const JSObject;
+    let mut current = v.as_object();
     loop {
-        if current.is_null() {
-            return JSValue::bool(false);
-        }
-        if current == this_ptr {
+        if std::ptr::eq(current, target) {
             return JSValue::bool(true);
         }
-        unsafe {
-            if let Some(proto) = (*current).prototype {
-                current = proto;
-            } else {
-                return JSValue::bool(false);
-            }
+        match current.prototype_object() {
+            Some(proto) => current = proto,
+            None => return JSValue::bool(false),
         }
     }
 }
@@ -1255,9 +1248,8 @@ fn lookup_accessor(ctx: &mut JSContext, args: &[JSValue], want_getter: bool) -> 
     let Some(atom) = to_property_atom(ctx, &args[1]) else {
         return JSValue::undefined();
     };
-    let mut current = Some(this.get_ptr() as *mut JSObject);
-    while let Some(ptr) = current {
-        let obj = unsafe { &*ptr };
+    let mut current = Some(this.as_object());
+    while let Some(obj) = current {
         if let Some(entry) = obj.get_own_accessor_entry(atom) {
             let v = if want_getter { entry.get } else { entry.set };
             return v.unwrap_or(JSValue::undefined());
@@ -1265,7 +1257,7 @@ fn lookup_accessor(ctx: &mut JSContext, args: &[JSValue], want_getter: bool) -> 
         if obj.has_own(atom) {
             return JSValue::undefined();
         }
-        current = obj.prototype;
+        current = obj.prototype_object();
     }
     JSValue::undefined()
 }
