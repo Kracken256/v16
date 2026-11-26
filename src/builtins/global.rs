@@ -623,12 +623,8 @@ fn import_attributes_type(
     if args.len() < 2 {
         return Ok(None);
     }
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        vm.get_import_attributes(ctx, args[1])
-    } else {
-        Ok(None)
-    }
+    ctx.with_vm(|vm, ctx| vm.get_import_attributes(ctx, args[1]))
+        .unwrap_or(Ok(None))
 }
 
 fn import_specifier_to_string(ctx: &mut JSContext, args: &[JSValue]) -> Result<String, JSValue> {
@@ -736,13 +732,10 @@ fn v16_export_live(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     let mut snapshot = JSValue::undefined();
     if args[1].is_function() {
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-            if let Ok(value) =
-                vm.call_function_with_this(ctx, args[1], JSValue::undefined(), &[])
-            {
-                snapshot = value;
-            }
+        if let Some(Ok(value)) =
+            ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, args[1], JSValue::undefined(), &[]))
+        {
+            snapshot = value;
         }
     }
     if let Some(spec) = ctx.get_current_module().map(|s| s.to_string()) {
@@ -869,8 +862,7 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    if let Some(result) = ctx.with_vm(|vm, ctx| {
         let direct = vm.eval_direct_active;
         vm.eval_direct_active = false;
         let result = if direct {
@@ -879,9 +871,11 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             vm.indirect_eval(ctx, &source)
         };
         match result {
-            Ok(v) => return v,
-            Err(_) => return JSValue::undefined(),
+            Ok(v) => v,
+            Err(_) => JSValue::undefined(),
         }
+    }) {
+        return result;
     }
 
     match crate::compiler::eval_code_as_eval(ctx, &source) {
@@ -957,11 +951,10 @@ fn reflect_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             }
             if let Some(getter) = desc.get {
                 if getter.is_function() {
-                    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                        if let Ok(result) = vm.call_function_with_this(ctx, getter, receiver, &[]) {
-                            return result;
-                        }
+                    if let Some(Ok(result)) = ctx.with_vm(|vm, ctx| {
+                        vm.call_function_with_this(ctx, getter, receiver, &[])
+                    }) {
+                        return result;
                     }
                 }
             }
@@ -1009,24 +1002,23 @@ fn reflect_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     } else {
         JSValue::new_string(key)
     };
-    let Some(vm_ptr) = ctx.get_register_vm_ptr() else {
-        return JSValue::bool(false);
-    };
-    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-    match vm.ordinary_set_with_receiver(ctx, target, key_value, value, receiver) {
-        Ok(result) => JSValue::bool(result),
-        Err(_) => {
-            if let Some(exc) = ctx
-                .pending_exception
-                .take()
-                .or_else(|| vm.pending_throw.take())
-                .or_else(|| vm.last_caught_exception.take())
-            {
-                ctx.pending_exception = Some(exc);
+    ctx.with_vm(|vm, ctx| {
+        match vm.ordinary_set_with_receiver(ctx, target, key_value, value, receiver) {
+            Ok(result) => JSValue::bool(result),
+            Err(_) => {
+                if let Some(exc) = ctx
+                    .pending_exception
+                    .take()
+                    .or_else(|| vm.pending_throw.take())
+                    .or_else(|| vm.last_caught_exception.take())
+                {
+                    ctx.pending_exception = Some(exc);
+                }
+                JSValue::undefined()
             }
-            JSValue::undefined()
         }
-    }
+    })
+    .unwrap_or_else(|| JSValue::bool(false))
 }
 
 fn reflect_has(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1614,19 +1606,19 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     ctx.runtime_mut().gc_heap_mut().track(obj_ptr);
     let new_obj = JSValue::new_object(obj_ptr);
 
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    if let Some(result) = ctx.with_vm(|vm, ctx| {
         match vm.construct_with_new_target(ctx, target, new_obj, &call_args, new_target) {
             Ok(result) => {
                 if result.is_object_like() {
-                    return result;
+                    result
+                } else {
+                    new_obj
                 }
-                return new_obj;
             }
-            Err(_e) => {
-                return JSValue::undefined();
-            }
+            Err(_e) => JSValue::undefined(),
         }
+    }) {
+        return result;
     }
     new_obj
 }
@@ -1659,14 +1651,13 @@ fn reflect_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         Ok(v) => v,
         Err(()) => return JSValue::undefined(),
     };
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    if let Some(result) = ctx.with_vm(|vm, ctx| {
         match vm.call_function_with_this(ctx, target, this_arg, &call_args) {
-            Ok(result) => return result,
-            Err(_e) => {
-                return JSValue::undefined();
-            }
+            Ok(result) => result,
+            Err(_e) => JSValue::undefined(),
         }
+    }) {
+        return result;
     }
     JSValue::undefined()
 }
@@ -2078,16 +2069,20 @@ pub fn to_property_key_string(ctx: &mut JSContext, v: &JSValue) -> String {
         return String::new();
     }
     if v.is_object() || v.is_function() {
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-            let prim = vm.ordinary_to_primitive(v, "string", ctx);
-            if let Some(exc) = vm.take_pending_exception(ctx) {
-                ctx.pending_exception = Some(exc);
-            }
-            if ctx.pending_exception.is_some() {
-                return String::new();
-            }
-            return to_property_key_string(ctx, &prim);
+        if let Some(s) = ctx
+            .with_vm(|vm, ctx| {
+                let prim = vm.ordinary_to_primitive(v, "string", ctx);
+                if let Some(exc) = vm.take_pending_exception(ctx) {
+                    ctx.pending_exception = Some(exc);
+                }
+                if ctx.pending_exception.is_some() {
+                    return Some(String::new());
+                }
+                Some(to_property_key_string(ctx, &prim))
+            })
+            .flatten()
+        {
+            return s;
         }
     }
     String::new()
@@ -2129,9 +2124,7 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
             return Some(val);
         }
     }
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-
+    ctx.with_vm(|vm, ctx| {
         let to_prim_atom = {
             let global = ctx.global();
             if global.is_object() {
@@ -2257,8 +2250,9 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
         if ctx.pending_exception.is_some() {
             return None;
         }
-    }
-    None
+        None
+    })
+    .flatten()
 }
 
 pub fn js_to_number_value(ctx: &mut JSContext, v: &JSValue) -> Result<f64, ()> {
