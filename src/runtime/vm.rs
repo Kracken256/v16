@@ -10481,8 +10481,12 @@ impl VM {
                         let mut failed = false;
                         if !obj_val.as_object().extensible() {
                             failed = true;
-                        } else if key_val.is_string() {
-                            let atom = key_val.get_atom();
+                        } else {
+                            let atom = if key_val.is_symbol() {
+                                crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id())
+                            } else {
+                                key_val.get_atom()
+                            };
                             if obj_val
                                 .as_object()
                                 .get_own_descriptor(atom)
@@ -10502,20 +10506,6 @@ impl VM {
                                 };
                                 js_obj.define_property(atom, desc);
                             }
-                        } else if key_val.is_symbol() {
-                            let atom = key_val.get_atom();
-                            let js_obj = unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
-                            let desc = crate::object::object::PropertyDescriptor {
-                                value: Some(value),
-                                writable: true,
-                                enumerable: true,
-                                configurable: true,
-                                get: None,
-                                set: None,
-                            };
-                            js_obj.define_property(atom, desc);
-                        } else {
-                            failed = true;
                         }
                         if failed {
                             self.set_pending_type_error(
