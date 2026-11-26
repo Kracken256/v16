@@ -1076,7 +1076,19 @@ impl CodeGenerator {
             is_function_name: false,
         };
         self.reserved_slots.insert(slot);
-        self.all_var_names.push((name.to_string(), slot, 0));
+        let global_tag = if self.is_global_scope() && !self.is_eval {
+            if kind == VariableKind::Var {
+                2
+            } else if self.depth == 1 {
+                3
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        self.all_var_names
+            .push((name.to_string(), slot, global_tag));
         if kind != VariableKind::Var {
             let depth = self.depth as usize;
             for scope in self.with_scopes.iter_mut().rev() {

@@ -1764,8 +1764,11 @@ impl VM {
                 }
                 if !frame.var_name_map.is_null() {
                     let map = unsafe { &*frame.var_name_map };
-                    for &(an, slot, _) in map.iter().rev() {
+                    for &(an, slot, tag) in map.iter().rev() {
                         if an == name_atom {
+                            if tag >= 2 {
+                                continue;
+                            }
                             let base = frame.registers_base;
                             let val = caller.registers[base + slot as usize];
                             return Some(val);
