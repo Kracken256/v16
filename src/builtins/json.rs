@@ -330,8 +330,8 @@ fn get_to_json(ctx: &mut JSContext, val: JSValue) -> Option<JSValue> {
     }
     if val.is_bigint() {
         if let Some(bigint_proto) = ctx.get_bigint_prototype() {
-            let proto_obj = unsafe { &*bigint_proto };
-            return proto_obj.get(ctx.intern("toJSON"));
+            let proto_val = JSValue::new_object(bigint_proto as usize);
+            return proto_val.as_object().get(ctx.intern("toJSON"));
         }
     }
     None
@@ -393,7 +393,6 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
         let Some(val) = val else { return JSValue::undefined() };
 
         if val.is_object() {
-            let obj_ptr = val.get_ptr();
             if val.as_object().is_array() {
                 let len_atom = ctx.common_atoms.length;
                 let len = val.as_object().get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
@@ -401,7 +400,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
                     let i_atom = ctx.int_atom_mut(i);
                     let new_val = json_walk(ctx, reviver, val, i_atom);
                     if ctx.pending_exception.is_some() { return JSValue::undefined(); }
-                    let obj_mut = unsafe { &mut *(obj_ptr as *mut crate::object::object::JSObject) };
+                    let obj_mut = val.as_object_mut();
                     if new_val.is_undefined() {
                         obj_mut.delete(i_atom);
                     } else {
@@ -426,7 +425,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
                 for (prop_atom, _) in props {
                     let new_val = json_walk(ctx, reviver, val, prop_atom);
                     if ctx.pending_exception.is_some() { return JSValue::undefined(); }
-                    let obj_mut = unsafe { &mut *(obj_ptr as *mut crate::object::object::JSObject) };
+                    let obj_mut = val.as_object_mut();
                     if new_val.is_undefined() {
                         obj_mut.delete(prop_atom);
                     } else {
