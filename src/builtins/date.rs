@@ -1878,12 +1878,9 @@ pub fn date_to_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         wrapped
     };
 
-    let tv = if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        vm.ordinary_to_primitive(&o, "number", ctx)
-    } else {
-        JSValue::undefined()
-    };
+    let tv = ctx
+        .with_vm(|vm, ctx| vm.ordinary_to_primitive(&o, "number", ctx))
+        .unwrap_or_else(JSValue::undefined);
     if ctx.pending_exception.is_some() {
         return JSValue::undefined();
     }
@@ -1906,17 +1903,17 @@ pub fn date_to_json(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
     if let Some(fn_val) = to_iso {
         if fn_val.is_function() {
-            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                match vm.call_function_with_this(ctx, fn_val, o, &[]) {
-                    Ok(val) => return val,
-                    Err(_) => {
-                        if let Some(exc) = vm.last_caught_exception.take() {
-                            ctx.pending_exception = Some(exc);
-                        }
-                        return JSValue::undefined();
+            let result = ctx.with_vm(|vm, ctx| match vm.call_function_with_this(ctx, fn_val, o, &[]) {
+                Ok(val) => val,
+                Err(_) => {
+                    if let Some(exc) = vm.last_caught_exception.take() {
+                        ctx.pending_exception = Some(exc);
                     }
+                    JSValue::undefined()
                 }
+            });
+            if let Some(val) = result {
+                return val;
             }
         }
     }
@@ -2012,28 +2009,33 @@ pub fn date_to_primitive(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return JSValue::undefined();
         }
     };
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        for method_name in &[first_method, second_method] {
-            let method_key = ctx.intern(method_name);
-            if let Some(method) = obj.get(method_key) {
-                if method.is_function() {
-                    match vm.call_function_with_this(ctx, method, *this, &[]) {
-                        Ok(result) => {
-                            if !result.is_object() {
-                                return result;
+    let early = ctx
+        .with_vm(|vm, ctx| {
+            for method_name in &[first_method, second_method] {
+                let method_key = ctx.intern(method_name);
+                if let Some(method) = obj.get(method_key) {
+                    if method.is_function() {
+                        match vm.call_function_with_this(ctx, method, *this, &[]) {
+                            Ok(result) => {
+                                if !result.is_object() {
+                                    return Some(result);
+                                }
                             }
-                        }
-                        Err(_) => {
-                            if let Some(exc) = vm.last_caught_exception.take() {
-                                ctx.pending_exception = Some(exc);
+                            Err(_) => {
+                                if let Some(exc) = vm.last_caught_exception.take() {
+                                    ctx.pending_exception = Some(exc);
+                                }
+                                return Some(JSValue::undefined());
                             }
-                            return JSValue::undefined();
                         }
                     }
                 }
             }
-        }
+            None
+        })
+        .flatten();
+    if let Some(result) = early {
+        return result;
     }
     let mut err = JSObject::new();
     err.set(
