@@ -1,5 +1,4 @@
 use crate::host::HostFunction;
-use crate::object::function::JSFunction;
 use crate::runtime::context::JSContext;
 use crate::runtime::vm::VM;
 use crate::value::JSValue;
@@ -59,8 +58,7 @@ fn call_js_function(
     if !func.is_function() {
         return Err("not a function".to_string());
     }
-    let ptr = func.get_ptr();
-    let js_func = unsafe { &*(ptr as *const JSFunction) };
+    let js_func = func.as_function();
 
     if js_func.is_builtin() {
         if let Some(builtin_fn) = js_func.builtin_func {
@@ -691,7 +689,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         crate::builtins::symbol::get_or_create_well_known_symbol(ctx, "Symbol.iterator");
     let has_iterator = iterable.is_object() && {
         let sym_key = crate::runtime::atom::Atom(0x40000000 | sym_iter_val.get_symbol_id());
-        let obj = unsafe { &*(iterable.get_ptr() as *const crate::object::JSObject) };
+        let obj = iterable.as_object();
         obj.get(sym_key).map_or(false, |v| v.is_function())
     };
 
@@ -704,7 +702,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
         let iter_fn = {
             let sym_key = crate::runtime::atom::Atom(0x40000000 | sym_iter_val.get_symbol_id());
-            let obj = unsafe { &*(iterable.get_ptr() as *const crate::object::JSObject) };
+            let obj = iterable.as_object();
             obj.get(sym_key).unwrap()
         };
 
@@ -722,15 +720,13 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let next_atom = ctx.intern("next");
         let next_fn = {
             let mut next_val = None;
-            let mut current: Option<*const crate::object::JSObject> =
-                Some(iterator.get_ptr() as *const _);
-            while let Some(ptr) = current {
-                let obj = unsafe { &*ptr };
+            let mut current = Some(iterator.as_object());
+            while let Some(obj) = current {
                 if let Some(v) = obj.get(next_atom) {
                     next_val = Some(v);
                     break;
                 }
-                current = obj.prototype.map(|p| p as *const _);
+                current = obj.prototype_object();
             }
             match next_val {
                 Some(v) if v.is_function() => v,
@@ -749,7 +745,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if !result.is_object() {
                 return throw_type_error_math(ctx, "iterator result is not an object");
             }
-            let result_obj = unsafe { &*(result.get_ptr() as *const crate::object::JSObject) };
+            let result_obj = result.as_object();
             let done_atom = ctx.intern("done");
             let value_atom = ctx.intern("value");
             let done = result_obj
@@ -765,7 +761,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
             if value.is_object() || value.is_bigint() || value.is_symbol() || value.is_function() {
                 let return_atom = ctx.intern("return");
-                let iter_obj = unsafe { &*(iterator.get_ptr() as *const crate::object::JSObject) };
+                let iter_obj = iterator.as_object();
                 if let Some(ret_fn) = iter_obj.get(return_atom) {
                     if ret_fn.is_function() {
                         let _ = vm.call_function_with_this(ctx, ret_fn, iterator.clone(), &[]);
@@ -776,7 +772,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             values.push(value.to_number());
         }
     } else if iterable.is_object() {
-        let obj = unsafe { &*(iterable.get_ptr() as *const crate::object::JSObject) };
+        let obj = iterable.as_object();
         let length_prop = obj.get(ctx.common_atoms.length);
         let len = if let Some(v) = length_prop {
             if v.is_int() {

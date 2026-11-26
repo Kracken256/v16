@@ -560,7 +560,8 @@ fn create_builtin_function(
     let ptr = Box::into_raw(Box::new(func)) as usize;
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     if let Some(dname) = display_name {
-        let func_obj = unsafe { &mut *(ptr as *mut crate::object::function::JSFunction) };
+        let func_binding = JSValue::new_function(ptr);
+        let func_obj = func_binding.as_function_mut();
         func_obj.base.define_property(
             ctx.intern("name"),
             crate::object::object::PropertyDescriptor {

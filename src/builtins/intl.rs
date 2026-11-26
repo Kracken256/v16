@@ -801,10 +801,9 @@ fn init_collator(ctx: &mut JSContext) -> JSValue {
     let ptr = Box::into_raw(Box::new(ctor)) as usize;
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let ctor_val = JSValue::new_function(ptr);
-    unsafe {
-        let proto_obj = &mut *(proto_ptr as *mut JSObject);
-        proto_obj.set(ctx.common_atoms.constructor, ctor_val);
-    }
+    let proto_binding = JSValue::new_object(proto_ptr);
+    let proto_obj = proto_binding.as_object_mut();
+    proto_obj.set(ctx.common_atoms.constructor, ctor_val);
     ctor_val
 }
 

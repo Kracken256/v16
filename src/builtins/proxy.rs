@@ -136,8 +136,8 @@ fn proxy_revoke(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         Some(proxy) => proxy,
         None => return JSValue::undefined(),
     };
-    if proxy.is_object() && unsafe { proxy.as_object() }.is_proxy() {
-        unsafe { proxy.as_object_mut() }.revoke_proxy();
+    if proxy.is_object() && proxy.as_object().is_proxy() {
+        proxy.as_object_mut().revoke_proxy();
     }
     JSValue::undefined()
 }

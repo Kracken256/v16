@@ -604,20 +604,18 @@ pub fn init_string(ctx: &mut JSContext) {
     ctx.set_string_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
 
-    let string_func_ptr = string_ptr as *mut crate::object::function::JSFunction;
-    unsafe {
-        (*string_func_ptr).base.define_property(
-            ctx.common_atoms.prototype,
-            crate::object::object::PropertyDescriptor {
-                value: Some(proto_value),
-                writable: false,
-                enumerable: false,
-                configurable: false,
-                get: None,
-                set: None,
-            },
-        );
-    }
+    let string_func_ref = string_value.as_function_mut();
+    string_func_ref.base.define_property(
+        ctx.common_atoms.prototype,
+        crate::object::object::PropertyDescriptor {
+            value: Some(proto_value),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
+    );
 
     if global.is_object() {
         let global_obj = global.as_object_mut();
@@ -832,7 +830,7 @@ fn string_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         } else if val.is_float() {
             JSValue::new_string(ctx.intern(&js_float_to_string(val.get_float())))
         } else if val.is_bigint() {
-            let obj = unsafe { crate::value::JSValue::object_from_ptr(val.get_ptr()) };
+            let obj = val.as_object();
             let n = obj.get_bigint_value();
             JSValue::new_string(ctx.intern(&n.to_string()))
         } else if val.is_bool() {
