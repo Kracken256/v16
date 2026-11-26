@@ -2918,8 +2918,9 @@ impl VM {
             let func = func.as_function();
             let current = ctx as *mut JSContext as usize;
             if func.realm_context != 0 && func.realm_context != current {
-                let realm_ctx = unsafe { &mut *(func.realm_context as *mut JSContext) };
-                if let Some(realm_proto) = realm_ctx.get_type_error_prototype() {
+                if let Some(realm_proto) =
+                    func.realm_ctx().and_then(|realm_ctx| realm_ctx.get_type_error_prototype())
+                {
                     proto = Some(realm_proto);
                 }
             }
@@ -4416,12 +4417,13 @@ impl VM {
         }
         let current = ctx as *mut JSContext as usize;
         if js_func.realm_context != 0 && js_func.realm_context != current {
-            let realm_ctx = unsafe { &*(js_func.realm_context as *const JSContext) };
-            return if js_func.is_async() {
-                realm_ctx.get_async_generator_prototype()
-            } else {
-                realm_ctx.get_generator_prototype()
-            };
+            if let Some(realm_ctx) = js_func.realm_ctx() {
+                return if js_func.is_async() {
+                    realm_ctx.get_async_generator_prototype()
+                } else {
+                    realm_ctx.get_generator_prototype()
+                };
+            }
         }
         if js_func.is_async() {
             ctx.get_async_generator_prototype()

@@ -846,19 +846,22 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if callee.is_function() {
         let realm_context = callee.as_function().realm_context;
         let realm_global = callee.as_function().realm_global;
-        if realm_context != 0 && realm_global.is_object_like()
-            && realm_global.raw_bits() != ctx.global().raw_bits() {
-            let realm_ctx = unsafe { &mut *(realm_context as *mut JSContext) };
-            ctx.swap_global_environment(realm_ctx);
-            let saved_active_realm = ctx.active_realm();
-            ctx.set_active_realm(realm_context);
-            let result = match crate::compiler::eval_code_as_eval(ctx, &source) {
-                Ok(value) => value,
-                Err(_) => JSValue::undefined(),
-            };
-            ctx.set_active_realm(saved_active_realm);
-            ctx.swap_global_environment(realm_ctx);
-            return result;
+        if realm_context != 0
+            && realm_global.is_object_like()
+            && realm_global.raw_bits() != ctx.global().raw_bits()
+        {
+            if let Some(realm_ctx) = callee.as_function_mut().realm_ctx_mut() {
+                ctx.swap_global_environment(realm_ctx);
+                let saved_active_realm = ctx.active_realm();
+                ctx.set_active_realm(realm_context);
+                let result = match crate::compiler::eval_code_as_eval(ctx, &source) {
+                    Ok(value) => value,
+                    Err(_) => JSValue::undefined(),
+                };
+                ctx.set_active_realm(saved_active_realm);
+                ctx.swap_global_environment(realm_ctx);
+                return result;
+            }
         }
     }
 

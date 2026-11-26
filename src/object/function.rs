@@ -149,6 +149,24 @@ impl JSFunction {
         self
     }
 
+    #[inline(always)]
+    pub fn realm_ctx(&self) -> Option<&JSContext> {
+        if self.realm_context == 0 {
+            None
+        } else {
+            Some(unsafe { &*(self.realm_context as *const JSContext) })
+        }
+    }
+
+    #[inline(always)]
+    pub fn realm_ctx_mut(&mut self) -> Option<&mut JSContext> {
+        if self.realm_context == 0 {
+            None
+        } else {
+            Some(unsafe { &mut *(self.realm_context as *mut JSContext) })
+        }
+    }
+
     pub fn is_callable(&self) -> bool {
         true
     }
