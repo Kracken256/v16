@@ -759,12 +759,9 @@ pub fn object_get_property(ctx: &mut JSContext, obj_val: &JSValue, prop: Atom) -
         if let Some(entry) = obj.get_own_accessor_entry(prop) {
             if let Some(getter) = entry.get {
                 if getter.is_function() {
-                    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                        let this = *obj_val;
-                        return vm
-                            .call_function_with_this(ctx, getter, this, &[])
-                            .unwrap_or(JSValue::undefined());
+                    let this = *obj_val;
+                    if let Some(result) = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, getter, this, &[])) {
+                        return result.unwrap_or_else(|_| JSValue::undefined());
                     }
                 }
             }
@@ -1889,11 +1886,11 @@ pub fn namespace_live_descriptor_value(
 ) -> JSValue {
     if let Some(getter) = desc.get {
         if getter.is_function() {
-            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                if let Ok(value) = vm.call_function_with_this(ctx, getter, *obj, &[]) {
-                    return value;
-                }
+            let computed = ctx
+                .with_vm(|vm, ctx| vm.call_function_with_this(ctx, getter, *obj, &[]).ok())
+                .flatten();
+            if let Some(value) = computed {
+                return value;
             }
         }
         return JSValue::undefined();
