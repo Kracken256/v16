@@ -411,6 +411,7 @@ fn object_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         obj.prototype = Some(proto_ptr);
     }
     let ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -565,6 +566,7 @@ fn object_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
@@ -583,6 +585,7 @@ fn object_keys(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         );
     }
     let result_ptr = Box::into_raw(Box::new(result));
+    ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     JSValue::new_object(result_ptr)
 }
 
@@ -602,6 +605,7 @@ fn object_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
@@ -623,6 +627,7 @@ fn object_values(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         result.set(ctx.int_atom_mut(i), *val);
     }
     let result_ptr = Box::into_raw(Box::new(result));
+    ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     JSValue::new_object(result_ptr)
 }
 
@@ -642,6 +647,7 @@ fn object_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
     let obj = this.as_object();
@@ -676,10 +682,12 @@ fn object_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         pair.set(ctx.intern("1"), *val);
 
         let pair_ptr = Box::into_raw(Box::new(pair));
+        ctx.runtime_mut().gc_heap_mut().track(pair_ptr);
         result.set(ctx.int_atom_mut(i), JSValue::new_object(pair_ptr));
     }
 
     let result_ptr = Box::into_raw(Box::new(result));
+    ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     JSValue::new_object(result_ptr)
 }
 
@@ -974,6 +982,7 @@ fn object_create(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let ptr = Box::into_raw(Box::new(new_obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -1357,6 +1366,7 @@ fn object_from_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     if args.is_empty() || !args[0].is_object() {
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
     let iterable = args[0];
@@ -1386,6 +1396,7 @@ fn object_from_entries(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
     let result_ptr = Box::into_raw(Box::new(result));
+    ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     JSValue::new_object(result_ptr)
 }
 
@@ -1449,6 +1460,7 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
 
@@ -1460,6 +1472,7 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
 
@@ -1485,6 +1498,7 @@ fn object_get_own_property_symbols(ctx: &mut JSContext, args: &[JSValue]) -> JSV
     }
 
     let result_ptr = Box::into_raw(Box::new(result));
+    ctx.runtime_mut().gc_heap_mut().track(result_ptr);
     JSValue::new_object(result_ptr)
 }
 
@@ -1932,6 +1946,7 @@ fn object_get_own_property_descriptor(ctx: &mut JSContext, args: &[JSValue]) -> 
         desc_obj.set(ctx.intern("configurable"), JSValue::bool(pd.configurable));
 
         let ptr = Box::into_raw(Box::new(desc_obj));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
 
@@ -1943,6 +1958,7 @@ fn object_get_own_property_descriptors(ctx: &mut JSContext, args: &[JSValue]) ->
 
     if args.is_empty() || !(args[0].is_object() || args[0].is_function()) {
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     }
 
@@ -1971,11 +1987,13 @@ fn object_get_own_property_descriptors(ctx: &mut JSContext, args: &[JSValue]) ->
             desc_obj.set(ctx.intern("configurable"), JSValue::bool(pd.configurable));
 
             let desc_ptr = Box::into_raw(Box::new(desc_obj));
+            ctx.runtime_mut().gc_heap_mut().track(desc_ptr);
             result.set(key_atom, JSValue::new_object(desc_ptr));
         }
     }
 
     let ptr = Box::into_raw(Box::new(result));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -2018,6 +2036,7 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
         }
         result.set(ctx.common_atoms.length, JSValue::new_int(0));
         let ptr = Box::into_raw(Box::new(result));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         return JSValue::new_object(ptr);
     };
 
@@ -2069,5 +2088,77 @@ fn object_get_own_property_names(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
     }
 
     let ptr = Box::into_raw(Box::new(result));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root(ctx: &mut JSContext, value: JSValue) {
+        ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
+    }
+
+    fn assert_alive(ctx: &mut JSContext, value: JSValue) {
+        assert!(value.is_object());
+        let ptr = value.get_ptr();
+        let slot = value.as_object().gc_slot as usize;
+        let mut vm = crate::runtime::vm::VM::new();
+        vm.run_gc(ctx);
+        assert_eq!(ctx.runtime().gc_heap().tracked_ptr_at(slot), Some(ptr));
+    }
+
+    #[test]
+    fn test_object_results_are_tracked() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        for source in [
+            "Object(1)",
+            "Object.keys({a: 1})",
+            "Object.values({a: 1})",
+            "Object.entries({a: 1})",
+            "Object.fromEntries([['a', 1]])",
+            "Object.create({a: 1})",
+            "Object.getOwnPropertyDescriptor({a: 1}, 'a')",
+            "Object.getOwnPropertyDescriptors({a: 1})",
+            "Object.getOwnPropertyNames({a: 1})",
+            "Object.getOwnPropertySymbols({[Symbol('s')]: 1})",
+        ] {
+            let value = crate::eval(&mut ctx, source).unwrap();
+            root(&mut ctx, value);
+            assert_alive(&mut ctx, value);
+        }
+    }
+
+    #[test]
+    fn test_object_results_trace_their_values() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+
+        let values = crate::eval(&mut ctx, "Object.values({a: []})").unwrap();
+        root(&mut ctx, values);
+        let child = values.as_object().get(ctx.intern("0")).unwrap();
+        assert_alive(&mut ctx, child);
+
+        let entries = crate::eval(&mut ctx, "Object.entries({a: [[]]})").unwrap();
+        root(&mut ctx, entries);
+        let pair = entries.as_object().get(ctx.intern("0")).unwrap();
+        let child = pair.as_object().get(ctx.intern("1")).unwrap();
+        assert_alive(&mut ctx, child);
+
+        let descriptor = crate::eval(
+            &mut ctx,
+            "Object.getOwnPropertyDescriptor({a: []}, 'a')",
+        )
+        .unwrap();
+        root(&mut ctx, descriptor);
+        let child = descriptor.as_object().get(ctx.intern("value")).unwrap();
+        assert_alive(&mut ctx, child);
+
+        let created = crate::eval(&mut ctx, "Object.create({a: []})").unwrap();
+        root(&mut ctx, created);
+        let child = created.as_object().get(ctx.intern("a")).unwrap();
+        assert_alive(&mut ctx, child);
+    }
 }
