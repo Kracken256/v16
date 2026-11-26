@@ -1385,7 +1385,8 @@ impl VM {
         frame.is_constructor = is_constructor;
         frame.is_async = is_async;
         if let Some(fptr) = function_ptr {
-            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            let func = JSValue::new_function(fptr);
+            let func = func.as_function();
             frame.is_strict_frame = func.is_strict();
             frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
             frame.has_upvalues = func
@@ -1537,7 +1538,8 @@ impl VM {
         frame.is_constructor = is_constructor;
         frame.is_async = is_async;
         if let Some(fptr) = function_ptr {
-            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            let func = JSValue::new_function(fptr);
+            let func = func.as_function();
             frame.is_strict_frame = func.is_strict();
             frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
             frame.has_upvalues = func
@@ -1768,7 +1770,8 @@ impl VM {
     #[inline]
     fn frame_realm_global(&self, ctx: &JSContext) -> JSValue {
         if let Some(fptr) = self.frames[self.frame_index].function_ptr {
-            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            let func = JSValue::new_function(fptr);
+            let func = func.as_function();
             if func.realm_global.is_object_like() {
                 let current = ctx.global();
                 if !current.is_object_like() || current.raw_bits() != func.realm_global.raw_bits() {
@@ -1821,8 +1824,8 @@ impl VM {
             for fi in (0..=vm.frame_index).rev() {
                 let frame = &vm.frames[fi];
                 if let Some(fptr) = frame.function_ptr {
-                    let func =
-                        unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+                    let func = JSValue::new_function(fptr);
+                    let func = func.as_function();
                     if let Some(uv) = func.upvalues.as_ref() {
                         if let Some(cell) = uv.upvalue_cells.get(&name) {
                             let value = cell.get();
@@ -1845,8 +1848,8 @@ impl VM {
                     if func.is_class_constructor {
                         let proto_ptr = func.cached_prototype_ptr as usize;
                         if proto_ptr != 0 {
-                            let proto_obj =
-                                unsafe { &*(proto_ptr as *const crate::object::object::JSObject) };
+                            let proto_obj = JSValue::new_object(proto_ptr);
+                            let proto_obj = proto_obj.as_object();
                             if proto_obj.has_private_kind(proto_ptr, name)
                                 || proto_obj.has_private_method(proto_ptr, name)
                                 || proto_obj.has_private_field(proto_ptr, name)
@@ -2661,15 +2664,15 @@ impl VM {
     fn current_super_constructor(&self) -> JSValue {
         let frame = &self.frames[self.frame_index];
         if let Some(fptr) = frame.function_ptr {
-            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            let func = JSValue::new_function(fptr);
+            let func = func.as_function();
             if !func.is_arrow() && func.is_derived_constructor {
                 return func
                     .base
                     .prototype
                     .map(|proto| {
-                        let proto_obj = unsafe {
-                            &*(proto as *const crate::object::object::JSObject)
-                        };
+                        let proto_obj = JSValue::new_object(proto as usize);
+                        let proto_obj = proto_obj.as_object();
                         if proto_obj.is_function_object {
                             JSValue::new_function(proto as usize)
                         } else {
@@ -2684,8 +2687,8 @@ impl VM {
 
     fn private_elements_owner_fn(frame: &CallFrame) -> Option<usize> {
         let fptr = frame.function_ptr?;
-        let func =
-            unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+        let func = JSValue::new_function(fptr);
+        let func = func.as_function();
         let has_elements = func.has_private_elements || !func.instance_fields.is_empty();
         if func.is_arrow() {
             if func.arrow_enclosing_ctor_ptr != 0 {
@@ -2704,7 +2707,8 @@ impl VM {
         if !this_val.is_object_like() {
             return;
         }
-        let func = unsafe { &*(func_ptr as *const crate::object::function::JSFunction) };
+        let func = JSValue::new_function(func_ptr);
+        let func = func.as_function();
         if func.has_private_elements || !func.instance_fields.is_empty() {
             self.pending_instance_elements = Some((this_val, func_ptr));
         }
@@ -2721,7 +2725,8 @@ impl VM {
             return Err("".to_string());
         }
         let (has_private_elements, owner, field_count) = {
-            let func = unsafe { &*(func_ptr as *const crate::object::function::JSFunction) };
+            let func = JSValue::new_function(func_ptr);
+            let func = func.as_function();
             (
                 func.has_private_elements,
                 func.cached_prototype_ptr as usize,
@@ -2745,8 +2750,8 @@ impl VM {
         }
         for i in 0..field_count {
             let (key, private_owner, private_name, initializer) = {
-                let func =
-                    unsafe { &*(func_ptr as *const crate::object::function::JSFunction) };
+                let func = JSValue::new_function(func_ptr);
+                let func = func.as_function();
                 let field = &func.instance_fields[i];
                 (
                     field.key,
@@ -2956,7 +2961,8 @@ impl VM {
         use crate::object::object::JSObject;
         let mut proto = ctx.get_type_error_prototype();
         if let Some(fptr) = self.frames[self.frame_index].function_ptr {
-            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            let func = JSValue::new_function(fptr);
+            let func = func.as_function();
             let current = ctx as *mut JSContext as usize;
             if func.realm_context != 0 && func.realm_context != current {
                 let realm_ctx = unsafe { &mut *(func.realm_context as *mut JSContext) };
@@ -5738,7 +5744,8 @@ impl VM {
                 || frame.super_ctor.is_object_like();
             let mut allow_call = false;
             if let Some(ptr) = frame.function_ptr {
-                let func = unsafe { &*(ptr as *const crate::object::function::JSFunction) };
+                let func = JSValue::new_function(ptr);
+                let func = func.as_function();
                 if !func.home_object.is_undefined() {
                     allow_property = true;
                 }
@@ -5760,8 +5767,8 @@ impl VM {
                 let mut found = false;
                 for fi in (0..=caller.frame_index).rev() {
                     if let Some(fptr) = caller.frames[fi].function_ptr {
-                        let func =
-                            unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+                        let func = JSValue::new_function(fptr);
+                        let func = func.as_function();
                         if !func.is_arrow() {
                             found = true;
                             break;
@@ -5782,7 +5789,8 @@ impl VM {
         for fi in (0..=self.frame_index).rev() {
             let frame = &self.frames[fi];
             if let Some(ptr) = frame.function_ptr {
-                let func = unsafe { &*(ptr as *const crate::object::function::JSFunction) };
+                let func = JSValue::new_function(ptr);
+                let func = func.as_function();
                 if func.home_object.is_object_like() {
                     let owner = func.home_object.get_ptr();
                     let obj = func.home_object.as_object();
@@ -5805,8 +5813,8 @@ impl VM {
                 if func.is_class_constructor {
                     let proto_ptr = func.cached_prototype_ptr as usize;
                     if proto_ptr != 0 {
-                        let proto =
-                            unsafe { &*(proto_ptr as *const crate::object::object::JSObject) };
+                        let proto = JSValue::new_object(proto_ptr);
+                        let proto = proto.as_object();
                         proto.for_each_private_kind(|key, _| {
                             if key.owner == proto_ptr {
                                 eval_private_names.push(key.name);
@@ -6297,8 +6305,8 @@ impl VM {
 
                     if frame.is_constructor {
                         if let Some(fptr) = frame.function_ptr {
-                            let func =
-                                unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+                            let func = JSValue::new_function(fptr);
+                            let func = func.as_function();
                             if let Some(ref bc) = func.bytecode {
                                 if bc.is_simple_constructor
                                     && bc.cached_constructor_final_shape.is_none()
@@ -11050,7 +11058,8 @@ impl VM {
                                 break;
                             }
                         }
-                        let js_obj = unsafe { &*(ptr as *const crate::object::object::JSObject) };
+                        let js_obj = JSValue::new_object(ptr);
+                        let js_obj = js_obj.as_object();
                         let mut int_keys: Vec<i64> = Vec::new();
                         let mut str_keys: Vec<crate::runtime::atom::Atom> = Vec::new();
                         // Handle dense array indices
@@ -12637,9 +12646,8 @@ impl VM {
 
                     let cached: Option<std::sync::Arc<crate::compiler::opcode::NestedBytecode>> =
                         if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
-                            let parent_func = unsafe {
-                                &*(parent_ptr as *const crate::object::function::JSFunction)
-                            };
+                            let parent_func = JSValue::new_function(parent_ptr);
+                            let parent_func = parent_func.as_function();
                             if let Some(bc) = parent_func.bytecode.as_ref() {
                                 // First check the instance's own nested_bytecodes
                                 let found = bc
@@ -12893,9 +12901,8 @@ impl VM {
                     func.has_private_elements = function_kind & 16 != 0;
                     if function_kind & 4 != 0 {
                         if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
-                            let parent_func = unsafe {
-                                &*(parent_ptr as *const crate::object::function::JSFunction)
-                            };
+                            let parent_func = JSValue::new_function(parent_ptr);
+                            let parent_func = parent_func.as_function();
                             func.arrow_enclosing_ctor_ptr = if parent_func.is_arrow() {
                                 parent_func.arrow_enclosing_ctor_ptr
                             } else if parent_func.is_class_constructor
@@ -13018,9 +13025,8 @@ impl VM {
                             }
                         } else if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr
                         {
-                            let parent_func = unsafe {
-                                &*(parent_ptr as *const crate::object::function::JSFunction)
-                            };
+                            let parent_func = JSValue::new_function(parent_ptr);
+                            let parent_func = parent_func.as_function();
 
                             if let Some(parent_cell) = parent_func
                                 .upvalues_ref()
@@ -13080,9 +13086,8 @@ impl VM {
                     if active_realm != 0 {
                         func.realm_context = active_realm;
                     } else if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
-                        let parent = unsafe {
-                            &*(parent_ptr as *const crate::object::function::JSFunction)
-                        };
+                        let parent = JSValue::new_function(parent_ptr);
+                        let parent = parent.as_function();
                         if parent.realm_context != 0 {
                             func.realm_context = parent.realm_context;
                         }
@@ -16073,9 +16078,8 @@ impl VM {
                                         }
                                     }
                                     if proto_matches {
-                                        let proto_obj = unsafe {
-                                            &*(proto as *const crate::object::object::JSObject)
-                                        };
+                                        let proto_obj = JSValue::new_object(proto);
+                                        let proto_obj = proto_obj.as_object();
                                         proto_obj.get_by_offset(offset as usize)
                                     } else {
                                         None
@@ -16615,8 +16619,8 @@ impl VM {
                     unsafe { (*ic_table_ptr).get_reads0_values(instr_pc, pseudo_id) };
                 if ic_hit {
                     if r0_proto != 0 {
-                        let proto_obj =
-                            unsafe { &*(r0_proto as *const crate::object::object::JSObject) };
+                        let proto_obj = JSValue::new_object(r0_proto);
+                        let proto_obj = proto_obj.as_object();
                         if let Some(v) = proto_obj.get_by_offset(r0_offset as usize) {
                             self.set_reg(dst, v);
                             return true;
