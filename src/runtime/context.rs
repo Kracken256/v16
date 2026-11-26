@@ -719,7 +719,10 @@ impl JSContext {
     #[inline]
     pub fn int_atom(&self, n: usize) -> Atom {
         if n < 100 {
-            unsafe { *self.cached_int_atoms.get_unchecked(n) }
+            self.cached_int_atoms
+                .get(n)
+                .copied()
+                .unwrap_or(self.common_atoms.empty)
         } else {
             self.common_atoms.empty
         }
@@ -728,7 +731,10 @@ impl JSContext {
     #[inline]
     pub fn int_atom_mut(&mut self, n: usize) -> Atom {
         if n < 100 {
-            unsafe { *self.cached_int_atoms.get_unchecked(n) }
+            self.cached_int_atoms
+                .get(n)
+                .copied()
+                .unwrap_or(self.common_atoms.empty)
         } else {
             self.atom_table_mut().intern(&n.to_string())
         }
