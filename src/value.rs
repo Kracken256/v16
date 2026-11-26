@@ -334,6 +334,7 @@ impl JSValue {
     }
 
     #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
     pub fn as_object_mut(&self) -> &mut crate::object::object::JSObject {
         unsafe { &mut *self.get_ptr() }
     }
@@ -344,6 +345,7 @@ impl JSValue {
     }
 
     #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
     pub fn as_function_mut(&self) -> &mut crate::object::function::JSFunction {
         unsafe { &mut *(self.get_ptr() as *mut crate::object::function::JSFunction) }
     }
