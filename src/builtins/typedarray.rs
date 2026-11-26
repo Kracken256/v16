@@ -72,18 +72,27 @@ fn create_typed_array(
     }
 
     let byte_length = buffer_data.data.len();
-    let remaining_bytes = byte_length.saturating_sub(byte_offset);
-    let tracks_length = length.is_none() && buffer_data.max_byte_length.is_some();
-
-    let element_length = match length {
-        Some(len) => len,
-        None => remaining_bytes / bytes_per_element,
-    };
-
-    let required_bytes = byte_offset + element_length * bytes_per_element;
-    if required_bytes > byte_length {
+    if byte_offset > byte_length {
         return Err("TypedArray extends beyond ArrayBuffer bounds".to_string());
     }
+    let remaining_bytes = byte_length - byte_offset;
+    let is_resizable = buffer_data.max_byte_length.is_some();
+    let tracks_length = length.is_none() && is_resizable;
+
+    let element_length = match length {
+        Some(len) => {
+            if len > remaining_bytes / bytes_per_element {
+                return Err("TypedArray extends beyond ArrayBuffer bounds".to_string());
+            }
+            len
+        }
+        None => {
+            if !is_resizable && remaining_bytes % bytes_per_element != 0 {
+                return Err("byteLength must be a multiple of elementSize".to_string());
+            }
+            remaining_bytes / bytes_per_element
+        }
+    };
 
     let mut obj = JSObject::new_typed(ObjectType::TypedArray);
     obj.set_typed_array_kind(kind);
@@ -115,6 +124,19 @@ fn create_typed_array(
     Ok(JSValue::new_object(ptr))
 }
 
+fn typed_array_to_index(ctx: &mut JSContext, value: &JSValue) -> Option<usize> {
+    let n = match crate::builtins::global::js_to_number_value(ctx, value) {
+        Ok(n) => n,
+        Err(()) => return None,
+    };
+    let i = if n.is_nan() { 0.0 } else { n.trunc() };
+    if i < 0.0 || i > 9007199254740991.0 {
+        array_buffer_range_error(ctx, "Invalid typed array length");
+        return None;
+    }
+    Some(i as usize)
+}
+
 fn typed_array_from_args(
     ctx: &mut JSContext,
     kind: TypedArrayKind,
@@ -132,16 +154,28 @@ fn typed_array_from_args(
 
         if obj.obj_type() == ObjectType::ArrayBuffer {
             let byte_offset = if args.len() > 1 {
-                args[1].get_int() as usize
+                match typed_array_to_index(ctx, &args[1]) {
+                    Some(offset) => offset,
+                    None => return Ok(JSValue::undefined()),
+                }
             } else {
                 0
             };
-            let length = if args.len() > 2 {
-                Some(args[2].get_int() as usize)
+            let length = if args.len() > 2 && !args[2].is_undefined() {
+                match typed_array_to_index(ctx, &args[2]) {
+                    Some(len) => Some(len),
+                    None => return Ok(JSValue::undefined()),
+                }
             } else {
                 None
             };
-            return create_typed_array(ctx, kind, *first_arg, byte_offset, length);
+            return match create_typed_array(ctx, kind, *first_arg, byte_offset, length) {
+                Ok(result) => Ok(result),
+                Err(_) => {
+                    array_buffer_range_error(ctx, "Invalid typed array length");
+                    Ok(JSValue::undefined())
+                }
+            };
         }
 
         if obj.obj_type() == ObjectType::TypedArray {
