@@ -150,12 +150,13 @@ fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     func.set_builtin_marker(ctx, name);
     let ptr = Box::into_raw(Box::new(func)) as usize;
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
+    let value = JSValue::new_function(ptr);
     debug_assert_ne!(
-        unsafe { (*(ptr as *const JSObject)).gc_slot },
+        value.as_function().base.gc_slot,
         u32::MAX,
         "track_function did not set gc_slot"
     );
-    JSValue::new_function(ptr)
+    value
 }
 
 pub fn init_array(ctx: &mut JSContext) {
@@ -502,9 +503,7 @@ fn array_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let this = to_object_or_return_undefined(base, ctx);
-    let obj_ptr = this.get_ptr();
-    let obj = unsafe { &*(obj_ptr as *const JSObject) };
-    let obj_mut = unsafe { &mut *(obj_ptr as *mut JSObject) };
+    let obj = this.as_object_mut();
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
     let iter_idx = obj.get(idx_atom).map(|v| if v.is_int() { v.get_int() as usize } else { 0 }).unwrap_or(0);
@@ -527,7 +526,7 @@ fn array_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = arr_obj.get(ctx.common_atoms.length).map(|v| js_to_length(&v) as usize).unwrap_or(0);
     if iter_idx < len {
         let value = super::array::array_get(arr_obj, iter_idx, ctx).unwrap_or(JSValue::undefined());
-        obj_mut.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
+        obj.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
         let result_value = match kind {
             1 => JSValue::new_int(iter_idx as i64),
             2 => create_iterator_entry(ctx, JSValue::new_int(iter_idx as i64), value),
@@ -744,8 +743,6 @@ fn array_push(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_obj = to_object_or_return_undefined(this_val, ctx);
 
     let length_atom = ctx.common_atoms.length;
-    let ptr = this_obj.get_ptr();
-
     if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         if !arr.header.is_property_writable(length_atom) {
             throw_type_error(ctx, "Cannot assign to read only property 'length' of object");
@@ -764,7 +761,7 @@ fn array_push(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_int(new_len as i64);
     }
 
-    let obj = unsafe { &mut *(ptr as *mut JSObject) };
+    let obj = this_obj.as_object_mut();
     if !obj.is_property_writable(length_atom) {
         throw_type_error(ctx, "Cannot assign to read only property 'length' of object");
         return JSValue::undefined();
@@ -797,8 +794,6 @@ fn array_pop(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let this_obj = to_object_or_return_undefined(this_val, ctx);
 
     let length_atom = ctx.common_atoms.length;
-    let ptr = this_obj.get_ptr();
-
     if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         let current_len = arr.len();
         if current_len == 0 {
@@ -815,7 +810,7 @@ fn array_pop(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result;
     }
 
-    let obj = unsafe { &mut *(ptr as *mut JSObject) };
+    let obj = this_obj.as_object_mut();
     let current_len = if let Some(l) = obj.get(length_atom) {
         if l.is_int() { l.get_int() as u32 } else { 0 }
     } else {
@@ -844,8 +839,6 @@ fn array_shift(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let this_obj = to_object_or_return_undefined(this_val, ctx);
     let length_atom = ctx.common_atoms.length;
-    let ptr = this_obj.get_ptr();
-
     if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         let current_len = arr.len();
         if current_len == 0 {
@@ -858,7 +851,7 @@ fn array_shift(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return result;
     }
 
-    let obj = unsafe { &mut *(ptr as *mut JSObject) };
+    let obj = this_obj.as_object_mut();
     let current_len = if let Some(l) = obj.get(length_atom) {
         if l.is_int() { l.get_int() as u32 } else { 0 }
     } else {
@@ -899,8 +892,6 @@ fn array_unshift(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let length_atom = ctx.common_atoms.length;
     let add_count = (args.len() - 1) as usize;
-    let ptr = this_obj.get_ptr();
-
     if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         let items: Vec<JSValue> = args.iter().skip(1).cloned().collect();
         let mut new_elements = items;
@@ -912,7 +903,7 @@ fn array_unshift(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::new_int(new_len as i64);
     }
 
-    let obj = unsafe { &mut *(ptr as *mut JSObject) };
+    let obj = this_obj.as_object_mut();
     let current_len = if let Some(l) = obj.get(length_atom) {
         if l.is_int() { l.get_int() as u32 } else { 0 }
     } else {
