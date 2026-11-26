@@ -11606,6 +11606,21 @@ impl CodeGenerator {
         body: &ClassBody,
         ctx: &mut JSContext,
     ) -> Result<crate::runtime::atom::Atom, String> {
+        let saved_is_strict = self.is_strict;
+        self.is_strict = true;
+        let result = self.gen_class_body_inner(class_slot, class_name, super_class, body, ctx);
+        self.is_strict = saved_is_strict;
+        result
+    }
+
+    fn gen_class_body_inner(
+        &mut self,
+        class_slot: u16,
+        class_name: &str,
+        super_class: &Option<Box<Expression>>,
+        body: &ClassBody,
+        ctx: &mut JSContext,
+    ) -> Result<crate::runtime::atom::Atom, String> {
         self.reserved_slots.insert(class_slot);
         let has_super = super_class.is_some();
         let is_null_heritage = super_class
