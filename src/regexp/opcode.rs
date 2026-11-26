@@ -99,11 +99,53 @@ pub enum OpCode {
 
 impl OpCode {
     pub fn from_u8(v: u8) -> Option<Self> {
-        if v <= 43 {
-            Some(unsafe { std::mem::transmute(v) })
-        } else {
-            None
-        }
+        Some(match v {
+            0 => OpCode::Invalid,
+            1 => OpCode::MatchChar,
+            2 => OpCode::MatchCharI,
+            3 => OpCode::MatchChar32,
+            4 => OpCode::MatchChar32I,
+            5 => OpCode::MatchDot,
+            6 => OpCode::MatchAny,
+            7 => OpCode::MatchClass,
+            8 => OpCode::MatchClassI,
+            9 => OpCode::CheckLineStart,
+            10 => OpCode::CheckLineEnd,
+            11 => OpCode::CheckWordBoundary,
+            12 => OpCode::CheckWordBoundaryI,
+            13 => OpCode::CheckNotWordBoundary,
+            14 => OpCode::CheckNotWordBoundaryI,
+            15 => OpCode::Jmp,
+            16 => OpCode::JmpMatch,
+            17 => OpCode::JmpFail,
+            18 => OpCode::JmpEq,
+            19 => OpCode::JmpNe,
+            20 => OpCode::JmpLt,
+            21 => OpCode::MovImm,
+            22 => OpCode::MovReg,
+            23 => OpCode::Inc,
+            24 => OpCode::Dec,
+            25 => OpCode::AddImm,
+            26 => OpCode::CmpImm,
+            27 => OpCode::SaveStart,
+            28 => OpCode::SaveEnd,
+            29 => OpCode::ResetCaptures,
+            30 => OpCode::CheckBackref,
+            31 => OpCode::CheckBackrefI,
+            32 => OpCode::Lookahead,
+            33 => OpCode::NegLookahead,
+            34 => OpCode::PushBacktrack,
+            35 => OpCode::PopBacktrack,
+            36 => OpCode::Mark,
+            37 => OpCode::Restore,
+            38 => OpCode::InitCounter,
+            39 => OpCode::CheckCounter,
+            40 => OpCode::Success,
+            41 => OpCode::Fail,
+            42 => OpCode::Halt,
+            43 => OpCode::JmpNoProgress,
+            _ => return None,
+        })
     }
 
     pub fn size(&self) -> usize {

@@ -354,7 +354,10 @@ impl<'a> ExecContext<'a> {
             let opcode_byte = self.bytecode[pc];
 
             let opcode = if likely(opcode_byte <= OpCode::JmpNoProgress as u8) {
-                unsafe { std::mem::transmute(opcode_byte) }
+                match OpCode::from_u8(opcode_byte) {
+                    Some(op) => op,
+                    None => return None,
+                }
             } else {
                 return None;
             };
