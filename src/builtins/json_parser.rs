@@ -415,6 +415,32 @@ impl<'a> JsonParser<'a> {
         self.expect_byte(b'}')?;
 
         let ptr = Box::into_raw(Box::new(obj));
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
         Ok(JSValue::new_object(ptr))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_parse_result_survives_gc() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        let value = crate::eval(&mut ctx, "JSON.parse('{\"a\":[1,2,3]}')").unwrap();
+        ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
+
+        let array = value.as_object().get(ctx.intern("a")).unwrap();
+        let array_ptr = array.get_ptr();
+        let array_slot = array.as_object().gc_slot as usize;
+
+        let mut vm = crate::runtime::vm::VM::new();
+        vm.run_gc(&mut ctx);
+
+        assert_eq!(
+            ctx.runtime().gc_heap().tracked_ptr_at(array_slot),
+            Some(array_ptr)
+        );
     }
 }
