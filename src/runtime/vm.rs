@@ -12306,8 +12306,15 @@ impl VM {
                                 self.eval_direct_active = false;
                                 continue;
                             }
-                            let mut builtin_args = Vec::with_capacity(args.len() + 1);
-                            if is_call_method {
+                            let needs_callee = Self::builtin_needs_callee(&builtin_name);
+                            let pass_this =
+                                is_call_method && !needs_callee && js_func.builtin_needs_this();
+                            let mut builtin_args =
+                                Vec::with_capacity(args.len() + if pass_this { 2 } else { 1 });
+                            if needs_callee {
+                                builtin_args.push(func_val);
+                            }
+                            if pass_this {
                                 builtin_args.push(self.get_reg(obj_reg));
                             }
                             builtin_args.extend(args);
