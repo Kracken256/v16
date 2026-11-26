@@ -853,10 +853,13 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             && realm_global.raw_bits() != ctx.global().raw_bits() {
             let realm_ctx = unsafe { &mut *(realm_context as *mut JSContext) };
             ctx.swap_global_environment(realm_ctx);
+            let saved_active_realm = ctx.active_realm();
+            ctx.set_active_realm(realm_context);
             let result = match crate::compiler::eval_code_as_eval(ctx, &source) {
                 Ok(value) => value,
                 Err(_) => JSValue::undefined(),
             };
+            ctx.set_active_realm(saved_active_realm);
             ctx.swap_global_environment(realm_ctx);
             return result;
         }

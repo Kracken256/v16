@@ -2358,6 +2358,10 @@ impl VM {
                 };
                 let prev_call_with_new = ctx.is_call_with_new();
                 ctx.set_call_with_new(is_call_new || is_super_call);
+                let saved_active_realm = ctx.active_realm();
+                if js_func.realm_context != 0 {
+                    ctx.set_active_realm(js_func.realm_context);
+                }
                 let result = if let Some(bf) = js_func.builtin_func {
                     ctx.call_builtin_direct(bf, args)
                 } else if let Some(ba) = js_func.builtin_atom {
@@ -2366,6 +2370,7 @@ impl VM {
                 } else {
                     JSValue::undefined()
                 };
+                ctx.set_active_realm(saved_active_realm);
                 ctx.set_call_with_new(prev_call_with_new);
                 if let Some(exc) = ctx.pending_exception.take() {
                     match self.dispatch_throw_value(ctx, exc) {
@@ -2914,6 +2919,17 @@ impl VM {
 
     pub fn set_pending_type_error(&mut self, ctx: &mut JSContext, msg: &str) {
         use crate::object::object::JSObject;
+        let mut proto = ctx.get_type_error_prototype();
+        if let Some(fptr) = self.frames[self.frame_index].function_ptr {
+            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            let current = ctx as *mut JSContext as usize;
+            if func.realm_context != 0 && func.realm_context != current {
+                let realm_ctx = unsafe { &mut *(func.realm_context as *mut JSContext) };
+                if let Some(realm_proto) = realm_ctx.get_type_error_prototype() {
+                    proto = Some(realm_proto);
+                }
+            }
+        }
         let mut err = JSObject::new();
         let name_atom = ctx.intern("name");
         let msg_atom = ctx.intern("message");
@@ -2921,7 +2937,7 @@ impl VM {
         let msg_str_atom = ctx.intern(msg);
         err.set(name_atom, JSValue::new_string(type_error_atom));
         err.set(msg_atom, JSValue::new_string(msg_str_atom));
-        if let Some(proto) = ctx.get_type_error_prototype() {
+        if let Some(proto) = proto {
             err.prototype = Some(proto);
         }
         let ptr = Box::into_raw(Box::new(err)) as usize;
@@ -5151,6 +5167,11 @@ impl VM {
                 args
             };
 
+            let saved_active_realm = ctx.active_realm();
+            if js_func.realm_context != 0 {
+                ctx.set_active_realm(js_func.realm_context);
+            }
+
             if let Some(bf) = js_func.builtin_func {
                 let result = ctx.call_builtin_direct(bf, call_args);
                 if let Some(exc) = ctx.pending_exception.take() {
@@ -5174,8 +5195,10 @@ impl VM {
                         "builtin error".to_string()
                     };
                     self.last_caught_exception = Some(exc);
+                    ctx.set_active_realm(saved_active_realm);
                     return Err(msg);
                 }
+                ctx.set_active_realm(saved_active_realm);
                 return Ok(result);
             } else if let Some(ba) = js_func.builtin_atom {
                 let result = ctx.call_builtin(&ctx.get_atom_str(ba).to_string(), call_args);
@@ -5200,10 +5223,13 @@ impl VM {
                         "builtin error".to_string()
                     };
                     self.last_caught_exception = Some(exc);
+                    ctx.set_active_realm(saved_active_realm);
                     return Err(msg);
                 }
+                ctx.set_active_realm(saved_active_realm);
                 return Ok(result);
             }
+            ctx.set_active_realm(saved_active_realm);
             return Ok(JSValue::undefined());
         }
 
@@ -12919,6 +12945,19 @@ impl VM {
                         self.ensure_own_param_env(ctx);
                     }
                     func.param_env = self.frames[self.frame_index].param_env;
+                    let active_realm = ctx.active_realm();
+                    if active_realm != 0 {
+                        func.realm_context = active_realm;
+                        func.realm_global = ctx.global();
+                    } else if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
+                        let parent = unsafe {
+                            &*(parent_ptr as *const crate::object::function::JSFunction)
+                        };
+                        if parent.realm_context != 0 {
+                            func.realm_context = parent.realm_context;
+                            func.realm_global = parent.realm_global;
+                        }
+                    }
                     let proto_atom = ctx.common_atoms.prototype;
                     let func_ptr = Box::into_raw(Box::new(func)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track_function(func_ptr);

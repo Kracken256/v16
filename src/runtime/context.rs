@@ -309,6 +309,8 @@ pub struct JSContext {
     async_generator_function_prototype: Option<usize>,
     promise_prototype: Option<usize>,
 
+    active_realm: usize,
+
     register_vm_ptr: Option<usize>,
     compiler_opt_level: OptLevel,
 
@@ -403,6 +405,8 @@ impl JSContext {
             generator_function_prototype: None,
             async_generator_function_prototype: None,
             promise_prototype: None,
+
+            active_realm: 0,
             register_vm_ptr: None,
             compiler_opt_level: OptLevel::default(),
             pending_exception: None,
@@ -570,6 +574,112 @@ impl JSContext {
             &mut self.global_lexical_kinds,
             &mut other.global_lexical_kinds,
         );
+        std::mem::swap(&mut self.string_prototype, &mut other.string_prototype);
+        std::mem::swap(&mut self.number_prototype, &mut other.number_prototype);
+        std::mem::swap(&mut self.array_prototype, &mut other.array_prototype);
+        std::mem::swap(
+            &mut self.array_iterator_prototype,
+            &mut other.array_iterator_prototype,
+        );
+        std::mem::swap(
+            &mut self.array_iterator_fn,
+            &mut other.array_iterator_fn,
+        );
+        std::mem::swap(
+            &mut self.map_iterator_prototype,
+            &mut other.map_iterator_prototype,
+        );
+        std::mem::swap(
+            &mut self.set_iterator_prototype,
+            &mut other.set_iterator_prototype,
+        );
+        std::mem::swap(&mut self.regexp_prototype, &mut other.regexp_prototype);
+        std::mem::swap(&mut self.date_prototype, &mut other.date_prototype);
+        std::mem::swap(&mut self.object_prototype, &mut other.object_prototype);
+        std::mem::swap(&mut self.function_prototype, &mut other.function_prototype);
+        std::mem::swap(&mut self.map_prototype, &mut other.map_prototype);
+        std::mem::swap(&mut self.set_prototype, &mut other.set_prototype);
+        std::mem::swap(&mut self.weakmap_prototype, &mut other.weakmap_prototype);
+        std::mem::swap(&mut self.weakset_prototype, &mut other.weakset_prototype);
+        std::mem::swap(&mut self.dataview_prototype, &mut other.dataview_prototype);
+        std::mem::swap(
+            &mut self.typed_array_prototype,
+            &mut other.typed_array_prototype,
+        );
+        std::mem::swap(
+            &mut self.typed_array_iterator_prototype,
+            &mut other.typed_array_iterator_prototype,
+        );
+        std::mem::swap(
+            &mut self.array_buffer_prototype,
+            &mut other.array_buffer_prototype,
+        );
+        std::mem::swap(&mut self.error_prototype, &mut other.error_prototype);
+        std::mem::swap(
+            &mut self.type_error_prototype,
+            &mut other.type_error_prototype,
+        );
+        std::mem::swap(
+            &mut self.reference_error_prototype,
+            &mut other.reference_error_prototype,
+        );
+        std::mem::swap(
+            &mut self.syntax_error_prototype,
+            &mut other.syntax_error_prototype,
+        );
+        std::mem::swap(
+            &mut self.range_error_prototype,
+            &mut other.range_error_prototype,
+        );
+        std::mem::swap(&mut self.uri_error_prototype, &mut other.uri_error_prototype);
+        std::mem::swap(
+            &mut self.eval_error_prototype,
+            &mut other.eval_error_prototype,
+        );
+        std::mem::swap(
+            &mut self.suppressed_error_prototype,
+            &mut other.suppressed_error_prototype,
+        );
+        std::mem::swap(
+            &mut self.aggregate_error_prototype,
+            &mut other.aggregate_error_prototype,
+        );
+        std::mem::swap(&mut self.symbol_prototype, &mut other.symbol_prototype);
+        std::mem::swap(&mut self.bool_prototype, &mut other.bool_prototype);
+        std::mem::swap(&mut self.bigint_prototype, &mut other.bigint_prototype);
+        std::mem::swap(&mut self.weakref_prototype, &mut other.weakref_prototype);
+        std::mem::swap(
+            &mut self.finalization_registry_prototype,
+            &mut other.finalization_registry_prototype,
+        );
+        std::mem::swap(
+            &mut self.generator_prototype,
+            &mut other.generator_prototype,
+        );
+        std::mem::swap(
+            &mut self.async_generator_prototype,
+            &mut other.async_generator_prototype,
+        );
+        std::mem::swap(
+            &mut self.generator_function_prototype,
+            &mut other.generator_function_prototype,
+        );
+        std::mem::swap(
+            &mut self.async_generator_function_prototype,
+            &mut other.async_generator_function_prototype,
+        );
+        std::mem::swap(
+            &mut self.promise_prototype,
+            &mut other.promise_prototype,
+        );
+    }
+
+    pub fn active_realm(&self) -> usize {
+        self.active_realm
+    }
+
+    pub fn set_active_realm(&mut self, realm: usize) {
+        self.active_realm = realm;
     }
 
     pub fn global(&self) -> JSValue {
