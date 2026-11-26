@@ -1138,12 +1138,11 @@ fn object_to_string(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             }
         }
         let sym_tag_atom = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(_ctx);
-        if let Some(v) = obj.get(sym_tag_atom) {
-            if v.is_string() {
-                let s = _ctx.get_atom_str(v.get_atom());
-                if !s.is_empty() {
-                    return JSValue::new_string(_ctx.intern(&format!("[object {}]", s)));
-                }
+        let tag_val = object_get_property(_ctx, this, sym_tag_atom);
+        if tag_val.is_string() {
+            let s = _ctx.get_atom_str(tag_val.get_atom());
+            if !s.is_empty() {
+                return JSValue::new_string(_ctx.intern(&format!("[object {}]", s)));
             }
         }
         return JSValue::new_string(_ctx.intern(&format!("[object {}]", tag)));
