@@ -9,9 +9,7 @@ use crate::value::JSValue;
 fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), 2);
     func.set_builtin_marker(ctx, name);
-    let ptr = Box::into_raw(Box::new(func));
-    ctx.runtime_mut().gc_heap_mut().track_function(ptr);
-    JSValue::new_function(ptr)
+    ctx.allocate_function(func)
 }
 
 fn set_ne(obj: &mut JSObject, key: crate::runtime::atom::Atom, val: JSValue) {
@@ -26,9 +24,8 @@ fn throw_type_error(ctx: &mut JSContext, msg: &str) {
     if let Some(proto) = ctx.get_type_error_prototype() { err.prototype = Some(proto); }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err));
-    ctx.runtime_mut().gc_heap_mut().track(ptr);
-    ctx.pending_exception = Some(JSValue::new_object(ptr));
+    let error_value = ctx.allocate_object(err);
+    ctx.pending_exception = Some(error_value);
 }
 
 fn throw_range_error(ctx: &mut JSContext, msg: &str) {
@@ -36,9 +33,8 @@ fn throw_range_error(ctx: &mut JSContext, msg: &str) {
     if let Some(proto) = ctx.get_range_error_prototype() { err.prototype = Some(proto); }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("RangeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err));
-    ctx.runtime_mut().gc_heap_mut().track(ptr);
-    ctx.pending_exception = Some(JSValue::new_object(ptr));
+    let error_value = ctx.allocate_object(err);
+    ctx.pending_exception = Some(error_value);
 }
 
 fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
@@ -46,9 +42,8 @@ fn throw_syntax_error(ctx: &mut JSContext, msg: &str) {
     if let Some(proto) = ctx.get_syntax_error_prototype() { err.prototype = Some(proto); }
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("SyntaxError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(msg)));
-    let ptr = Box::into_raw(Box::new(err));
-    ctx.runtime_mut().gc_heap_mut().track(ptr);
-    ctx.pending_exception = Some(JSValue::new_object(ptr));
+    let error_value = ctx.allocate_object(err);
+    ctx.pending_exception = Some(error_value);
 }
 
 fn create_bigint_value(value: BigInt) -> JSValue {
@@ -185,9 +180,7 @@ pub fn init_bigint(ctx: &mut JSContext) {
 
     let mut func = JSFunction::new_builtin(bigint_atom, 1);
     func.set_builtin_marker(ctx, "bigint_constructor");
-    let ptr = Box::into_raw(Box::new(func));
-    ctx.runtime_mut().gc_heap_mut().track_function(ptr);
-    let mut bigint_value = JSValue::new_function(ptr);
+    let mut bigint_value = ctx.allocate_function(func);
 
     let bigint_func_obj = bigint_value.try_as_object_mut().expect("object value");
     set_ne(bigint_func_obj, ctx.intern("asIntN"), create_builtin_function(ctx, "bigint_as_int_n"));
@@ -236,10 +229,8 @@ pub fn init_bigint(ctx: &mut JSContext) {
             },
         );
     }
-    let proto_ptr = Box::into_raw(Box::new(proto_obj));
-    ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
-    let proto_value = JSValue::new_object(proto_ptr);
-    ctx.set_bigint_prototype(proto_ptr);
+    let proto_value = ctx.allocate_object(proto_obj);
+    ctx.set_bigint_prototype(proto_value.get_ptr());
 
     let bigint_func = bigint_value.try_as_object_mut().expect("object value");
     bigint_func.define_property(
