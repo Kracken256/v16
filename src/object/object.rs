@@ -26,6 +26,10 @@ pub struct GeneratorState {
     pub yield_is_result: bool,
 
     pub upvalue_cells: Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>,
+
+    pub param_env: JSValue,
+
+    pub param_env_own: bool,
 }
 
 pub struct AsyncState {
@@ -66,6 +70,10 @@ pub struct AsyncState {
     pub pending_close_state: Option<u16>,
 
     pub upvalue_cells: Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>,
+
+    pub param_env: JSValue,
+
+    pub param_env_own: bool,
 }
 
 pub struct AsyncGeneratorRequest {

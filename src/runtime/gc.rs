@@ -457,6 +457,8 @@ impl GcHeap {
             self.mark_value(env);
         }
 
+        self.mark_value(&func.param_env);
+
         self.mark_value(&func.arrow_this);
         self.mark_value(&func.arrow_super);
         self.mark_value(&func.arrow_new_target);
@@ -598,6 +600,7 @@ impl GcHeap {
                 for v in &state.snapshot {
                     self.mark_value(v);
                 }
+                self.mark_value(&state.param_env);
             }
 
             if let Some(state) = obj.get_async_state() {
@@ -608,6 +611,7 @@ impl GcHeap {
                     self.mark_value(exc);
                 }
                 self.mark_value(&state.resume_value);
+                self.mark_value(&state.param_env);
                 if let Some((_, value)) = &state.pending_finally_return {
                     self.mark_value(value);
                 }

@@ -433,6 +433,8 @@ fn run_generator_step(
     let handlers = state.handlers.clone();
     let yield_is_result = state.yield_is_result;
     let upvalue_cells = state.upvalue_cells.clone();
+    let param_env = state.param_env;
+    let param_env_own = state.param_env_own;
 
     let (
         value,
@@ -443,6 +445,8 @@ fn run_generator_step(
         new_handlers,
         new_yield_is_result,
         new_upvalue_cells,
+        new_param_env,
+        new_param_env_own,
     ) = {
         let bytecode = &*gen_obj.get_generator_state().unwrap().bytecode;
         let mut vm = crate::runtime::vm::VM::new();
@@ -462,6 +466,7 @@ fn run_generator_step(
             resume_value,
             yield_is_result,
             &upvalue_cells,
+            Some((param_env, param_env_own)),
         );
         let uncaught = vm.last_uncaught;
         ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
@@ -479,6 +484,8 @@ fn run_generator_step(
         state.handlers = new_handlers;
         state.yield_is_result = new_yield_is_result;
         state.upvalue_cells = new_upvalue_cells;
+        state.param_env = new_param_env;
+        state.param_env_own = new_param_env_own;
     }
 
     Ok((value, new_pc, done, new_yield_is_result))

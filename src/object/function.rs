@@ -91,6 +91,7 @@ pub struct JSFunction {
     pub instance_fields: Vec<InstanceFieldDefinition>,
     pub realm_context: usize,
     pub realm_global: JSValue,
+    pub param_env: JSValue,
 }
 
 impl JSFunction {
@@ -129,6 +130,7 @@ impl JSFunction {
             instance_fields: Vec::new(),
             realm_context: 0,
             realm_global: JSValue::undefined(),
+            param_env: JSValue::undefined(),
         }
     }
 

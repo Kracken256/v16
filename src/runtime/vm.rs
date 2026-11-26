@@ -73,6 +73,8 @@ pub struct CallFrame {
     pub with_env: Option<JSValue>,
     pub in_parameter_initializer: bool,
     pub param_env_has_arguments: bool,
+    pub param_env: JSValue,
+    pub param_env_own: bool,
 }
 
 impl CallFrame {
@@ -112,6 +114,8 @@ impl CallFrame {
             with_env: None,
             in_parameter_initializer: false,
             param_env_has_arguments: false,
+            param_env: JSValue::undefined(),
+            param_env_own: false,
         }
     }
 }
@@ -214,6 +218,8 @@ pub fn start_async_call(
         pending_finally_depth: 0,
         pending_close_state: None,
         upvalue_cells: Vec::new(),
+        param_env: js_func.param_env,
+        param_env_own: false,
     });
     let holder_ptr = Box::into_raw(Box::new(holder)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(holder_ptr);
@@ -255,6 +261,9 @@ pub fn drive_async_state(ctx: &mut JSContext, holder_val: JSValue) {
     let outcome = step_vm.execute_async_step(ctx, &state, is_generator);
     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
     state.upvalue_cells = step_vm.capture_upvalue_cells();
+    let (step_param_env, step_param_env_own) = step_vm.capture_param_env();
+    state.param_env = step_param_env;
+    state.param_env_own = step_param_env_own;
     let pending_finally_return = step_vm.pending_finally_return;
     let pending_finally_rethrow = step_vm.pending_finally_rethrow;
     let pending_finally_jump = step_vm.pending_finally_jump;
@@ -803,6 +812,8 @@ pub struct VM {
 
     pub pending_upvalue_cells: Option<Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>>,
 
+    pub pending_param_env: Option<(JSValue, bool)>,
+
     gc_roots: Vec<JSValue>,
 }
 
@@ -878,6 +889,7 @@ impl VM {
             await_suspend: None,
             pending_close_state: None,
             pending_upvalue_cells: None,
+            pending_param_env: None,
             gc_roots: Vec::with_capacity(512),
         };
         vm.frames[0] = CallFrame::new();
@@ -1180,6 +1192,10 @@ impl VM {
         }
     }
 
+    fn capture_param_env(&self) -> (JSValue, bool) {
+        (self.frames[0].param_env, self.frames[0].param_env_own)
+    }
+
     fn capture_upvalue_cells(&self) -> Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)> {
         self.frames[0]
             .upvalue_sync_map
@@ -1330,6 +1346,12 @@ impl VM {
                     .clone()
             })
             .flatten();
+        frame.param_env = function_ptr
+            .map(|ptr| unsafe {
+                (&*(ptr as *const crate::object::function::JSFunction)).param_env
+            })
+            .unwrap_or(JSValue::undefined());
+        frame.param_env_own = false;
         frame.ic_table_ptr = function_ptr
             .and_then(|fptr| {
                 let js_func = unsafe { JSValue::function_from_ptr(fptr) };
@@ -1485,6 +1507,12 @@ impl VM {
         frame.with_env = function_ptr.map(|ptr| unsafe {
             (&*(ptr as *const crate::object::function::JSFunction)).with_env.clone()
         }).flatten();
+        frame.param_env = function_ptr
+            .map(|ptr| unsafe {
+                (&*(ptr as *const crate::object::function::JSFunction)).param_env
+            })
+            .unwrap_or(JSValue::undefined());
+        frame.param_env_own = false;
         frame.ic_table_ptr = ic_table_ptr;
         frame.this_value = this_value;
         frame.dst_reg = dst_reg;
@@ -1581,6 +1609,61 @@ impl VM {
         None
     }
 
+    fn param_env_lookup(
+        mut env: JSValue,
+        atom: crate::runtime::atom::Atom,
+    ) -> Option<JSValue> {
+        while env.is_object() {
+            let obj = env.as_object();
+            if let Some(value) = obj.get_own(atom) {
+                return Some(value);
+            }
+            match obj.prototype {
+                Some(ptr) => env = JSValue::new_object(ptr as usize),
+                None => break,
+            }
+        }
+        None
+    }
+
+    fn param_env_store(
+        ctx: &mut JSContext,
+        mut env: JSValue,
+        atom: crate::runtime::atom::Atom,
+        value: JSValue,
+    ) -> bool {
+        while env.is_object() {
+            if env.as_object().get_own(atom).is_some() {
+                env.as_object_mut().set_cached(atom, value, ctx.shape_cache_mut());
+                return true;
+            }
+            match env.as_object().prototype {
+                Some(ptr) => env = JSValue::new_object(ptr as usize),
+                None => break,
+            }
+        }
+        false
+    }
+
+    fn ensure_own_param_env(&mut self, ctx: &mut JSContext) -> JSValue {
+        let fi = self.frame_index;
+        if self.frames[fi].param_env_own {
+            return self.frames[fi].param_env;
+        }
+        let parent = self.frames[fi].param_env;
+        let mut env_obj = crate::object::object::JSObject::new();
+        if parent.is_object() {
+            env_obj.prototype = Some(parent.get_ptr() as *mut crate::object::object::JSObject);
+        }
+        let ptr = Box::into_raw(Box::new(env_obj)) as usize;
+        ctx.runtime_mut().gc_heap_mut().track(ptr);
+        let env = JSValue::new_object(ptr);
+        let frame = &mut self.frames[fi];
+        frame.param_env = env;
+        frame.param_env_own = true;
+        env
+    }
+
     #[inline(always)]
     fn pop_frame(&mut self, return_value: JSValue) {
         if self.frame_index == 0 {
@@ -1591,6 +1674,8 @@ impl VM {
             self.frames[self.frame_index].eval_bindings = None;
             self.eval_binding_frames -= 1;
         }
+        self.frames[self.frame_index].param_env = JSValue::undefined();
+        self.frames[self.frame_index].param_env_own = false;
         let frame = &self.frames[self.frame_index];
         let dst_reg = frame.dst_reg;
         let return_pc = frame.return_pc;
@@ -1671,6 +1756,12 @@ impl VM {
                     if let Some(val) = eb.get(&name_atom) {
                         return Some(*val);
                     }
+                }
+                if let Some(val) = Self::param_env_lookup(
+                    frame.param_env,
+                    crate::runtime::atom::Atom(name_atom),
+                ) {
+                    return Some(val);
                 }
                 if !frame.var_name_map.is_null() {
                     let map = unsafe { &*frame.var_name_map };
@@ -1781,6 +1872,16 @@ impl VM {
                 }
                 let parameter_environment_only = caller.frames[fi].in_parameter_initializer
                     && !caller.eval_direct_scope_contains(name_atom);
+                if parameter_environment_only
+                    && VM::param_env_store(
+                        ctx,
+                        caller.frames[fi].param_env,
+                        crate::runtime::atom::Atom(name_atom),
+                        value,
+                    )
+                {
+                    return CallerVarSet::Stored;
+                }
                 if !parameter_environment_only && !caller.frames[fi].var_name_map.is_null() {
                     let map = unsafe { &*caller.frames[fi].var_name_map };
                     for &(an, slot, tag) in map.iter().rev() {
@@ -1814,6 +1915,18 @@ impl VM {
                         }
                     }
                 }
+            }
+
+            if caller.frames[caller.frame_index].in_parameter_initializer
+                && !caller.eval_direct_scope_contains(name_atom)
+            {
+                let env = caller.ensure_own_param_env(ctx);
+                env.as_object_mut().set_cached(
+                    crate::runtime::atom::Atom(name_atom),
+                    value,
+                    ctx.shape_cache_mut(),
+                );
+                return CallerVarSet::Stored;
             }
 
             if caller.frame_index == 0 {
@@ -1878,8 +1991,19 @@ impl VM {
                     return true;
                 }
             }
-            let parameter_environment_only = caller.frames[fi].in_parameter_initializer;
-            if !parameter_environment_only || caller.eval_direct_scope_contains(name_atom) {
+            if caller.frames[fi].in_parameter_initializer
+                && !caller.eval_direct_scope_contains(name_atom)
+            {
+                let env = caller.ensure_own_param_env(ctx);
+                let atom = crate::runtime::atom::Atom(name_atom);
+                if VM::param_env_lookup(env, atom).is_none() {
+                    env.as_object_mut()
+                        .set_cached(atom, value, ctx.shape_cache_mut());
+                }
+                return true;
+            }
+            if !caller.frames[fi].in_parameter_initializer
+                || caller.eval_direct_scope_contains(name_atom) {
                 if !caller.frames[fi].var_name_map.is_null() {
                     let map = unsafe { &*caller.frames[fi].var_name_map };
                     if map.iter().any(|&(an, _, tag)| an == name_atom && tag == 0) {
@@ -4600,6 +4724,10 @@ impl VM {
             if sv.is_object() || sv.is_function() {
                 roots.push(sv);
             }
+            let pv = frame.param_env;
+            if pv.is_object() || pv.is_function() {
+                roots.push(pv);
+            }
         }
 
         macro_rules! push_proto {
@@ -4668,6 +4796,10 @@ impl VM {
             let sv = frame.super_ctor;
             if sv.is_object() || sv.is_function() {
                 roots.push(sv);
+            }
+            let pv = frame.param_env;
+            if pv.is_object() || pv.is_function() {
+                roots.push(pv);
             }
         }
 
@@ -5038,6 +5170,8 @@ impl VM {
                     result_handlers,
                     result_yield_is_result,
                     result_upvalue_cells,
+                    result_param_env,
+                    result_param_env_own,
                 ) = {
                     let mut generator_vm = crate::runtime::vm::VM::new();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
@@ -5055,6 +5189,7 @@ impl VM {
                         JSValue::undefined(),
                         false,
                         &[],
+                        None,
                     );
                     let uncaught = generator_vm.last_uncaught.take();
                     ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
@@ -5069,6 +5204,8 @@ impl VM {
                             handlers,
                             yield_is_result,
                             upvalue_cells,
+                            param_env,
+                            param_env_own,
                         )) => (
                             new_snapshot,
                             new_pc,
@@ -5077,13 +5214,25 @@ impl VM {
                             handlers,
                             yield_is_result,
                             upvalue_cells,
+                            param_env,
+                            param_env_own,
                         ),
                         Err(_) => {
                             if let Some(exc) = uncaught {
                                 self.last_caught_exception = Some(exc.clone());
                                 self.pending_throw = Some(exc);
                             }
-                            (snapshot, 0, false, None, Vec::new(), false, Vec::new())
+                            (
+                                snapshot,
+                                0,
+                                false,
+                                None,
+                                Vec::new(),
+                                false,
+                                Vec::new(),
+                                JSValue::undefined(),
+                                false,
+                            )
                         }
                     }
                 };
@@ -5113,6 +5262,8 @@ impl VM {
                         pending_finally_depth: 0,
                         pending_close_state: None,
                         upvalue_cells: result_upvalue_cells.clone(),
+                        param_env: result_param_env,
+                        param_env_own: result_param_env_own,
                     });
                     gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                         queue: Vec::new(),
@@ -5135,6 +5286,8 @@ impl VM {
                         handlers: result_handlers,
                         yield_is_result: result_yield_is_result,
                         upvalue_cells: result_upvalue_cells,
+                        param_env: result_param_env,
+                        param_env_own: result_param_env_own,
                     });
                 }
                 let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -5748,6 +5901,20 @@ impl VM {
             frame.with_env = frame.function_ptr.map(|ptr| unsafe {
                 (&*(ptr as *const crate::object::function::JSFunction)).with_env.clone()
             }).flatten();
+            let (frame_param_env, frame_param_env_own) = match self.pending_param_env.take() {
+                Some(pair) => pair,
+                None => (
+                    frame
+                        .function_ptr
+                        .map(|ptr| unsafe {
+                            (&*(ptr as *const crate::object::function::JSFunction)).param_env
+                        })
+                        .unwrap_or(JSValue::undefined()),
+                    false,
+                ),
+            };
+            frame.param_env = frame_param_env;
+            frame.param_env_own = frame_param_env_own;
             frame.this_value = frame_this;
             frame.saved_args.clear();
             if let Some(args) = saved_args {
@@ -7484,6 +7651,15 @@ impl VM {
                         }
                     }
                     if !resolved {
+                        if let Some(val) = Self::param_env_lookup(
+                            self.frames[self.frame_index].param_env,
+                            atom,
+                        ) {
+                            self.set_reg(dst, val);
+                            resolved = true;
+                        }
+                    }
+                    if !resolved {
                         if let Some(val) = self.get_var_in_caller_vm(atom.0) {
                             self.set_reg(dst, val);
                         } else if ctx.global_lexical_kinds.contains_key(&atom.0) {
@@ -7712,6 +7888,14 @@ impl VM {
                             }
                         }
                     } else {
+                        if Self::param_env_store(
+                            ctx,
+                            self.frames[self.frame_index].param_env,
+                            atom,
+                            val,
+                        ) {
+                            continue;
+                        }
                         if is_strict {
                             let mut found = false;
 
@@ -7889,6 +8073,14 @@ impl VM {
                             }
                         }
                     } else {
+                        if Self::param_env_store(
+                            ctx,
+                            self.frames[self.frame_index].param_env,
+                            atom,
+                            val,
+                        ) {
+                            continue;
+                        }
                         if is_strict {
                             let mut found = false;
 
@@ -12493,6 +12685,10 @@ impl VM {
                     let is_class_constructor = function_kind & 2 != 0;
 
                     func.with_env = self.frames[self.frame_index].with_env.clone();
+                    if self.frames[self.frame_index].in_parameter_initializer {
+                        self.ensure_own_param_env(ctx);
+                    }
+                    func.param_env = self.frames[self.frame_index].param_env;
                     let proto_atom = ctx.common_atoms.prototype;
                     let func_ptr = Box::into_raw(Box::new(func)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track_function(func_ptr);
@@ -12610,6 +12806,15 @@ impl VM {
                         if !exists && self.get_var_in_caller_vm(atom.0).is_some() {
                             exists = true;
                         }
+                    }
+                    if !exists
+                        && Self::param_env_lookup(
+                            self.frames[self.frame_index].param_env,
+                            atom,
+                        )
+                        .is_some()
+                    {
+                        exists = true;
                     }
                     if !exists && ctx.global_lexical_kinds.contains_key(&atom.0) {
                         exists = true;
@@ -13196,6 +13401,7 @@ impl VM {
 
         let saved_vm_ptr = ctx.get_register_vm_ptr();
         self.pending_upvalue_cells = Some(state.upvalue_cells.clone());
+        self.pending_param_env = Some((state.param_env, state.param_env_own));
         ctx.set_register_vm_ptr(Some(self as *mut VM as usize));
         let result = self.execute_inner(ctx, &state.bytecode, true, state.pc, true);
         ctx.set_register_vm_ptr(saved_vm_ptr);
@@ -13307,6 +13513,8 @@ impl VM {
             result_handlers,
             result_yield_is_result,
             result_upvalue_cells,
+            result_param_env,
+            result_param_env_own,
         ) = {
             let mut generator_vm = crate::runtime::vm::VM::new();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
@@ -13324,6 +13532,7 @@ impl VM {
                 JSValue::undefined(),
                 false,
                 &[],
+                None,
             );
             let uncaught = generator_vm.last_uncaught.take();
             ctx.runtime_mut().gc_heap_mut().gc_suppressed = false;
@@ -13338,6 +13547,8 @@ impl VM {
                     handlers,
                     yield_is_result,
                     upvalue_cells,
+                    param_env,
+                    param_env_own,
                 )) => (
                     new_snapshot,
                     new_pc,
@@ -13346,6 +13557,8 @@ impl VM {
                     handlers,
                     yield_is_result,
                     upvalue_cells,
+                    param_env,
+                    param_env_own,
                 ),
                 Err(e) => {
                     if let Some(exc) = uncaught {
@@ -13356,7 +13569,17 @@ impl VM {
                     if e.contains("SyntaxError") || e.contains("Uncaught") {
                         return Err(e);
                     }
-                    (snapshot, 0, false, None, Vec::new(), false, Vec::new())
+                    (
+                        snapshot,
+                        0,
+                        false,
+                        None,
+                        Vec::new(),
+                        false,
+                        Vec::new(),
+                        JSValue::undefined(),
+                        false,
+                    )
                 }
             }
         };
@@ -13387,6 +13610,8 @@ impl VM {
                 pending_finally_depth: 0,
                 pending_close_state: None,
                 upvalue_cells: result_upvalue_cells.clone(),
+                param_env: result_param_env,
+                param_env_own: result_param_env_own,
             });
             gen_obj.set_async_generator_state(crate::object::object::AsyncGeneratorState {
                 queue: Vec::new(),
@@ -13409,6 +13634,8 @@ impl VM {
                 handlers: result_handlers,
                 yield_is_result: result_yield_is_result,
                 upvalue_cells: result_upvalue_cells,
+                param_env: result_param_env,
+                param_env_own: result_param_env_own,
             });
         }
         let gen_ptr = Box::into_raw(Box::new(gen_obj)) as usize;
@@ -13431,6 +13658,7 @@ impl VM {
         resume_value: JSValue,
         yield_is_result: bool,
         upvalue_cells: &[(u16, std::rc::Rc<std::cell::Cell<JSValue>>)],
+        param_env: Option<(JSValue, bool)>,
     ) -> Result<
         (
             JSValue,
@@ -13441,6 +13669,8 @@ impl VM {
             Vec<ExceptionHandler>,
             bool,
             Vec<(u16, std::rc::Rc<std::cell::Cell<JSValue>>)>,
+            JSValue,
+            bool,
         ),
         String,
     > {
@@ -13452,6 +13682,7 @@ impl VM {
 
         self.pending_saved_args = Some(saved_args.to_vec());
         self.pending_function_ptr = func_ptr;
+        self.pending_param_env = param_env;
         self.pending_this = registers_snapshot.first().copied();
         self.pending_handlers = Some(handlers.to_vec());
         if yield_is_result {
@@ -13518,6 +13749,8 @@ impl VM {
                 handlers,
                 false,
                 upvalue_cells,
+                self.frames[0].param_env,
+                self.frames[0].param_env_own,
             )),
             ExecutionOutcome::Yield(val) => Ok((
                 val,
@@ -13528,6 +13761,8 @@ impl VM {
                 handlers,
                 self.last_yield_is_result,
                 upvalue_cells,
+                self.frames[0].param_env,
+                self.frames[0].param_env_own,
             )),
         }
     }
