@@ -1166,6 +1166,15 @@ impl JSContext {
         self.register_vm_ptr
     }
 
+    pub fn with_vm<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::runtime::vm::VM, &mut JSContext) -> R,
+    ) -> Option<R> {
+        let ptr = self.register_vm_ptr?;
+        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+        Some(f(vm, self))
+    }
+
     pub fn add_extension(&mut self, ext: Box<dyn MacroTaskExtension>) {
         self.event_loop_mut().extensions.push(ext);
     }

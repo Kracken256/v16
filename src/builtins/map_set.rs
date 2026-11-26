@@ -208,11 +208,9 @@ fn call_callback(
     callback: JSValue,
     args: &[JSValue],
 ) -> Result<JSValue, String> {
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-        vm.call_function(ctx, callback, args)
-    } else {
-        Err("call_callback: VM not available".to_string())
+    match ctx.with_vm(|vm, ctx| vm.call_function(ctx, callback, args)) {
+        Some(result) => result,
+        None => Err("call_callback: VM not available".to_string()),
     }
 }
 
@@ -222,11 +220,9 @@ fn call_callback_with_this(
     this_value: JSValue,
     args: &[JSValue],
 ) -> Result<JSValue, String> {
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-        vm.call_function_with_this(ctx, callback, this_value, args)
-    } else {
-        Err("call_callback: VM not available".to_string())
+    match ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, callback, this_value, args)) {
+        Some(result) => result,
+        None => Err("call_callback: VM not available".to_string()),
     }
 }
 
