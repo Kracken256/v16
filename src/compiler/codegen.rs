@@ -10606,6 +10606,12 @@ impl CodeGenerator {
                             let obj_reg = self.gen_expression(&member.object, ctx)?;
                             let atom = ctx.intern(name);
 
+                            let func_reg = self.alloc_register();
+                            self.emit(Opcode::GetNamedProp);
+                            self.emit_u16(func_reg);
+                            self.emit_u16(obj_reg);
+                            self.emit_u32(atom.0);
+
                             let mut arg_regs = Vec::new();
                             for arg in &call.arguments {
                                 if let Argument::Expression(expr) = arg {
@@ -10614,16 +10620,17 @@ impl CodeGenerator {
                             }
 
                             let dst = self.alloc_register();
-                            self.emit(Opcode::CallNamedMethod);
+                            self.emit(Opcode::CallMethod);
                             self.emit_u16(dst);
                             self.emit_u16(obj_reg);
-                            self.emit_u32(atom.0);
+                            self.emit_u16(func_reg);
                             self.emit_u16(arg_regs.len() as u16);
                             for r in &arg_regs {
                                 self.emit_u16(*r);
                             }
 
                             self.free_register(obj_reg);
+                            self.free_register(func_reg);
                             for r in arg_regs {
                                 self.free_register(r);
                             }
