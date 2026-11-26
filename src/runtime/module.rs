@@ -332,18 +332,15 @@ fn collect_static_dependencies(body: &[crate::compiler::ast::ASTNode]) -> Vec<St
 fn namespace_object_for(ctx: &mut JSContext, resolved: &str) -> Result<usize, String> {
     let to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
     let module_tag_atom = ctx.intern("Module");
-    let atom_table_ptr = ctx.atom_table_mut() as *mut _;
-    unsafe {
-        let registry = ctx.runtime_mut().module_registry_mut();
-        if let Some(module_cell) = registry.get_mut(resolved) {
-            Ok(module_cell.borrow_mut().get_or_create_namespace_object(
-                &mut *atom_table_ptr,
-                to_string_tag_key,
-                module_tag_atom,
-            ))
-        } else {
-            Err(format!("Module {} not found", resolved))
-        }
+    let (registry, atom_table) = ctx.runtime_mut().module_registry_and_atoms_mut();
+    if let Some(module_cell) = registry.get_mut(resolved) {
+        Ok(module_cell.borrow_mut().get_or_create_namespace_object(
+            atom_table,
+            to_string_tag_key,
+            module_tag_atom,
+        ))
+    } else {
+        Err(format!("Module {} not found", resolved))
     }
 }
 
