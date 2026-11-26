@@ -283,6 +283,7 @@ pub struct JSContext {
     dataview_prototype: Option<usize>,
     typed_array_prototype: Option<usize>,
     typed_array_iterator_prototype: Option<usize>,
+    array_buffer_prototype: Option<usize>,
     error_prototype: Option<usize>,
     type_error_prototype: Option<usize>,
     reference_error_prototype: Option<usize>,
@@ -376,6 +377,7 @@ impl JSContext {
             dataview_prototype: None,
             typed_array_prototype: None,
             typed_array_iterator_prototype: None,
+            array_buffer_prototype: None,
             error_prototype: None,
             type_error_prototype: None,
             reference_error_prototype: None,
@@ -843,6 +845,14 @@ impl JSContext {
 
     pub fn set_typed_array_iterator_prototype(&mut self, ptr: usize) {
         self.typed_array_iterator_prototype = Some(ptr);
+    }
+
+    pub fn set_array_buffer_prototype(&mut self, ptr: usize) {
+        self.array_buffer_prototype = Some(ptr);
+    }
+
+    pub fn get_array_buffer_prototype(&self) -> Option<*mut JSObject> {
+        self.array_buffer_prototype.map(|p| p as *mut JSObject)
     }
 
     pub fn get_typed_array_iterator_prototype(&self) -> Option<*mut JSObject> {

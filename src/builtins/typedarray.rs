@@ -10,6 +10,9 @@ pub struct ArrayBufferData {
 
 fn create_array_buffer(ctx: &mut JSContext, length: usize) -> JSValue {
     let mut obj = JSObject::new_typed(ObjectType::ArrayBuffer);
+    if let Some(proto_ptr) = ctx.get_array_buffer_prototype() {
+        obj.prototype = Some(proto_ptr);
+    }
     let data = ArrayBufferData {
         data: vec![0; length],
     };
@@ -529,6 +532,76 @@ fn array_buffer_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
     let obj = args[0].as_object();
     obj.get(ctx.intern("byteLength"))
         .unwrap_or(JSValue::undefined())
+}
+
+fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this_val = args.first().copied().unwrap_or(JSValue::undefined());
+    if !this_val.is_object() || this_val.as_object().obj_type() != ObjectType::ArrayBuffer {
+        throw_type_error(
+            ctx,
+            "ArrayBuffer.prototype.slice called on incompatible receiver",
+        );
+        return JSValue::undefined();
+    }
+    let length = get_array_buffer_data(this_val.as_object())
+        .map(|d| d.data.len())
+        .unwrap_or(0);
+    let clamp = |n: f64| -> usize {
+        if n.is_nan() || n <= 0.0 {
+            0
+        } else if n >= length as f64 {
+            length
+        } else {
+            n.trunc() as usize
+        }
+    };
+    let start = if args.len() > 1 && !args[1].is_undefined() {
+        match crate::builtins::global::js_to_number_value(ctx, &args[1]) {
+            Ok(n) => {
+                if n < 0.0 {
+                    clamp(length as f64 + n.trunc())
+                } else {
+                    clamp(n)
+                }
+            }
+            Err(()) => return JSValue::undefined(),
+        }
+    } else {
+        0
+    };
+    let end = if args.len() > 2 && !args[2].is_undefined() {
+        match crate::builtins::global::js_to_number_value(ctx, &args[2]) {
+            Ok(n) => {
+                if n < 0.0 {
+                    clamp(length as f64 + n.trunc())
+                } else {
+                    clamp(n)
+                }
+            }
+            Err(()) => return JSValue::undefined(),
+        }
+    } else {
+        length
+    };
+    let end = end.max(start);
+    let count = end - start;
+    let result = create_array_buffer(ctx, count);
+    if let Some(data) = get_array_buffer_data(result.as_object()) {
+        if let Some(src) = get_array_buffer_data(this_val.as_object()) {
+            data.data[..count].copy_from_slice(&src.data[start..end]);
+        }
+    }
+    if let Some(ctor) = this_val.as_object().get(ctx.intern("constructor")) {
+        if ctor.is_object_like() {
+            if let Some(proto) = ctor.as_object().get(ctx.intern("prototype")) {
+                if proto.is_object_like() {
+                    result.as_object_mut().prototype =
+                        Some(proto.get_ptr() as *mut JSObject);
+                }
+            }
+        }
+    }
+    result
 }
 
 fn array_buffer_is_view(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1843,6 +1916,37 @@ pub fn init_typed_array(ctx: &mut JSContext) {
             create_builtin_function(ctx, "arraybuffer_isView"),
         );
     }
+    let mut ab_proto = JSObject::new();
+    let ab_byte_length = create_builtin_function(ctx, "arraybuffer_byteLength");
+    ab_proto.define_accessor_flags(
+        ctx.intern("byteLength"),
+        Some(ab_byte_length),
+        None,
+        false,
+        true,
+    );
+    ab_proto.set(
+        ctx.intern("slice"),
+        create_builtin_function(ctx, "arraybuffer_slice"),
+    );
+    ab_proto.set(ctx.intern("constructor"), ab_func);
+    let ab_to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
+    ab_proto.set(
+        ab_to_string_tag_key,
+        JSValue::new_string(ctx.intern("ArrayBuffer")),
+    );
+    if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
+        ab_proto.prototype = Some(obj_proto_ptr);
+    }
+    let ab_proto_ptr = Box::into_raw(Box::new(ab_proto)) as usize;
+    ctx.runtime_mut().gc_heap_mut().track(ab_proto_ptr);
+    ctx.set_array_buffer_prototype(ab_proto_ptr);
+    if ab_func.is_function() {
+        ab_func.as_function_mut().base.set(
+            ctx.intern("prototype"),
+            JSValue::new_object(ab_proto_ptr),
+        );
+    }
     crate::builtins::symbol::install_species_accessor(ctx, &ab_func);
     crate::builtins::global::set_non_enumerable(global_obj, ctx.intern("ArrayBuffer"), ab_func);
 
@@ -2207,6 +2311,11 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "arraybuffer_byteLength",
         HostFunction::method("byteLength", 0, array_buffer_get_byte_length),
+    );
+
+    ctx.register_builtin(
+        "arraybuffer_slice",
+        HostFunction::method("slice", 2, array_buffer_slice),
     );
 
     ctx.register_builtin(
