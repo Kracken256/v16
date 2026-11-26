@@ -87,9 +87,7 @@ fn intern_str(ctx: &mut JSContext, s: &str) -> crate::runtime::atom::Atom {
 }
 
 fn get_array_element(obj: &JSObject, index: usize, ctx: &mut JSContext) -> JSValue {
-    if obj.is_dense_array() {
-        let ptr = obj as *const JSObject as *const crate::object::array_obj::JSArrayObject;
-        let arr = unsafe { &*ptr };
+    if let Some(arr) = obj.as_dense_array() {
         if index < arr.elements.len() {
             return arr.elements[index];
         }
@@ -103,9 +101,7 @@ fn get_array_element(obj: &JSObject, index: usize, ctx: &mut JSContext) -> JSVal
 }
 
 fn get_array_length(obj: &JSObject, ctx: &mut JSContext) -> usize {
-    if obj.is_dense_array() {
-        let ptr = obj as *const JSObject as *const crate::object::array_obj::JSArrayObject;
-        let arr = unsafe { &*ptr };
+    if let Some(arr) = obj.as_dense_array() {
         return arr.elements.len();
     }
     let length_atom = intern_str(ctx, "length");

@@ -247,9 +247,8 @@ fn get_property_with_getter(
     if let Some(v) = obj.get(prop) {
         return Ok(v);
     }
-    if obj.is_dense_array() {
+    if let Some(arr) = obj.as_dense_array() {
         if let Some(idx) = ctx.atom_table().get_array_index(prop) {
-            let arr = unsafe { &*(obj_ptr as *const crate::object::array_obj::JSArrayObject) };
             if let Some(v) = arr.get(idx) {
                 return Ok(v);
             }
@@ -330,34 +329,20 @@ pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
                 idx += 1;
             }
         } else if arr_val.is_object() {
-            let arr_ptr = arr_val.get_ptr();
-            let is_jsarray = unsafe {
-                &*(arr_ptr as *const JSObject)
-            }.is_dense_array();
-            let length = if is_jsarray {
-                let arr = unsafe {
-                    &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                };
+            let arr_obj = arr_val.as_object();
+            let dense = arr_obj.as_dense_array();
+            let length = if let Some(arr) = dense {
                 arr.len()
             } else {
-                let obj = unsafe {
-                    &*(arr_ptr as *const JSObject)
-                };
                 let len_atom = ctx.common_atoms.length;
-                obj.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
+                arr_obj.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
             };
             while idx < length {
-                let value = if is_jsarray {
-                    let arr = unsafe {
-                        &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                    };
+                let value = if let Some(arr) = dense {
                     arr.get(idx).unwrap_or(JSValue::undefined())
                 } else {
-                    let obj = unsafe {
-                        &*(arr_ptr as *const JSObject)
-                    };
                     let key = ctx.intern(&idx.to_string());
-                    obj.get(key).unwrap_or(JSValue::undefined())
+                    arr_obj.get(key).unwrap_or(JSValue::undefined())
                 };
                 values.push(value);
                 idx += 1;
@@ -477,34 +462,20 @@ pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue,
                 return Some((JSValue::undefined(), true));
             }
         } else if arr_val.is_object() {
-            let arr_ptr = arr_val.get_ptr();
-            let is_jsarray = unsafe {
-                &*(arr_ptr as *const JSObject)
-            }.is_dense_array();
-            let length = if is_jsarray {
-                let arr = unsafe {
-                    &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                };
+            let arr_obj = arr_val.as_object();
+            let dense = arr_obj.as_dense_array();
+            let length = if let Some(arr) = dense {
                 arr.len()
             } else {
-                let obj = unsafe {
-                    &*(arr_ptr as *const JSObject)
-                };
                 let len_atom = ctx.common_atoms.length;
-                obj.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
+                arr_obj.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0)
             };
             if idx < length {
-                let value = if is_jsarray {
-                    let arr = unsafe {
-                        &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                    };
+                let value = if let Some(arr) = dense {
                     arr.get(idx).unwrap_or(JSValue::undefined())
                 } else {
-                    let obj = unsafe {
-                        &*(arr_ptr as *const JSObject)
-                    };
                     let key = ctx.intern(&idx.to_string());
-                    obj.get(key).unwrap_or(JSValue::undefined())
+                    arr_obj.get(key).unwrap_or(JSValue::undefined())
                 };
                 iter_obj_mut.set(idx_atom, JSValue::new_int((idx + 1) as i64));
                 return Some((value, false));

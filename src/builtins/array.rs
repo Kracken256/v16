@@ -50,9 +50,7 @@ pub fn array_get(obj: &JSObject, index: usize, ctx: &mut JSContext) -> Option<cr
         }
     }
     if obj.is_array() {
-        let ptr = obj as *const JSObject as usize;
-        if obj.is_dense_array() {
-            let arr = unsafe { &*(ptr as *const JSArrayObject) };
+        if let Some(arr) = obj.as_dense_array() {
             if let Some(val) = arr.get(index) {
                 return Some(val);
             }
@@ -68,9 +66,8 @@ pub fn array_get(obj: &JSObject, index: usize, ctx: &mut JSContext) -> Option<cr
 
 pub fn array_set(obj: &mut JSObject, index: usize, value: crate::value::JSValue) {
     if obj.is_array() {
-        let ptr = obj as *mut JSObject as *mut JSArrayObject;
-        if obj.is_dense_array() {
-            unsafe { (*ptr).set(index, value) };
+        if let Some(arr) = obj.as_dense_array_mut() {
+            arr.set(index, value);
             return;
         }
     }
@@ -78,13 +75,14 @@ pub fn array_set(obj: &mut JSObject, index: usize, value: crate::value::JSValue)
 }
 
 pub fn array_delete(obj: &mut JSObject, index: usize) {
-    if obj.is_array() && obj.is_dense_array() {
-        let ptr = obj as *mut JSObject as *mut JSArrayObject;
-        let elems = unsafe { &mut (*ptr).elements };
-        if index < elems.len() {
-            elems[index] = crate::value::JSValue::undefined();
+    if obj.is_array() {
+        if let Some(arr) = obj.as_dense_array_mut() {
+            let elems = &mut arr.elements;
+            if index < elems.len() {
+                elems[index] = crate::value::JSValue::undefined();
+            }
+            return;
         }
-        return;
     }
     obj.set_indexed(index, crate::value::JSValue::undefined());
 }
@@ -748,8 +746,7 @@ fn array_push(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let length_atom = ctx.common_atoms.length;
     let ptr = this_obj.get_ptr();
 
-    if this_obj.as_object().is_dense_array() {
-        let arr = unsafe { &mut *(ptr as *mut JSArrayObject) };
+    if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         if !arr.header.is_property_writable(length_atom) {
             throw_type_error(ctx, "Cannot assign to read only property 'length' of object");
             return JSValue::undefined();
@@ -802,8 +799,7 @@ fn array_pop(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let length_atom = ctx.common_atoms.length;
     let ptr = this_obj.get_ptr();
 
-    if this_obj.as_object().is_dense_array() {
-        let arr = unsafe { &mut *(ptr as *mut JSArrayObject) };
+    if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         let current_len = arr.len();
         if current_len == 0 {
             return JSValue::undefined();
@@ -850,8 +846,7 @@ fn array_shift(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let length_atom = ctx.common_atoms.length;
     let ptr = this_obj.get_ptr();
 
-    if this_obj.as_object().is_dense_array() {
-        let arr = unsafe { &mut *(ptr as *mut JSArrayObject) };
+    if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         let current_len = arr.len();
         if current_len == 0 {
             return JSValue::undefined();
@@ -906,9 +901,7 @@ fn array_unshift(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let add_count = (args.len() - 1) as usize;
     let ptr = this_obj.get_ptr();
 
-    if this_obj.as_object().is_dense_array() {
-        let arr = unsafe { &mut *(ptr as *mut JSArrayObject) };
-
+    if let Some(arr) = this_obj.as_object_mut().as_dense_array_mut() {
         let items: Vec<JSValue> = args.iter().skip(1).cloned().collect();
         let mut new_elements = items;
         new_elements.extend(arr.elements().iter().copied());
@@ -1093,9 +1086,7 @@ fn array_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     if len - start > 10_000_000 {
-        if obj.is_dense_array() {
-            let ptr = this.get_ptr();
-            let dense_arr = unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
+        if let Some(dense_arr) = obj.as_dense_array() {
             let dense_len = dense_arr.elements.len() as u64;
             for i in start..dense_len.min(len) {
                 if let Some(val) = dense_arr.elements.get(i as usize) {
@@ -1164,9 +1155,7 @@ fn array_includes(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     if len - start > 10_000_000 {
-        if obj.is_dense_array() {
-            let ptr = this.get_ptr();
-            let dense_arr = unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
+        if let Some(dense_arr) = obj.as_dense_array() {
             let dense_len = dense_arr.elements.len() as u64;
             for i in start..dense_len.min(len) {
                 if let Some(val) = dense_arr.elements.get(i as usize) {
@@ -2049,11 +2038,10 @@ fn array_sort(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let arr = this.as_object_mut();
-    if this.as_object().is_dense_array() {
-        let arr_obj = unsafe { &mut *(this.get_ptr() as *mut JSArrayObject) };
+    if let Some(arr_obj) = this.as_object_mut().as_dense_array_mut() {
         arr_obj.set_elements(elements);
     } else {
+        let arr = this.as_object_mut();
         if arr.has_dense_storage() {
             arr.set_array_elements(elements.clone());
         }
@@ -2092,11 +2080,10 @@ fn array_reverse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         })
         .collect();
     elements.reverse();
-    let arr = this.as_object_mut();
-    if this.as_object().is_dense_array() {
-        let arr_obj = unsafe { &mut *(this.get_ptr() as *mut JSArrayObject) };
+    if let Some(arr_obj) = this.as_object_mut().as_dense_array_mut() {
         arr_obj.set_elements(elements);
     } else {
+        let arr = this.as_object_mut();
         if arr.has_dense_storage() {
             arr.set_array_elements(elements.clone());
         }
@@ -2817,9 +2804,7 @@ fn array_last_index_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let end_u = end as u64;
 
     if end_u > 10_000_000 {
-        if arr.is_dense_array() {
-            let ptr = this.get_ptr();
-            let dense_arr = unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
+        if let Some(dense_arr) = arr.as_dense_array() {
             let dense_len = dense_arr.elements.len() as u64;
             for i in (0..=end_u.min(dense_len.saturating_sub(1))).rev() {
                 if let Some(val) = dense_arr.elements.get(i as usize) {

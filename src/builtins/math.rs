@@ -790,9 +790,7 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return throw_type_error_math(ctx, "argument is not iterable");
         };
         for i in 0..len {
-            let val = if obj.is_dense_array() {
-                use crate::object::array_obj::JSArrayObject;
-                let arr = unsafe { &*(iterable.get_ptr() as *const JSArrayObject) };
+            let val = if let Some(arr) = obj.as_dense_array() {
                 if i < arr.elements.len() {
                     arr.elements[i]
                 } else {

@@ -210,9 +210,7 @@ fn typed_array_from_args(
         if result.is_object() {
             let mut result_obj = result.as_object_mut();
             for i in 0..len {
-                let val = if obj.is_array() && obj.is_dense_array() {
-                    let ptr = obj as *const JSObject as usize;
-                    let arr = unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
+                let val = if let Some(arr) = obj.as_dense_array() {
                     arr.get(i)
                 } else {
                     obj.get_indexed(i).or_else(|| {

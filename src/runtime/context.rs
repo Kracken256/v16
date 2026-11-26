@@ -482,14 +482,12 @@ impl JSContext {
             return false;
         }
         let obj = value.as_object();
-        if !obj.is_dense_array() {
+        let Some(array) = obj.as_dense_array() else {
             return false;
-        }
+        };
         let Some(index) = self.atom_table().get_array_index(atom) else {
             return false;
         };
-        let array =
-            unsafe { &*(value.get_ptr() as *const crate::object::array_obj::JSArrayObject) };
         index < array.elements.len()
     }
 
@@ -502,12 +500,10 @@ impl JSContext {
             return None;
         }
         let obj = value.as_object();
-        if !obj.is_dense_array() {
+        let Some(array) = obj.as_dense_array() else {
             return None;
-        }
+        };
         let index = self.atom_table().get_array_index(atom)?;
-        let array =
-            unsafe { &*(value.get_ptr() as *const crate::object::array_obj::JSArrayObject) };
         let element = *array.elements.get(index)?;
         let frozen = obj.frozen();
         Some(crate::object::object::PropertyDescriptor {

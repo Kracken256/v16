@@ -907,6 +907,28 @@ impl JSObject {
     }
 
     #[inline(always)]
+    pub fn as_dense_array(&self) -> Option<&crate::object::array_obj::JSArrayObject> {
+        if self.is_dense_array() {
+            Some(unsafe {
+                &*(self as *const JSObject as *const crate::object::array_obj::JSArrayObject)
+            })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_dense_array_mut(&mut self) -> Option<&mut crate::object::array_obj::JSArrayObject> {
+        if self.is_dense_array() {
+            Some(unsafe {
+                &mut *(self as *mut JSObject as *mut crate::object::array_obj::JSArrayObject)
+            })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
     pub fn set_prototype_raw(&mut self, ptr: *mut JSObject) {
         self.prototype = if ptr.is_null() { None } else { Some(ptr) }
     }

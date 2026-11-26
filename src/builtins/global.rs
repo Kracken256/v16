@@ -2328,9 +2328,7 @@ pub fn js_to_number_value(ctx: &mut JSContext, v: &JSValue) -> Result<f64, ()> {
         let obj = v.as_object();
         let obj_type = obj.obj_type();
         if obj_type == crate::object::object::ObjectType::Array {
-            let elements: Vec<JSValue> = if obj.is_dense_array() {
-                use crate::object::array_obj::JSArrayObject;
-                let arr = unsafe { &*(v.get_ptr() as *const JSArrayObject) };
+            let elements: Vec<JSValue> = if let Some(arr) = obj.as_dense_array() {
                 arr.elements.clone()
             } else if let Some(elems) = obj.get_array_elements() {
                 elems.clone()
@@ -2708,9 +2706,7 @@ fn to_integer_or_nan(ctx: &mut JSContext, v: &JSValue) -> Result<f64, ()> {
         let obj = v.as_object();
         let obj_type = obj.obj_type();
         if obj_type == crate::object::object::ObjectType::Array {
-            let elements: Vec<JSValue> = if obj.is_dense_array() {
-                use crate::object::array_obj::JSArrayObject;
-                let arr = unsafe { &*(v.get_ptr() as *const JSArrayObject) };
+            let elements: Vec<JSValue> = if let Some(arr) = obj.as_dense_array() {
                 arr.elements.clone()
             } else if let Some(elems) = obj.get_array_elements() {
                 elems.clone()

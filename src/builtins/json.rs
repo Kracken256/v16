@@ -1,4 +1,3 @@
-use crate::object::array_obj::JSArrayObject;
 use crate::object::object::JSObject;
 use crate::runtime::atom::Atom;
 use crate::runtime::context::JSContext;
@@ -745,12 +744,11 @@ fn array_to_json(
     let len = arr.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
 
     let mut elements = Vec::new();
-    let arr_ptr = arr as *const JSObject as usize;
-    let is_jsarray = arr.is_dense_array();
+    let dense = arr.as_dense_array();
     for i in 0..len {
         let i_key = ctx.int_atom_mut(i);
-        let val = if is_jsarray {
-            unsafe { &*(arr_ptr as *const JSArrayObject) }.get(i)
+        let val = if let Some(d) = dense {
+            d.get(i)
         } else if let Some(v) = arr.get_indexed(i) {
             Some(v)
         } else {
@@ -807,11 +805,10 @@ fn object_to_json(
                     .map(|v| v.get_int() as usize)
                     .unwrap_or(0);
                 let mut keys = Vec::new();
-                let repl_ptr = repl_obj as *const JSObject as usize;
-                let is_jsarray = repl_obj.is_dense_array();
+                let dense = repl_obj.as_dense_array();
                 for i in 0..len {
-                    let val = if is_jsarray {
-                        unsafe { &*(repl_ptr as *const JSArrayObject) }.get(i)
+                    let val = if let Some(d) = dense {
+                        d.get(i)
                     } else if let Some(v) = repl_obj.get_indexed(i) {
                         Some(v)
                     } else {

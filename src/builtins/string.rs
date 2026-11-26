@@ -2709,9 +2709,7 @@ fn string_raw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut i = 0usize;
     while i < len {
         let key = ctx.int_atom_mut(i);
-        let raw_str_val = if raw_obj.is_dense_array() {
-            let arr_ptr = raw_obj as *const _ as usize;
-            let arr = unsafe { &*(arr_ptr as *const crate::object::array_obj::JSArrayObject) };
+        let raw_str_val = if let Some(arr) = raw_obj.as_dense_array() {
             arr.get(i).unwrap_or(JSValue::new_string(ctx.intern("")))
         } else {
             raw_obj

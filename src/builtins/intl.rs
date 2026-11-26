@@ -995,9 +995,7 @@ fn supported_locales_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             .unwrap_or(0)
             .max(0) as usize;
 
-        let dense_arr = if obj.is_dense_array() {
-            let arr_ptr = locales.get_ptr() as *const JSArrayObject;
-            let arr = unsafe { &*arr_ptr };
+        let dense_arr = if let Some(arr) = obj.as_dense_array() {
             len = len.max(arr.len());
             Some(arr)
         } else {

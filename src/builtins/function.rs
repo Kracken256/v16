@@ -686,10 +686,7 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 };
             } else if len <= 16 {
                 if arr_obj.is_array() {
-                    let ptr = arr_obj as *const _ as usize;
-                    if arr_obj.is_dense_array() {
-                        let arr_ptr =
-                            unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
+                    if let Some(arr_ptr) = arr_obj.as_dense_array() {
                         for i in 0..len {
                             call_args_buf[i] = arr_ptr.get(i).unwrap_or(JSValue::undefined());
                         }
@@ -714,10 +711,7 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 call_args = &call_args_buf[..len];
             } else {
                 if arr_obj.is_array() {
-                    let ptr = arr_obj as *const _ as usize;
-                    if arr_obj.is_dense_array() {
-                        let arr_ptr =
-                            unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
+                    if let Some(arr_ptr) = arr_obj.as_dense_array() {
                         for i in 0..len {
                             call_args_vec.push(arr_ptr.get(i).unwrap_or(JSValue::undefined()));
                         }

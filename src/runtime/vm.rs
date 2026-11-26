@@ -3947,11 +3947,11 @@ impl VM {
             }
         }
         if let Some((resource_value, method, kind)) = record {
-            let ptr = stack_val.get_ptr() as *mut crate::object::array_obj::JSArrayObject;
-            let arr = unsafe { &mut *ptr };
-            arr.push(resource_value);
-            arr.push(method);
-            arr.push(JSValue::new_int(kind as i64));
+            if let Some(arr) = stack_val.as_object_mut().as_dense_array_mut() {
+                arr.push(resource_value);
+                arr.push(method);
+                arr.push(JSValue::new_int(kind as i64));
+            }
         }
         Ok(None)
     }
@@ -4006,10 +4006,10 @@ impl VM {
             }
             let stack_val = self.get_reg(stack_reg);
             let count = if stack_val.is_object_like() {
-                let arr = unsafe {
-                    &*(stack_val.get_ptr() as *const crate::object::array_obj::JSArrayObject)
-                };
-                (arr.len() / 3) as i64
+                match stack_val.as_object().as_dense_array() {
+                    Some(arr) => (arr.len() / 3) as i64,
+                    None => 0,
+                }
             } else {
                 0
             };
@@ -4035,13 +4035,13 @@ impl VM {
             self.set_reg(index_reg, JSValue::new_int(idx - 1));
             let (value, method, kind) = {
                 let stack_val = self.get_reg(stack_reg);
-                let arr = unsafe {
-                    &*(stack_val.get_ptr() as *const crate::object::array_obj::JSArrayObject)
-                };
+                let arr = stack_val.as_object().as_dense_array();
                 let base = (idx as usize) * 3;
-                let value = arr.get(base).unwrap_or_else(JSValue::undefined);
-                let method = arr.get(base + 1).unwrap_or_else(JSValue::undefined);
-                let kind = arr.get(base + 2).map(|v| v.get_int()).unwrap_or(0);
+                let value = arr.and_then(|a| a.get(base)).unwrap_or_else(JSValue::undefined);
+                let method = arr
+                    .and_then(|a| a.get(base + 1))
+                    .unwrap_or_else(JSValue::undefined);
+                let kind = arr.and_then(|a| a.get(base + 2)).map(|v| v.get_int()).unwrap_or(0);
                 (value, method, kind)
             };
             if kind == 0
@@ -9069,13 +9069,9 @@ impl VM {
                                     JSValue::undefined()
                                 }
                             } else {
-                                let arr = unsafe {
-                                    &*(ptr as *const crate::object::array_obj::JSArrayObject)
-                                };
-                                if idx < arr.elements.len() {
-                                    arr.elements[idx]
-                                } else {
-                                    JSValue::undefined()
+                                match js_obj.as_dense_array() {
+                                    Some(arr) if idx < arr.elements.len() => arr.elements[idx],
+                                    _ => JSValue::undefined(),
                                 }
                             }
                         } else if js_obj.obj_type() == crate::object::object::ObjectType::TypedArray {
@@ -9171,11 +9167,10 @@ impl VM {
                             }
                         } else if js_obj.is_dense_array() {
                             if let Some(index) = ctx.atom_table().get_array_index(atom) {
-                                let arr = unsafe {
-                                    &*(obj_val.get_ptr()
-                                        as *const crate::object::array_obj::JSArrayObject)
-                                };
-                                arr.elements.get(index).copied().unwrap_or(JSValue::undefined())
+                                js_obj
+                                    .as_dense_array()
+                                    .and_then(|arr| arr.elements.get(index).copied())
+                                    .unwrap_or(JSValue::undefined())
                             } else {
                                 js_obj.get(atom).unwrap_or(JSValue::undefined())
                             }
@@ -9403,11 +9398,9 @@ impl VM {
                         let js_obj = unsafe { JSValue::object_from_ptr_mut(ptr) };
                         if js_obj.is_dense_array() {
                             let idx = key_val.get_int() as usize;
-                            let arr = unsafe {
-                                &mut *(ptr as *mut crate::object::array_obj::JSArrayObject)
-                            };
+                            if let Some(arr) = js_obj.as_dense_array_mut() {
                             if idx < arr.elements.len() {
-                                if js_obj.frozen() {
+                                if arr.header.frozen() {
                                     if self.frames[self.frame_index].is_strict_frame {
                                         self.set_pending_type_error(
                                             ctx,
@@ -9419,7 +9412,7 @@ impl VM {
                                 }
                             } else {
                                 // Check prototype chain for setters when EXTENDING the array
-                                let mut proto = js_obj.prototype;
+                                let mut proto = arr.header.prototype;
                                 let mut setter_found = None;
                                 while let Some(p) = proto {
                                     let pobj = unsafe { &*p };
@@ -9453,7 +9446,7 @@ impl VM {
                                             }
                                         }
                                     }
-                                } else if !js_obj.extensible() {
+                                } else if !arr.header.extensible() {
                                     if self.frames[self.frame_index].is_strict_frame {
                                         self.set_pending_type_error(
                                             ctx,
@@ -9500,6 +9493,7 @@ impl VM {
                                         );
                                     }
                                 }
+                            }
                             }
                         } else if js_obj.obj_type() == crate::object::object::ObjectType::TypedArray {
                             let idx = key_val.get_int() as usize;
@@ -10163,13 +10157,11 @@ impl VM {
                             if js_obj.is_dense_array() && key_val.is_int() {
                                 let idx = key_val.get_int();
                                 if idx >= 0 {
-                                    let ptr = obj_val.get_ptr();
-                                    let arr = unsafe {
-                                        &mut *(ptr as *mut crate::object::array_obj::JSArrayObject)
-                                    };
-                                    if (idx as usize) < arr.elements.len() {
-                                        arr.elements[idx as usize] = JSValue::undefined();
-                                        deleted = true;
+                                    if let Some(arr) = js_obj.as_dense_array_mut() {
+                                        if (idx as usize) < arr.elements.len() {
+                                            arr.elements[idx as usize] = JSValue::undefined();
+                                            deleted = true;
+                                        }
                                     }
                                 }
                             }
@@ -10979,27 +10971,17 @@ impl VM {
                         let mut excluded = std::collections::HashSet::new();
                         if keys_val.is_object() {
                             let keys_obj = keys_val.as_object();
-                            let (len, dense) = if keys_obj.is_dense_array() {
-                                let arr = unsafe {
-                                    &*(keys_val.get_ptr()
-                                        as *const crate::object::array_obj::JSArrayObject)
-                                };
-                                (arr.elements.len(), true)
+                            let dense_arr = keys_obj.as_dense_array();
+                            let len = if let Some(arr) = dense_arr {
+                                arr.elements.len()
                             } else {
-                                (
-                                    keys_obj
-                                        .get(ctx.common_atoms.length)
-                                        .map(|v| v.get_int() as usize)
-                                        .unwrap_or(0),
-                                    false,
-                                )
+                                keys_obj
+                                    .get(ctx.common_atoms.length)
+                                    .map(|v| v.get_int() as usize)
+                                    .unwrap_or(0)
                             };
                             for i in 0..len {
-                                let k = if dense {
-                                    let arr = unsafe {
-                                        &*(keys_val.get_ptr()
-                                            as *const crate::object::array_obj::JSArrayObject)
-                                    };
+                                let k = if let Some(arr) = dense_arr {
                                     arr.get(i).unwrap_or(JSValue::undefined())
                                 } else {
                                     let key = self.int_atom(i, ctx);
@@ -11092,9 +11074,7 @@ impl VM {
                         let mut int_keys: Vec<i64> = Vec::new();
                         let mut str_keys: Vec<crate::runtime::atom::Atom> = Vec::new();
                         // Handle dense array indices
-                        if js_obj.is_dense_array() {
-                            let arr_obj =
-                                unsafe { &*(ptr as *mut crate::object::array_obj::JSArrayObject) };
+                        if let Some(arr_obj) = js_obj.as_dense_array() {
                             for i in 0..arr_obj.elements.len() {
                                 let idx_atom = ctx.intern(i.to_string().as_str());
                                 if !seen.contains(&idx_atom.0) {
@@ -11180,50 +11160,52 @@ impl VM {
                     let dst_val = self.get_reg(dst);
                     let src_val = self.get_reg(src);
                     if dst_val.is_object() && src_val.is_object() {
-                        let dst_ptr = dst_val.get_ptr();
-                        let src_ptr = src_val.get_ptr();
                         let is_src_array = src_val.as_object().is_dense_array();
                         let is_dst_array = dst_val.as_object().is_dense_array();
                         if is_src_array && is_dst_array {
-                            let dst_arr = unsafe {
-                                &mut *(dst_ptr as *mut crate::object::array_obj::JSArrayObject)
-                            };
-                            let src_arr = unsafe {
-                                &*(src_ptr as *const crate::object::array_obj::JSArrayObject)
-                            };
-                            for val in src_arr.elements.iter() {
-                                dst_arr.push(*val);
-                            }
-                            let len_atom = ctx.common_atoms.length;
-                            dst_arr
-                                .header
-                                .set(len_atom, JSValue::new_int(dst_arr.elements.len() as i64));
-                        } else if is_dst_array {
-                            let dst_arr = unsafe {
-                                &mut *(dst_ptr as *mut crate::object::array_obj::JSArrayObject)
-                            };
-                            let src_obj =
-                                unsafe { &*(src_ptr as *const crate::object::object::JSObject) };
-                            let len_atom = ctx.common_atoms.length;
-                            let arr_len = src_obj
-                                .get(len_atom)
-                                .map(|v| v.get_int() as usize)
-                                .unwrap_or(0);
-                            if let Some(elems) = src_obj.get_array_elements() {
-                                for val in elems.iter() {
-                                    dst_arr.push(*val);
+                            let src_len = src_val
+                                .as_object()
+                                .as_dense_array()
+                                .map_or(0, |a| a.elements.len());
+                            for i in 0..src_len {
+                                let v = match src_val.as_object().as_dense_array() {
+                                    Some(a) => a.elements[i],
+                                    None => break,
+                                };
+                                if let Some(dst_arr) = dst_val.as_object_mut().as_dense_array_mut() {
+                                    dst_arr.push(v);
                                 }
-                            } else {
-                                for i in 0..arr_len {
-                                    let key = ctx.intern(&i.to_string());
-                                    if let Some(val) = src_obj.get(key) {
-                                        dst_arr.push(val);
+                            }
+                            if let Some(dst_arr) = dst_val.as_object_mut().as_dense_array_mut() {
+                                let len_atom = ctx.common_atoms.length;
+                                dst_arr
+                                    .header
+                                    .set(len_atom, JSValue::new_int(dst_arr.elements.len() as i64));
+                            }
+                        } else if is_dst_array {
+                            let src_obj = src_val.as_object();
+                            if let Some(dst_arr) = dst_val.as_object_mut().as_dense_array_mut() {
+                                let len_atom = ctx.common_atoms.length;
+                                let arr_len = src_obj
+                                    .get(len_atom)
+                                    .map(|v| v.get_int() as usize)
+                                    .unwrap_or(0);
+                                if let Some(elems) = src_obj.get_array_elements() {
+                                    for val in elems.iter() {
+                                        dst_arr.push(*val);
+                                    }
+                                } else {
+                                    for i in 0..arr_len {
+                                        let key = ctx.intern(&i.to_string());
+                                        if let Some(val) = src_obj.get(key) {
+                                            dst_arr.push(val);
+                                        }
                                     }
                                 }
+                                dst_arr
+                                    .header
+                                    .set(len_atom, JSValue::new_int(dst_arr.elements.len() as i64));
                             }
-                            dst_arr
-                                .header
-                                .set(len_atom, JSValue::new_int(dst_arr.elements.len() as i64));
                         }
                     }
                 }
@@ -11233,27 +11215,25 @@ impl VM {
                     let arr_val = self.get_reg(arr_reg);
                     let val = self.get_reg(val_reg);
                     if arr_val.is_object() {
-                        let arr_ptr = arr_val.get_ptr();
-                        let arr = unsafe {
-                            &mut *(arr_ptr as *mut crate::object::array_obj::JSArrayObject)
-                        };
-                        arr.push(val);
-                        let len_atom = ctx.common_atoms.length;
-                        let new_len = arr.elements.len() as i64;
-                        if !arr.header.has_own(len_atom) {
-                            arr.header.define_property(
-                                len_atom,
-                                crate::object::object::PropertyDescriptor {
-                                    value: Some(JSValue::new_int(new_len)),
-                                    writable: true,
-                                    enumerable: false,
-                                    configurable: false,
-                                    get: None,
-                                    set: None,
-                                },
-                            );
-                        } else {
-                            arr.header.set(len_atom, JSValue::new_int(new_len));
+                        if let Some(arr) = arr_val.as_object_mut().as_dense_array_mut() {
+                            arr.push(val);
+                            let len_atom = ctx.common_atoms.length;
+                            let new_len = arr.elements.len() as i64;
+                            if !arr.header.has_own(len_atom) {
+                                arr.header.define_property(
+                                    len_atom,
+                                    crate::object::object::PropertyDescriptor {
+                                        value: Some(JSValue::new_int(new_len)),
+                                        writable: true,
+                                        enumerable: false,
+                                        configurable: false,
+                                        get: None,
+                                        set: None,
+                                    },
+                                );
+                            } else {
+                                arr.header.set(len_atom, JSValue::new_int(new_len));
+                            }
                         }
                     }
                 }
@@ -11263,36 +11243,32 @@ impl VM {
                     let arr_val = self.get_reg(arr_reg);
                     let src_val = self.get_reg(src_reg);
                     if arr_val.is_object() && src_val.is_object() {
-                        let src_values = {
-                            let src_ptr = src_val.get_ptr();
-                            let src = unsafe {
-                                &*(src_ptr as *const crate::object::array_obj::JSArrayObject)
-                            };
-                            src.elements.clone()
-                        };
-                        let arr_ptr = arr_val.get_ptr();
-                        let arr = unsafe {
-                            &mut *(arr_ptr as *mut crate::object::array_obj::JSArrayObject)
-                        };
-                        for val in src_values {
-                            arr.push(val);
-                        }
-                        let len_atom = ctx.common_atoms.length;
-                        let new_len = arr.elements.len() as i64;
-                        if !arr.header.has_own(len_atom) {
-                            arr.header.define_property(
-                                len_atom,
-                                crate::object::object::PropertyDescriptor {
-                                    value: Some(JSValue::new_int(new_len)),
-                                    writable: true,
-                                    enumerable: false,
-                                    configurable: false,
-                                    get: None,
-                                    set: None,
-                                },
-                            );
-                        } else {
-                            arr.header.set(len_atom, JSValue::new_int(new_len));
+                        let src_values = src_val
+                            .as_object()
+                            .as_dense_array()
+                            .map(|src| src.elements.clone())
+                            .unwrap_or_default();
+                        if let Some(arr) = arr_val.as_object_mut().as_dense_array_mut() {
+                            for val in src_values {
+                                arr.push(val);
+                            }
+                            let len_atom = ctx.common_atoms.length;
+                            let new_len = arr.elements.len() as i64;
+                            if !arr.header.has_own(len_atom) {
+                                arr.header.define_property(
+                                    len_atom,
+                                    crate::object::object::PropertyDescriptor {
+                                        value: Some(JSValue::new_int(new_len)),
+                                        writable: true,
+                                        enumerable: false,
+                                        configurable: false,
+                                        get: None,
+                                        set: None,
+                                    },
+                                );
+                            } else {
+                                arr.header.set(len_atom, JSValue::new_int(new_len));
+                            }
                         }
                     }
                 }
@@ -12335,18 +12311,13 @@ impl VM {
                     let arr_val = self.get_reg(arr_reg);
                     let mut args = Vec::new();
                     if arr_val.is_object() {
-                        let arr_ptr = arr_val.get_ptr();
-                        let is_jsarray = arr_val.as_object().is_dense_array();
-                        if is_jsarray {
-                            let arr = unsafe {
-                                &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                            };
-                            for val in arr.elements.iter() {
+                        let arr = arr_val.as_object();
+                        let len_atom = ctx.common_atoms.length;
+                        if let Some(dense) = arr.as_dense_array() {
+                            for val in dense.elements.iter() {
                                 args.push(*val);
                             }
                         } else {
-                            let arr = arr_val.as_object();
-                            let len_atom = ctx.common_atoms.length;
                             let arr_len =
                                 arr.get(len_atom).map(|v| v.get_int() as usize).unwrap_or(0);
                             if let Some(elems) = arr.get_array_elements() {
@@ -14255,10 +14226,7 @@ impl VM {
         }
 
         let js_obj = unsafe { JSValue::object_from_ptr(src_val.get_ptr()) };
-        if js_obj.is_dense_array() {
-            let array = unsafe {
-                &*(src_val.get_ptr() as *const crate::object::array_obj::JSArrayObject)
-            };
+        if let Some(array) = js_obj.as_dense_array() {
             for index in 0..array.elements.len() {
                 integer_keys.push((index as u64, ctx.int_atom_mut(index)));
             }
@@ -14447,11 +14415,8 @@ impl VM {
         if let Some(v) = js_obj.get(atom) {
             return Ok(v);
         }
-        if js_obj.is_dense_array() {
+        if let Some(array) = js_obj.as_dense_array() {
             if let Some(index) = ctx.atom_table().get_array_index(atom) {
-                let array = unsafe {
-                    &*(obj.get_ptr() as *const crate::object::array_obj::JSArrayObject)
-                };
                 if let Some(v) = array.elements.get(index).copied() {
                     return Ok(v);
                 }
@@ -14682,10 +14647,8 @@ impl VM {
         if let Some(v) = js_obj.get_own(atom) {
             return Ok(v);
         }
-        if js_obj.is_dense_array() {
+        if let Some(array) = js_obj.as_dense_array() {
             if let Some(index) = ctx.atom_table().get_array_index(atom) {
-                let array =
-                    unsafe { &*(ptr as *const crate::object::array_obj::JSArrayObject) };
                 if let Some(v) = array.elements.get(index).copied() {
                     return Ok(v);
                 }
@@ -14710,11 +14673,8 @@ impl VM {
             if let Some(v) = proto.get_own(atom) {
                 return Ok(v);
             }
-            if proto.is_dense_array() {
+            if let Some(array) = proto.as_dense_array() {
                 if let Some(index) = ctx.atom_table().get_array_index(atom) {
-                    let array = unsafe {
-                        &*(proto_ptr as *const crate::object::array_obj::JSArrayObject)
-                    };
                     if let Some(v) = array.elements.get(index).copied() {
                         return Ok(v);
                     }
@@ -14869,12 +14829,8 @@ impl VM {
                 }
                 return self.define_data_on_receiver(ctx, receiver, key, atom, value);
             }
-            if obj.is_dense_array() {
+            if let Some(array) = obj.as_dense_array() {
                 if let Some(index) = ctx.atom_table().get_array_index(atom) {
-                    let array = unsafe {
-                        &*(current.get_ptr()
-                            as *const crate::object::array_obj::JSArrayObject)
-                    };
                     if index < array.elements.len() {
                         return self.define_data_on_receiver(ctx, receiver, key, atom, value);
                     }
@@ -14935,12 +14891,8 @@ impl VM {
         }
         let atom = self.key_value_to_atom(ctx, key);
         let obj = unsafe { obj_val.as_object() };
-        if obj.is_dense_array() {
+        if let Some(array) = obj.as_dense_array() {
             if let Some(index) = ctx.atom_table().get_array_index(atom) {
-                let array = unsafe {
-                    &*(obj_val.get_ptr()
-                        as *const crate::object::array_obj::JSArrayObject)
-                };
                 if let Some(v) = array.elements.get(index).copied() {
                     return Ok(Some(crate::object::object::PropertyDescriptor {
                         value: Some(v),
@@ -15400,14 +15352,8 @@ impl VM {
                 }
                 return Ok(false);
             } else if arr_val.is_object() {
-                let arr_ptr = arr_val.get_ptr();
-                let is_jsarray =
-                    unsafe { &*(arr_ptr as *const crate::object::object::JSObject) }
-                        .is_dense_array();
-                if is_jsarray {
-                    let arr = unsafe {
-                        &*(arr_ptr as *const crate::object::array_obj::JSArrayObject)
-                    };
+                let arr_obj = arr_val.as_object();
+                if let Some(arr) = arr_obj.as_dense_array() {
                     let length = arr
                         .header
                         .get(ctx.common_atoms.length)
@@ -16101,11 +16047,8 @@ impl VM {
                     return Some(v);
                 }
             }
-            if js_obj.is_dense_array() {
+            if let Some(array) = js_obj.as_dense_array() {
                 if let Some(index) = ctx.atom_table().get_array_index(atom) {
-                    let array = unsafe {
-                        &*(ptr as *const crate::object::array_obj::JSArrayObject)
-                    };
                     if let Some(v) = array.elements.get(index).copied() {
                         self.set_reg(dst, v);
                         return Some(v);
@@ -17087,11 +17030,10 @@ impl VM {
                     return false;
                 }
                 value = JSValue::new_int(new_len as i64);
-                let arr = unsafe {
-                    &mut *(ptr as *mut crate::object::array_obj::JSArrayObject)
-                };
-                if (new_len as usize) < arr.elements.len() {
-                    arr.elements.truncate(new_len as usize);
+                if let Some(arr) = js_obj.as_dense_array_mut() {
+                    if (new_len as usize) < arr.elements.len() {
+                        arr.elements.truncate(new_len as usize);
+                    }
                 }
             }
             if js_obj.is_mapped_arguments() {

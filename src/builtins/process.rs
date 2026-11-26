@@ -158,9 +158,8 @@ fn parse_js_array(ctx: &mut JSContext, arg: Option<&JSValue>) -> Vec<String> {
     };
     let obj = obj_val.as_object();
 
-    let len = if obj.is_dense_array() {
-        let arr_ptr = obj_val.get_ptr() as *const crate::object::array_obj::JSArrayObject;
-        unsafe { &*arr_ptr }.len()
+    let len = if let Some(arr) = obj.as_dense_array() {
+        arr.len()
     } else {
         let len_val = obj.get(ctx.intern("length")).unwrap_or(JSValue::new_int(0));
         if len_val.is_int() {
@@ -172,9 +171,7 @@ fn parse_js_array(ctx: &mut JSContext, arg: Option<&JSValue>) -> Vec<String> {
 
     let mut result = Vec::with_capacity(len);
     for i in 0..len {
-        if obj.is_dense_array() {
-            let arr_ptr = obj_val.get_ptr() as *const crate::object::array_obj::JSArrayObject;
-            let arr = unsafe { &*arr_ptr };
+        if let Some(arr) = obj.as_dense_array() {
             if let Some(val) = arr.get(i) {
                 if val.is_string() {
                     result.push(ctx.get_atom_str(val.get_atom()).to_string());
