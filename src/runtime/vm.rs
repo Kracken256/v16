@@ -10263,6 +10263,8 @@ impl VM {
                         let atom = s.get_atom();
                         js_obj.has_property(atom) || ctx.array_index_has_own(&obj_val, atom)
                     };
+                    let result =
+                        result || crate::builtins::typedarray::ta_has_index(ctx, js_obj, key_val);
                     self.set_reg(dst, JSValue::bool(result));
                 }
                 Opcode::InstanceOf => {
@@ -11094,6 +11096,16 @@ impl VM {
                             let arr_obj =
                                 unsafe { &*(ptr as *mut crate::object::array_obj::JSArrayObject) };
                             for i in 0..arr_obj.elements.len() {
+                                let idx_atom = ctx.intern(i.to_string().as_str());
+                                if !seen.contains(&idx_atom.0) {
+                                    seen.push(idx_atom.0);
+                                    int_keys.push(i as i64);
+                                }
+                            }
+                        }
+                        if js_obj.obj_type() == crate::object::object::ObjectType::TypedArray {
+                            let len = crate::builtins::typedarray::ta_get_length(ctx, js_obj);
+                            for i in 0..len {
                                 let idx_atom = ctx.intern(i.to_string().as_str());
                                 if !seen.contains(&idx_atom.0) {
                                     seen.push(idx_atom.0);

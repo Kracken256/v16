@@ -74,16 +74,19 @@ fn create_typed_array(
         obj.prototype = Some(ta_proto_ptr);
     }
 
-    obj.set(ctx.intern("buffer"), buffer);
-    obj.set(
+    crate::builtins::global::set_non_enumerable(&mut obj, ctx.intern("buffer"), buffer);
+    crate::builtins::global::set_non_enumerable(
+        &mut obj,
         ctx.intern("byteOffset"),
         JSValue::new_int(byte_offset as i64),
     );
-    obj.set(
+    crate::builtins::global::set_non_enumerable(
+        &mut obj,
         ctx.intern("byteLength"),
         JSValue::new_int((element_length * bytes_per_element) as i64),
     );
-    obj.set(
+    crate::builtins::global::set_non_enumerable(
+        &mut obj,
         ctx.intern("length"),
         JSValue::new_int(element_length as i64),
     );
@@ -1077,10 +1080,32 @@ fn ta_check_this(args: &[JSValue], ctx: &mut JSContext) -> bool {
     true
 }
 
-fn ta_get_length(ctx: &mut JSContext, obj: &JSObject) -> usize {
+pub fn ta_get_length(ctx: &mut JSContext, obj: &JSObject) -> usize {
     obj.get(ctx.common_atoms.length)
         .map(|v| v.get_int() as usize)
         .unwrap_or(0)
+}
+
+pub fn ta_has_index(ctx: &mut JSContext, obj: &JSObject, key: JSValue) -> bool {
+    if obj.obj_type() != ObjectType::TypedArray {
+        return false;
+    }
+    let index = if key.is_int() {
+        let n = key.get_int();
+        if n < 0 {
+            return false;
+        }
+        n as usize
+    } else if key.is_string() {
+        let s = ctx.get_atom_str(key.get_atom());
+        match s.parse::<usize>() {
+            Ok(n) if n.to_string() == s => n,
+            _ => return false,
+        }
+    } else {
+        return false;
+    };
+    index < ta_get_length(ctx, obj)
 }
 
 pub fn ta_get_element(ctx: &mut JSContext, obj: &JSObject, index: usize) -> Option<JSValue> {
@@ -2232,26 +2257,43 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     );
 
     let mut ta_proto = JSObject::new();
-    ta_proto.set(ctx.intern("forEach"), create_builtin_function(ctx, "ta_forEach"));
-    ta_proto.set(ctx.intern("every"), create_builtin_function(ctx, "ta_every"));
-    ta_proto.set(ctx.intern("some"), create_builtin_function(ctx, "ta_some"));
-    ta_proto.set(ctx.intern("find"), create_builtin_function(ctx, "ta_find"));
-    ta_proto.set(ctx.intern("findIndex"), create_builtin_function(ctx, "ta_findIndex"));
-    ta_proto.set(ctx.intern("findLast"), create_builtin_function(ctx, "ta_findLast"));
-    ta_proto.set(ctx.intern("findLastIndex"), create_builtin_function(ctx, "ta_findLastIndex"));
-    ta_proto.set(ctx.intern("reduce"), create_builtin_function(ctx, "ta_reduce"));
-    ta_proto.set(ctx.intern("reduceRight"), create_builtin_function(ctx, "ta_reduceRight"));
-    ta_proto.set(ctx.intern("map"), create_builtin_function(ctx, "ta_map"));
-    ta_proto.set(ctx.intern("filter"), create_builtin_function(ctx, "ta_filter"));
-    ta_proto.set(ctx.intern("indexOf"), create_builtin_function(ctx, "ta_indexOf"));
-    ta_proto.set(ctx.intern("lastIndexOf"), create_builtin_function(ctx, "ta_lastIndexOf"));
-    ta_proto.set(ctx.intern("includes"), create_builtin_function(ctx, "ta_includes"));
-    ta_proto.set(ctx.intern("join"), create_builtin_function(ctx, "ta_join"));
-    ta_proto.set(ctx.intern("at"), create_builtin_function(ctx, "ta_at"));
     let ta_sym_iter = crate::builtins::symbol::get_symbol_iterator_atom(ctx);
     let ta_values_fn = create_builtin_function(ctx, "ta_values");
-    ta_proto.set(ctx.intern("values"), ta_values_fn);
-    ta_proto.set(ta_sym_iter, ta_values_fn);
+    for (name, builtin) in [
+        ("forEach", "ta_forEach"),
+        ("every", "ta_every"),
+        ("some", "ta_some"),
+        ("find", "ta_find"),
+        ("findIndex", "ta_findIndex"),
+        ("findLast", "ta_findLast"),
+        ("findLastIndex", "ta_findLastIndex"),
+        ("reduce", "ta_reduce"),
+        ("reduceRight", "ta_reduceRight"),
+        ("map", "ta_map"),
+        ("filter", "ta_filter"),
+        ("indexOf", "ta_indexOf"),
+        ("lastIndexOf", "ta_lastIndexOf"),
+        ("includes", "ta_includes"),
+        ("join", "ta_join"),
+        ("at", "ta_at"),
+        ("keys", "ta_keys"),
+        ("entries", "ta_entries"),
+        ("toString", "ta_toString"),
+        ("reverse", "ta_reverse"),
+        ("slice", "ta_slice"),
+        ("fill", "ta_fill"),
+        ("copyWithin", "ta_copyWithin"),
+        ("sort", "ta_sort"),
+        ("subarray", "ta_subarray"),
+    ] {
+        crate::builtins::global::set_non_enumerable(
+            &mut ta_proto,
+            ctx.intern(name),
+            create_builtin_function(ctx, builtin),
+        );
+    }
+    crate::builtins::global::set_non_enumerable(&mut ta_proto, ctx.intern("values"), ta_values_fn);
+    crate::builtins::global::set_non_enumerable(&mut ta_proto, ta_sym_iter, ta_values_fn);
     for (name, builtin) in [
         ("buffer", "typedarray_buffer"),
         ("byteLength", "typedarray_byteLength"),
@@ -2261,15 +2303,6 @@ pub fn init_typed_array(ctx: &mut JSContext) {
         let getter = create_builtin_function(ctx, builtin);
         ta_proto.define_accessor_flags(ctx.intern(name), Some(getter), None, false, true);
     }
-    ta_proto.set(ctx.intern("keys"), create_builtin_function(ctx, "ta_keys"));
-    ta_proto.set(ctx.intern("entries"), create_builtin_function(ctx, "ta_entries"));
-    ta_proto.set(ctx.intern("toString"), create_builtin_function(ctx, "ta_toString"));
-    ta_proto.set(ctx.intern("reverse"), create_builtin_function(ctx, "ta_reverse"));
-    ta_proto.set(ctx.intern("slice"), create_builtin_function(ctx, "ta_slice"));
-    ta_proto.set(ctx.intern("fill"), create_builtin_function(ctx, "ta_fill"));
-    ta_proto.set(ctx.intern("copyWithin"), create_builtin_function(ctx, "ta_copyWithin"));
-    ta_proto.set(ctx.intern("sort"), create_builtin_function(ctx, "ta_sort"));
-    ta_proto.set(ctx.intern("subarray"), create_builtin_function(ctx, "ta_subarray"));
 
     let mut ta_parent = JSObject::new();
     for (name, builtin) in [
