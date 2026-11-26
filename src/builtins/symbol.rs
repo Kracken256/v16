@@ -72,35 +72,36 @@ pub(crate) fn to_string_via_vm(ctx: &mut JSContext, value: JSValue) -> Option<At
     if value.is_null() { return Some(ctx.intern("null")); }
     if value.is_symbol() { return None; }
     if value.is_object() {
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-            let obj = value.as_object();
-            let to_string_val = obj.get(ctx.common_atoms.to_string);
-            let to_string_is_callable = to_string_val.map_or(false, |v| v.is_function());
-            if to_string_is_callable {
-                let f = to_string_val.unwrap();
-                if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
-                    if !r.is_object() {
-                        return to_string_via_vm(ctx, r);
+        return ctx
+            .with_vm(|vm, ctx| {
+                let obj = value.as_object();
+                let to_string_val = obj.get(ctx.common_atoms.to_string);
+                let to_string_is_callable = to_string_val.map_or(false, |v| v.is_function());
+                if to_string_is_callable {
+                    let f = to_string_val.unwrap();
+                    if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
+                        if !r.is_object() {
+                            return to_string_via_vm(ctx, r);
+                        }
+                    } else {
+                        return None;
                     }
-                } else {
-                    return None;
                 }
-            }
-            let value_of_val = obj.get(ctx.common_atoms.value_of);
-            let value_of_is_callable = value_of_val.map_or(false, |v| v.is_function());
-            if value_of_is_callable {
-                let f = value_of_val.unwrap();
-                if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
-                    if !r.is_object() {
-                        return to_string_via_vm(ctx, r);
+                let value_of_val = obj.get(ctx.common_atoms.value_of);
+                let value_of_is_callable = value_of_val.map_or(false, |v| v.is_function());
+                if value_of_is_callable {
+                    let f = value_of_val.unwrap();
+                    if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
+                        if !r.is_object() {
+                            return to_string_via_vm(ctx, r);
+                        }
+                    } else {
+                        return None;
                     }
-                } else {
-                    return None;
                 }
-            }
-        }
-        return None;
+                None
+            })
+            .flatten();
     }
     None
 }
