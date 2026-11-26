@@ -621,7 +621,7 @@ pub struct Bytecode {
     pub locals_count: u32,
     pub param_count: u16,
     pub line_number_table: Option<std::sync::Arc<crate::compiler::location::LineNumberTable>>,
-    pub ic_table: crate::compiler::InlineCacheTable,
+    pub ic_table: std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>,
 
     pub shared_nested_bytecode: Option<std::sync::Arc<NestedBytecode>>,
     pub uses_arguments: bool,
@@ -657,7 +657,7 @@ pub struct NestedBytecode {
 
     pub source_text: Option<String>,
 
-    pub ic_table: std::cell::UnsafeCell<crate::compiler::InlineCacheTable>,
+    pub ic_table: std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>,
 
     pub nested_bytecodes: std::cell::RefCell<Vec<(u32, std::sync::Arc<NestedBytecode>)>>,
 }
@@ -684,7 +684,7 @@ impl Bytecode {
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             line_number_table: None,
-            ic_table: crate::compiler::InlineCacheTable::new(),
+            ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
             shared_nested_bytecode: None,
             nested_bytecodes: Vec::new(),
             is_simple_constructor: false,
@@ -695,11 +695,12 @@ impl Bytecode {
     }
 
     #[inline(always)]
-    pub fn effective_ic_table_ptr(&self) -> *mut crate::compiler::InlineCacheTable {
+    pub fn effective_ic_table(
+        &self,
+    ) -> std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>> {
         match &self.shared_nested_bytecode {
-            Some(nested) => nested.ic_table.get(),
-            None => &self.ic_table as *const crate::compiler::InlineCacheTable
-                as *mut crate::compiler::InlineCacheTable,
+            Some(nested) => nested.ic_table.clone(),
+            None => self.ic_table.clone(),
         }
     }
 
@@ -1606,7 +1607,7 @@ impl Bytecode {
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
             line_number_table: None,
-            ic_table: crate::compiler::InlineCacheTable::new(),
+            ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
             shared_nested_bytecode: None,
             nested_bytecodes: Vec::new(),
             is_simple_constructor: false,
@@ -1690,7 +1691,7 @@ mod tests {
             locals_count: 3,
             param_count: 0,
             line_number_table: None,
-            ic_table: crate::compiler::InlineCacheTable::new(),
+            ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
             shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,
@@ -1750,7 +1751,7 @@ mod tests {
             locals_count: 1,
             param_count: 0,
             line_number_table: None,
-            ic_table: crate::compiler::InlineCacheTable::new(),
+            ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
             shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,
@@ -1804,7 +1805,7 @@ mod tests {
             locals_count: 3,
             param_count: 0,
             line_number_table: None,
-            ic_table: crate::compiler::InlineCacheTable::new(),
+            ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
             shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,

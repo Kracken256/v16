@@ -3086,7 +3086,7 @@ impl CodeGenerator {
             } else {
                 Some(std::sync::Arc::new(line_table))
             },
-            ic_table: crate::compiler::InlineCacheTable::new(),
+            ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
             shared_nested_bytecode: None,
             uses_arguments: self.function_uses_arguments,
             has_simple_parameters: is_simple_params,

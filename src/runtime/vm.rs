@@ -44,7 +44,7 @@ pub struct CallFrame {
     pub constants_ptr: *const JSValue,
     pub constants_len: usize,
     pub function_ptr: Option<usize>,
-    pub ic_table_ptr: *mut crate::compiler::InlineCacheTable,
+    pub ic_table: Option<std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>>,
     pub this_value: JSValue,
     pub saved_args: Vec<JSValue>,
     pub upvalue_sync_map: Option<Box<FxHashMap<u16, std::rc::Rc<std::cell::Cell<JSValue>>>>>,
@@ -86,7 +86,7 @@ impl CallFrame {
             constants_ptr: std::ptr::null(),
             constants_len: 0,
             function_ptr: None,
-            ic_table_ptr: std::ptr::null_mut(),
+            ic_table: None,
             this_value: JSValue::undefined(),
             saved_args: Vec::new(),
             upvalue_sync_map: None,
@@ -738,7 +738,7 @@ pub struct VM {
 
     cached_upvalue_sync_bitset: u64,
 
-    cached_ic_table_ptr: *mut crate::compiler::InlineCacheTable,
+    cached_ic_table: Option<std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>>,
 
     exception_handlers: Vec<ExceptionHandler>,
 
@@ -847,7 +847,7 @@ impl VM {
             cached_registers_base: 0,
             cached_has_upvalue_sync: false,
             cached_upvalue_sync_bitset: 0,
-            cached_ic_table_ptr: std::ptr::null_mut(),
+            cached_ic_table: None,
             exception_handlers: Vec::new(),
             pending_throw: None,
             last_caught_exception: None,
@@ -1224,7 +1224,7 @@ impl VM {
         self.cached_registers_base = frame.registers_base;
         self.cached_has_upvalue_sync = frame.upvalue_sync_map.is_some();
         self.cached_upvalue_sync_bitset = frame.upvalue_sync_bitset;
-        self.cached_ic_table_ptr = frame.ic_table_ptr;
+        self.cached_ic_table = frame.ic_table.clone();
     }
 
     fn push_frame(
@@ -1321,16 +1321,14 @@ impl VM {
             })
             .unwrap_or(JSValue::undefined());
         frame.param_env_own = false;
-        frame.ic_table_ptr = function_ptr
-            .and_then(|fptr| {
-                let js_func = JSValue::new_function(fptr);
-                let js_func = js_func.as_function();
-                js_func
-                    .bytecode
-                    .as_ref()
-                    .map(|rb| rb.effective_ic_table_ptr())
-            })
-            .unwrap_or(std::ptr::null_mut());
+        frame.ic_table = function_ptr.and_then(|fptr| {
+            let js_func = JSValue::new_function(fptr);
+            let js_func = js_func.as_function();
+            js_func
+                .bytecode
+                .as_ref()
+                .map(|rb| rb.effective_ic_table())
+        });
         frame.this_value = this_value;
         frame.dst_reg = dst_reg;
         frame.arg_count = arg_count;
@@ -1369,7 +1367,7 @@ impl VM {
         self.cached_registers_base = base;
         self.cached_has_upvalue_sync = false;
         self.cached_upvalue_sync_bitset = 0;
-        self.cached_ic_table_ptr = frame.ic_table_ptr;
+        self.cached_ic_table = frame.ic_table.clone();
     }
 
     #[inline(always)]
@@ -1383,7 +1381,7 @@ impl VM {
         constants_len: usize,
         return_pc: usize,
         function_ptr: Option<usize>,
-        ic_table_ptr: *mut crate::compiler::InlineCacheTable,
+        ic_table: Option<std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>>,
         this_value: JSValue,
         dst_reg: u16,
         arg_count: u16,
@@ -1446,7 +1444,7 @@ impl VM {
             })
             .unwrap_or(JSValue::undefined());
         frame.param_env_own = false;
-        frame.ic_table_ptr = ic_table_ptr;
+        frame.ic_table = ic_table;
         frame.this_value = this_value;
         frame.dst_reg = dst_reg;
         frame.arg_count = arg_count;
@@ -1493,7 +1491,7 @@ impl VM {
         self.cached_registers_base = base;
         self.cached_has_upvalue_sync = false;
         self.cached_upvalue_sync_bitset = 0;
-        self.cached_ic_table_ptr = ic_table_ptr;
+        self.cached_ic_table = self.frames[self.frame_index].ic_table.clone();
     }
 
     #[inline(never)]
@@ -2118,7 +2116,7 @@ impl VM {
                     rb.effective_const_len(),
                     return_pc,
                     Some(ptr),
-                    rb.effective_ic_table_ptr(),
+                    Some(rb.effective_ic_table()),
                     fn_this,
                     dst,
                     argc,
@@ -2507,23 +2505,59 @@ impl VM {
     }
 
     #[inline(always)]
-    fn ic_table(&self) -> Option<&crate::compiler::InlineCacheTable> {
-        let ptr = self.cached_ic_table_ptr;
-        if ptr.is_null() {
-            None
-        } else {
-            Some(unsafe { &*ptr })
-        }
+    fn ic_table(&self) -> Option<std::cell::Ref<'_, crate::compiler::InlineCacheTable>> {
+        self.cached_ic_table.as_ref().map(|table| table.borrow())
     }
 
     #[inline(always)]
-    fn ic_table_mut(&mut self) -> Option<&mut crate::compiler::InlineCacheTable> {
-        let ptr = self.cached_ic_table_ptr;
-        if ptr.is_null() {
-            None
-        } else {
-            Some(unsafe { &mut *ptr })
-        }
+    fn ic_table_mut(&mut self) -> Option<std::cell::RefMut<'_, crate::compiler::InlineCacheTable>> {
+        self.cached_ic_table
+            .as_ref()
+            .map(|table| table.borrow_mut())
+    }
+
+    #[inline(always)]
+    fn ic_get(
+        &self,
+        pc: usize,
+        shape_id: crate::object::shape::ShapeId,
+    ) -> Option<(u32, Option<usize>)> {
+        self.ic_table()
+            .and_then(|table| table.get(pc).and_then(|ic| ic.get(shape_id)))
+    }
+
+    #[inline(always)]
+    fn ic_get_transition(
+        &self,
+        pc: usize,
+        shape_id: crate::object::shape::ShapeId,
+    ) -> Option<(u32, bool)> {
+        self.ic_table()
+            .and_then(|table| table.get(pc).and_then(|ic| ic.get_transition(shape_id)))
+    }
+
+    #[inline(always)]
+    fn ic_get_reads0_values(&self, pc: usize, shape_id: usize) -> Option<(bool, u32, usize)> {
+        self.ic_table()
+            .map(|table| table.get_reads0_values(pc, shape_id))
+    }
+
+    #[inline(always)]
+    fn ic_get_reads123_values(&self, pc: usize, shape_id: usize) -> Option<(bool, u32, usize)> {
+        self.ic_table()
+            .map(|table| table.get_reads123_values(pc, shape_id))
+    }
+
+    #[inline(always)]
+    fn ic_write_no_accessor(&self, pc: usize, shape_id: crate::object::shape::ShapeId) -> bool {
+        self.ic_table()
+            .map_or(false, |table| table.get_write_no_accessor(pc, shape_id))
+    }
+
+    #[inline(always)]
+    fn ic_global_cache(&self, pc: usize, global_shape_id: usize, atom_id: u32) -> Option<u32> {
+        self.ic_table()
+            .and_then(|table| table.get_global_cache(pc, global_shape_id, atom_id))
     }
 
     #[inline(always)]
@@ -5584,7 +5618,7 @@ impl VM {
         frame.upvalue_sync_bitset = 0;
         frame.uses_arguments = false;
         frame.var_name_map = Some(bytecode.var_name_to_slot.clone());
-        frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
+        frame.ic_table = Some(bytecode.effective_ic_table());
         frame.super_ctor = JSValue::undefined();
         frame.super_base = JSValue::undefined();
         frame.new_target = JSValue::undefined();
@@ -6091,7 +6125,7 @@ impl VM {
             }
             frame.uses_arguments = false;
             frame.var_name_map = Some(bytecode.var_name_to_slot.clone());
-            frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
+            frame.ic_table = Some(bytecode.effective_ic_table());
 
             self.frame_index = 0;
             self.exception_handlers = self.pending_handlers.take().unwrap_or_default();
@@ -7822,11 +7856,8 @@ impl VM {
 
                                 let global_shape_id = global_obj.shape_id_cache;
                                 let mut ic_hit = false;
-                                if let Some(offset) = self
-                                    .ic_table()
-                                    .and_then(|ic_table| {
-                                        ic_table.get_global_cache(ic_pc, global_shape_id, atom.0)
-                                    })
+                                if let Some(offset) =
+                                    self.ic_global_cache(ic_pc, global_shape_id, atom.0)
                                 {
                                     result = global_obj
                                         .get_by_offset(offset as usize)
@@ -7869,7 +7900,7 @@ impl VM {
                                         result = value;
 
                                         if let Some(offset) = global_obj.find_offset(atom) {
-                                            if let Some(ic_table) = self.ic_table_mut() {
+                                            if let Some(mut ic_table) = self.ic_table_mut() {
                                                 ic_table.insert_global_cache(
                                                     ic_pc,
                                                     global_shape_id,
@@ -11817,7 +11848,7 @@ impl VM {
                         caller.constants_len,
                         self.pc,
                         function_ptr,
-                        caller.ic_table_ptr,
+                        caller.ic_table.clone(),
                         JSValue::undefined(),
                         dst,
                         1,
@@ -11923,7 +11954,7 @@ impl VM {
                             caller.constants_len,
                             self.pc,
                             function_ptr,
-                            caller.ic_table_ptr,
+                            caller.ic_table.clone(),
                             JSValue::undefined(),
                             dst,
                             argc,
@@ -12695,9 +12726,9 @@ impl VM {
                                             upvalue_descs: upvalue_descs.clone(),
                                             func_name_atom,
                                             source_text: None,
-                                            ic_table: std::cell::UnsafeCell::new(
+                                            ic_table: std::rc::Rc::new(std::cell::RefCell::new(
                                                 crate::compiler::InlineCacheTable::new(),
-                                            ),
+                                            )),
                                             nested_bytecodes: std::cell::RefCell::new(Vec::new()),
                                         },
                                     );
@@ -12783,7 +12814,7 @@ impl VM {
                         locals_count,
                         param_count,
                         line_number_table: line_number_table_opt,
-                        ic_table: crate::compiler::InlineCacheTable::new(),
+                        ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
                         shared_nested_bytecode: None,
                         uses_arguments,
                         has_simple_parameters,
@@ -15791,7 +15822,7 @@ impl VM {
                             PRIM_NUMBER_SHAPE_ID
                         };
                         if let Some(offset) = pobj.find_offset(atom) {
-                            if let Some(ic_table) = self.ic_table_mut() {
+                            if let Some(mut ic_table) = self.ic_table_mut() {
                                 ic_table.ensure_capacity(pc + 1);
                                 if let Some(ic) = ic_table.get_mut(pc) {
                                     ic.insert(
@@ -15852,49 +15883,45 @@ impl VM {
             let mut ic_hit = false;
             if ic_pc != usize::MAX {
                 if let Some(shape_id) = js_obj.get_shape_id() {
-                    if let Some(ic_table) = self.ic_table() {
-                        if let Some(ic) = ic_table.get(pc) {
-                            if let Some((offset, proto_ptr)) = ic.get(shape_id) {
-                                if offset == u32::MAX && proto_ptr.is_none() {
-                                    self.set_reg(dst, JSValue::undefined());
-                                    ic_hit = true;
-                                } else {
-                                    let val = if let Some(proto) = proto_ptr {
-                                        let mut proto_matches = js_obj
-                                            .prototype
-                                            .map(|p| !p.is_null() && p as usize == proto)
-                                            .unwrap_or(false);
-                                        if !proto_matches {
-                                            let mut cur = js_obj.prototype;
-                                            let mut depth = 0u32;
-                                            while let Some(p) = cur {
-                                                if p.is_null() || depth > 1000 {
-                                                    break;
-                                                }
-                                                if p as usize == proto {
-                                                    proto_matches = true;
-                                                    break;
-                                                }
-                                                depth += 1;
-                                                let p_val = JSValue::new_object(p as usize);
-                                                cur = p_val.as_object().prototype;
-                                            }
+                    if let Some((offset, proto_ptr)) = self.ic_get(pc, shape_id) {
+                        if offset == u32::MAX && proto_ptr.is_none() {
+                            self.set_reg(dst, JSValue::undefined());
+                            ic_hit = true;
+                        } else {
+                            let val = if let Some(proto) = proto_ptr {
+                                let mut proto_matches = js_obj
+                                    .prototype
+                                    .map(|p| !p.is_null() && p as usize == proto)
+                                    .unwrap_or(false);
+                                if !proto_matches {
+                                    let mut cur = js_obj.prototype;
+                                    let mut depth = 0u32;
+                                    while let Some(p) = cur {
+                                        if p.is_null() || depth > 1000 {
+                                            break;
                                         }
-                                        if proto_matches {
-                                            let proto_obj = JSValue::new_object(proto);
-                                            let proto_obj = proto_obj.as_object();
-                                            proto_obj.get_by_offset(offset as usize)
-                                        } else {
-                                            None
+                                        if p as usize == proto {
+                                            proto_matches = true;
+                                            break;
                                         }
-                                    } else {
-                                        js_obj.get_by_offset(offset as usize)
-                                    };
-                                    if let Some(v) = val {
-                                        self.set_reg(dst, v);
-                                        ic_hit = true;
+                                        depth += 1;
+                                        let p_val = JSValue::new_object(p as usize);
+                                        cur = p_val.as_object().prototype;
                                     }
                                 }
+                                if proto_matches {
+                                    let proto_obj = JSValue::new_object(proto);
+                                    let proto_obj = proto_obj.as_object();
+                                    proto_obj.get_by_offset(offset as usize)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                js_obj.get_by_offset(offset as usize)
+                            };
+                            if let Some(v) = val {
+                                self.set_reg(dst, v);
+                                ic_hit = true;
                             }
                         }
                     }
@@ -15907,7 +15934,7 @@ impl VM {
                         let v = js_obj.get_by_offset(offset).unwrap_or(JSValue::undefined());
                         self.set_reg(dst, v);
                         if ic_pc != usize::MAX {
-                            if let Some(ic_table) = self.ic_table_mut() {
+                            if let Some(mut ic_table) = self.ic_table_mut() {
                                 ic_table.ensure_capacity(pc + 1);
                                 if let Some(ic) = ic_table.get_mut(pc) {
                                     ic.insert(shape_id, offset as u32, None);
@@ -15951,7 +15978,7 @@ impl VM {
                                         .unwrap_or(JSValue::undefined());
                                     self.set_reg(dst, v);
                                     if ic_pc != usize::MAX {
-                                        if let Some(ic_table) = self.ic_table_mut() {
+                                        if let Some(mut ic_table) = self.ic_table_mut() {
                                             ic_table.ensure_capacity(pc + 1);
                                             if let Some(ic) = ic_table.get_mut(pc) {
                                                 ic.insert(
@@ -16057,7 +16084,7 @@ impl VM {
                             if !found {
                                 self.set_reg(dst, JSValue::undefined());
                                 if ic_pc != usize::MAX {
-                                    if let Some(ic_table) = self.ic_table_mut() {
+                                    if let Some(mut ic_table) = self.ic_table_mut() {
                                         ic_table.ensure_capacity(pc + 1);
                                         if let Some(ic) = ic_table.get_mut(pc) {
                                             ic.insert(shape_id, u32::MAX, None);
@@ -16244,9 +16271,9 @@ impl VM {
             }
             let shape_id = js_obj.shape_id_cache;
             if shape_id != usize::MAX {
-                if let Some(ic_table) = self.ic_table() {
-                    let (ic_hit, r0_offset, r0_proto) =
-                        ic_table.get_reads0_values(instr_pc, shape_id);
+                if let Some((ic_hit, r0_offset, r0_proto)) =
+                    self.ic_get_reads0_values(instr_pc, shape_id)
+                {
                     if ic_hit {
                         if r0_proto == 0 {
                             let val = if r0_offset == u32::MAX {
@@ -16312,9 +16339,9 @@ impl VM {
         instr_pc: usize,
         shape_id: usize,
     ) -> bool {
-        if let Some(ic_table) = self.ic_table() {
-            let (ic_hit, r_offset, r_proto) =
-                ic_table.get_reads123_values(instr_pc, shape_id);
+        if let Some((ic_hit, r_offset, r_proto)) =
+            self.ic_get_reads123_values(instr_pc, shape_id)
+        {
             if ic_hit {
                 let js_obj = obj_val.as_object();
                 if r_proto == 0 {
@@ -16414,9 +16441,9 @@ impl VM {
             } else {
                 PRIM_NUMBER_SHAPE_ID
             };
-            if let Some(ic_table) = self.ic_table() {
-                let (ic_hit, r0_offset, r0_proto) =
-                    ic_table.get_reads0_values(instr_pc, pseudo_id);
+            if let Some((ic_hit, r0_offset, r0_proto)) =
+                self.ic_get_reads0_values(instr_pc, pseudo_id)
+            {
                 if ic_hit {
                     if r0_proto != 0 {
                         let proto_obj = JSValue::new_object(r0_proto);
@@ -16871,29 +16898,25 @@ impl VM {
                 }
             });
             if let Some(shape_id) = effective_shape_id {
-                if let Some(ic_table) = self.ic_table() {
-                    if let Some(ic) = ic_table.get(ic_pc) {
-                        if let Some((offset, is_transition)) = ic.get_transition(shape_id) {
-                            if is_transition {
-                                js_obj.push_prop_transition(
-                                    offset as usize,
-                                    atom,
-                                    value,
-                                    ctx.shape_cache_mut(),
-                                );
-                            } else {
-                                let off = offset as usize;
-                                if off < crate::object::object::INLINE_PROPS
-                                    && js_obj.has_no_deleted_props()
-                                {
-                                    js_obj.set_by_offset_fast(off, value);
-                                } else {
-                                    js_obj.set_by_offset(off, value);
-                                }
-                            }
-                            return true;
+                if let Some((offset, is_transition)) = self.ic_get_transition(ic_pc, shape_id) {
+                    if is_transition {
+                        js_obj.push_prop_transition(
+                            offset as usize,
+                            atom,
+                            value,
+                            ctx.shape_cache_mut(),
+                        );
+                    } else {
+                        let off = offset as usize;
+                        if off < crate::object::object::INLINE_PROPS
+                            && js_obj.has_no_deleted_props()
+                        {
+                            js_obj.set_by_offset_fast(off, value);
+                        } else {
+                            js_obj.set_by_offset(off, value);
                         }
                     }
+                    return true;
                 }
             }
 
@@ -16912,17 +16935,14 @@ impl VM {
 
             let (has_accessor, setter) = if pre_offset.is_some() {
                 (false, None)
-            } else if !self.cached_ic_table_ptr.is_null() {
+            } else if self.cached_ic_table.is_some() {
                 if let Some(shape_id) = js_obj.get_shape_id() {
-                    if self
-                        .ic_table()
-                        .map_or(false, |ic_table| ic_table.get_write_no_accessor(ic_pc, shape_id))
-                    {
+                    if self.ic_write_no_accessor(ic_pc, shape_id) {
                         (false, None)
                     } else {
                         let r = self.proto_chain_has_accessors(obj_val, atom);
                         if !r.0 {
-                            if let Some(ic_table) = self.ic_table_mut() {
+                            if let Some(mut ic_table) = self.ic_table_mut() {
                                 ic_table.set_write_no_accessor(ic_pc);
                             }
                         }
@@ -17026,7 +17046,7 @@ impl VM {
             let offset = pre_offset.or_else(|| js_obj.find_offset(atom));
             if let Some(offset) = offset {
                 if ic_pc != usize::MAX {
-                    if let Some(ic_table) = self.ic_table_mut() {
+                    if let Some(mut ic_table) = self.ic_table_mut() {
                         ic_table.ensure_capacity(ic_pc + 1);
                         if let Some(ic) = ic_table.get_mut(ic_pc) {
                             let was_transition = offset == pre_props_len;
@@ -18257,7 +18277,7 @@ mod tests {
             locals_count,
             param_count: 0,
             line_number_table: None,
-            ic_table: crate::compiler::InlineCacheTable::new(),
+            ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
             shared_nested_bytecode: None,
             uses_arguments: false,
             has_simple_parameters: false,
