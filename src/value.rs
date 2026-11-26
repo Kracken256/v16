@@ -374,7 +374,7 @@ impl JSValue {
             TAG_INT => self.get_int() != 0,
             TAG_BOOL => self.get_bool(),
             TAG_STRING => self.get_payload() != 0,
-            TAG_BIGINT => self.as_object().get_bigint_value() != 0,
+            TAG_BIGINT => !self.as_object().get_bigint_value().is_zero(),
             TAG_OBJECT | TAG_FUNC | TAG_SYMBOL => true,
             _ => false,
         }

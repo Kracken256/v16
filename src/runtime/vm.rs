@@ -6619,9 +6619,7 @@ impl VM {
                     } else if JSValue::both_raw_float(&a, &b) {
                         JSValue::new_float_raw(a.get_float() - b.get_float())
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        Self::create_bigint(a_int - b_int)
+                        Self::create_bigint(Self::get_bigint(&a).sub(&Self::get_bigint(&b)))
                     } else if a.is_int() && b.is_float() {
                         JSValue::new_float_raw(a.get_int() as f64 - b.get_float())
                     } else if a.is_float() && b.is_int() {
@@ -6685,9 +6683,7 @@ impl VM {
                     } else if JSValue::both_raw_float(&a, &b) {
                         JSValue::new_float_raw(a.get_float() * b.get_float())
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        Self::create_bigint(a_int * b_int)
+                        Self::create_bigint(Self::get_bigint(&a).mul(&Self::get_bigint(&b)))
                     } else if a.is_int() && b.is_float() {
                         JSValue::new_float(a.get_int() as f64 * b.get_float())
                     } else if a.is_float() && b.is_int() {
@@ -6723,13 +6719,12 @@ impl VM {
                     } else if JSValue::both_raw_float(&a, &b) {
                         JSValue::new_float_raw(a.get_float() / b.get_float())
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        if b_int != 0 {
-                            Self::create_bigint(a_int / b_int)
-                        } else {
-                            self.set_pending_range_error(ctx, "Division by zero");
-                            continue;
+                        match Self::get_bigint(&a).div_rem(&Self::get_bigint(&b)) {
+                            Some((quotient, _)) => Self::create_bigint(quotient),
+                            None => {
+                                self.set_pending_range_error(ctx, "Division by zero");
+                                continue;
+                            }
                         }
                     } else if a.is_int() && b.is_float() {
                         JSValue::new_float(a.get_int() as f64 / b.get_float())
@@ -6767,13 +6762,12 @@ impl VM {
                             JSValue::new_float(f64::NAN)
                         }
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        if b_int != 0 {
-                            Self::create_bigint(a_int % b_int)
-                        } else {
-                            self.set_pending_range_error(ctx, "Division by zero");
-                            continue;
+                        match Self::get_bigint(&a).div_rem(&Self::get_bigint(&b)) {
+                            Some((_, remainder)) => Self::create_bigint(remainder),
+                            None => {
+                                self.set_pending_range_error(ctx, "Division by zero");
+                                continue;
+                            }
                         }
                     } else {
                         match self.arithmetic_binary_op(&a, &b, ArithOp::Mod, ctx) {
@@ -6885,8 +6879,7 @@ impl VM {
                         }
                     };
                     let result = if a.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        Self::create_bigint(!a_int)
+                        Self::create_bigint(Self::get_bigint(&a).bit_not())
                     } else {
                         let na = if a.is_int() {
                             a.get_int() as f64
@@ -6979,8 +6972,7 @@ impl VM {
                         }
                     };
                     let result = if a.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        Self::create_bigint(-a_int)
+                        Self::create_bigint(Self::get_bigint(&a).negate())
                     } else if a.is_int() {
                         let v = a.get_int();
                         if v == 0 {
@@ -7680,16 +7672,21 @@ impl VM {
                     let result = if val.is_int() {
                         JSValue::new_int(val.get_int() + delta as i64)
                     } else if val.is_bigint() {
-                        let big = Self::get_bigint_int(&val).unwrap_or(0);
-                        Self::create_bigint(big + delta)
+                        Self::create_bigint(
+                            Self::get_bigint(&val)
+                                .add(&crate::builtins::bignum::BigInt::from_i128(delta)),
+                        )
                     } else if val.is_float() {
                         JSValue::new_float_raw(val.get_float() + delta as f64)
                     } else {
                         match self.to_numeric(&val, ctx) {
                             Some(n) => {
                                 if n.is_bigint() {
-                                    let big = Self::get_bigint_int(&n).unwrap_or(0);
-                                    Self::create_bigint(big + delta)
+                                    Self::create_bigint(
+                                        Self::get_bigint(&n).add(
+                                            &crate::builtins::bignum::BigInt::from_i128(delta),
+                                        ),
+                                    )
                                 } else if n.is_int() {
                                     JSValue::new_int(n.get_int() + delta as i64)
                                 } else {
@@ -9714,9 +9711,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() < b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int < b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_lt()
                     } else {
                         match self.abstract_less_than(&a, &b, ctx, true) {
                             Some(v) => v,
@@ -9743,9 +9738,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() < b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int < b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_lt()
                     } else {
                         match self.abstract_less_than(&a, &b, ctx, true) {
                             Some(v) => v,
@@ -9772,9 +9765,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() <= b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int <= b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_le()
                     } else {
                         match self.abstract_less_than(&b, &a, ctx, false) {
                             Some(v) => !v,
@@ -9801,9 +9792,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() <= b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int <= b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_le()
                     } else {
                         match self.abstract_less_than(&b, &a, ctx, false) {
                             Some(v) => !v,
@@ -9830,9 +9819,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() > b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int > b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_gt()
                     } else {
                         match self.abstract_less_than(&b, &a, ctx, false) {
                             Some(v) => v,
@@ -9859,9 +9846,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() > b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int > b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_gt()
                     } else {
                         match self.abstract_less_than(&b, &a, ctx, false) {
                             Some(v) => v,
@@ -9888,9 +9873,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() >= b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int >= b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_ge()
                     } else {
                         match self.abstract_less_than(&a, &b, ctx, true) {
                             Some(v) => !v,
@@ -9917,9 +9900,7 @@ impl VM {
                     } else if a.is_float() && b.is_float() {
                         a.get_float() >= b.get_float()
                     } else if a.is_bigint() && b.is_bigint() {
-                        let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-                        let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-                        a_int >= b_int
+                        Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_ge()
                     } else {
                         match self.abstract_less_than(&a, &b, ctx, true) {
                             Some(v) => !v,
@@ -16214,9 +16195,7 @@ impl VM {
         }
 
         if a.is_bigint() && b.is_bigint() {
-            let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-            let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-            Self::create_bigint(a_int + b_int)
+            Self::create_bigint(Self::get_bigint(&a).add(&Self::get_bigint(&b)))
         } else if a.is_symbol() || b.is_symbol() {
             self.set_pending_type_error(ctx, "Cannot convert a Symbol value to a string");
             JSValue::undefined()
@@ -16546,7 +16525,7 @@ impl VM {
             return JSValue::new_string(ctx.common_atoms.undefined);
         }
         if v.is_bigint() {
-            let val = VM::get_bigint_int(v).unwrap_or(0);
+            let val = VM::get_bigint(v);
             return JSValue::new_string(ctx.intern(&val.to_string()));
         }
         if v.is_symbol() {
@@ -16635,13 +16614,19 @@ impl VM {
             return None;
         }
         if a.is_bigint() {
-            let ai = Self::get_bigint_int(&a).unwrap_or(0);
-            let bi = Self::get_bigint_int(&b).unwrap_or(0);
-            if bi < 0 {
+            let av = Self::get_bigint(&a);
+            let bv = Self::get_bigint(&b);
+            if bv.is_negative() {
                 self.set_pending_range_error(ctx, "BigInt exponent must be non-negative");
                 return None;
             }
-            return Some(Self::create_bigint(ai.pow(bi as u32)));
+            return match av.pow(&bv) {
+                Some(result) => Some(Self::create_bigint(result)),
+                None => {
+                    self.set_pending_range_error(ctx, "Maximum BigInt size exceeded");
+                    None
+                }
+            };
         }
         let bv = Self::js_to_number(&a, ctx);
         let ev = Self::js_to_number(&b, ctx);
@@ -16695,27 +16680,25 @@ impl VM {
         let av = self.to_numeric(a, ctx)?;
         let bv = self.to_numeric(b, ctx)?;
         if av.is_bigint() && bv.is_bigint() {
-            let ai = Self::get_bigint_int(&av).unwrap_or(0);
-            let bi = Self::get_bigint_int(&bv).unwrap_or(0);
+            let a_int = Self::get_bigint(&av);
+            let b_int = Self::get_bigint(&bv);
             return match op {
-                ArithOp::Sub => Some(Self::create_bigint(ai - bi)),
-                ArithOp::Mul => Some(Self::create_bigint(ai * bi)),
-                ArithOp::Div => {
-                    if bi == 0 {
+                ArithOp::Sub => Some(Self::create_bigint(a_int.sub(&b_int))),
+                ArithOp::Mul => Some(Self::create_bigint(a_int.mul(&b_int))),
+                ArithOp::Div => match a_int.div_rem(&b_int) {
+                    Some((quotient, _)) => Some(Self::create_bigint(quotient)),
+                    None => {
                         self.set_pending_range_error(ctx, "Division by zero");
                         None
-                    } else {
-                        Some(Self::create_bigint(ai / bi))
                     }
-                }
-                ArithOp::Mod => {
-                    if bi == 0 {
+                },
+                ArithOp::Mod => match a_int.div_rem(&b_int) {
+                    Some((_, remainder)) => Some(Self::create_bigint(remainder)),
+                    None => {
                         self.set_pending_range_error(ctx, "Division by zero");
                         None
-                    } else {
-                        Some(Self::create_bigint(ai % bi))
                     }
-                }
+                },
             };
         }
         if av.is_bigint() || bv.is_bigint() {
@@ -16762,24 +16745,51 @@ impl VM {
             return None;
         }
         if a.is_bigint() && b.is_bigint() {
-            let ai = Self::get_bigint_int(&a).unwrap_or(0);
-            let bi = Self::get_bigint_int(&b).unwrap_or(0);
+            let av = Self::get_bigint(&a);
+            let bv = Self::get_bigint(&b);
+            let shift_count = |v: &crate::builtins::bignum::BigInt| -> Option<u64> {
+                v.to_u128().and_then(|magnitude| u64::try_from(magnitude).ok())
+            };
             return match op {
-                BitwiseOp::And => Some(Self::create_bigint(ai & bi)),
-                BitwiseOp::Or => Some(Self::create_bigint(ai | bi)),
-                BitwiseOp::Xor => Some(Self::create_bigint(ai ^ bi)),
+                BitwiseOp::And => Some(Self::create_bigint(av.bit_and(&bv))),
+                BitwiseOp::Or => Some(Self::create_bigint(av.bit_or(&bv))),
+                BitwiseOp::Xor => Some(Self::create_bigint(av.bit_xor(&bv))),
                 BitwiseOp::Shl => {
-                    if bi < 0 {
-                        Some(Self::create_bigint(ai >> (-bi)))
+                    if bv.is_negative() {
+                        match shift_count(&bv.negate()) {
+                            Some(count) => Some(Self::create_bigint(av.shr(count))),
+                            None => Some(Self::create_bigint(av.shr(u64::MAX))),
+                        }
                     } else {
-                        Some(Self::create_bigint(ai << bi))
+                        match shift_count(&bv).and_then(|count| av.shl(count)) {
+                            Some(result) => Some(Self::create_bigint(result)),
+                            None => {
+                                self.set_pending_range_error(
+                                    ctx,
+                                    "Maximum BigInt size exceeded",
+                                );
+                                None
+                            }
+                        }
                     }
                 }
                 BitwiseOp::Shr => {
-                    if bi < 0 {
-                        Some(Self::create_bigint(ai << (-bi)))
+                    if bv.is_negative() {
+                        match shift_count(&bv.negate()).and_then(|count| av.shl(count)) {
+                            Some(result) => Some(Self::create_bigint(result)),
+                            None => {
+                                self.set_pending_range_error(
+                                    ctx,
+                                    "Maximum BigInt size exceeded",
+                                );
+                                None
+                            }
+                        }
                     } else {
-                        Some(Self::create_bigint(ai >> bi))
+                        match shift_count(&bv) {
+                            Some(count) => Some(Self::create_bigint(av.shr(count))),
+                            None => Some(Self::create_bigint(av.shr(u64::MAX))),
+                        }
                     }
                 }
                 BitwiseOp::UShr => {
@@ -16820,69 +16830,36 @@ impl VM {
         a < b
     }
 
-    fn bigint_less_than_number(bigint: i128, number: f64) -> Option<bool> {
-        if number.is_nan() {
-            return None;
-        }
-        if number == f64::INFINITY {
-            return Some(true);
-        }
-        if number == f64::NEG_INFINITY {
-            return Some(false);
-        }
-        if number.fract() == 0.0 {
-            let other = number as i128;
-            return Some(bigint < other);
-        }
-        let floor = number.floor();
-        if floor >= i128::MAX as f64 {
-            return Some(true);
-        }
-        if floor <= i128::MIN as f64 {
-            return Some(false);
-        }
-        Some(bigint <= floor as i128)
+    fn bigint_less_than_number(
+        bigint: &crate::builtins::bignum::BigInt,
+        number: f64,
+    ) -> Option<bool> {
+        bigint.cmp_f64(number).map(|order| order.is_lt())
     }
 
-    fn number_less_than_bigint(number: f64, bigint: i128) -> Option<bool> {
-        if number.is_nan() {
-            return None;
-        }
-        if number == f64::INFINITY {
-            return Some(false);
-        }
-        if number == f64::NEG_INFINITY {
-            return Some(true);
-        }
-        if number.fract() == 0.0 {
-            let other = number as i128;
-            return Some(other < bigint);
-        }
-        let floor = number.floor();
-        if floor >= i128::MAX as f64 {
-            return Some(false);
-        }
-        if floor <= i128::MIN as f64 {
-            return Some(true);
-        }
-        Some((floor as i128) < bigint)
+    fn number_less_than_bigint(
+        number: f64,
+        bigint: &crate::builtins::bignum::BigInt,
+    ) -> Option<bool> {
+        bigint.cmp_f64(number).map(|order| order.is_gt())
     }
 
-    fn parse_bigint_string(value: &str) -> Option<i128> {
+    fn parse_bigint_string(value: &str) -> Option<crate::builtins::bignum::BigInt> {
+        use crate::builtins::bignum::BigInt;
         let trimmed = value.trim();
         if trimmed.is_empty() {
-            return Some(0);
+            return Some(BigInt::zero());
         }
         if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
-            return i128::from_str_radix(hex, 16).ok();
+            return BigInt::from_str_radix(hex, 16);
         }
         if let Some(oct) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
-            return i128::from_str_radix(oct, 8).ok();
+            return BigInt::from_str_radix(oct, 8);
         }
         if let Some(bin) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
-            return i128::from_str_radix(bin, 2).ok();
+            return BigInt::from_str_radix(bin, 2);
         }
-        trimmed.parse::<i128>().ok()
+        BigInt::from_str_radix(trimmed, 10)
     }
 
     fn abstract_less_than(
@@ -16932,47 +16909,55 @@ impl VM {
             ));
         }
         if a.is_bigint() && b.is_bigint() {
-            return Some(
-                Self::get_bigint_int(&a).unwrap_or(0) < Self::get_bigint_int(&b).unwrap_or(0),
-            );
+            return Some(Self::get_bigint(&a).cmp(&Self::get_bigint(&b)).is_lt());
         }
         if a.is_bigint() {
-            let a_int = Self::get_bigint_int(&a).unwrap_or(0);
+            let a_int = Self::get_bigint(&a);
             if b.is_string() {
                 return Self::parse_bigint_string(ctx.get_atom_str(b.get_atom()))
-                    .map(|b_int| a_int < b_int);
+                    .map(|b_int| (*a_int).cmp(&b_int).is_lt());
             }
             if b.is_int() {
-                return Some(a_int < b.get_int() as i128);
+                return Some(
+                    (*a_int)
+                        .cmp(&crate::builtins::bignum::BigInt::from_i64(b.get_int()))
+                        .is_lt(),
+                );
             }
             if b.is_float() {
-                return Self::bigint_less_than_number(a_int, b.get_float());
+                return Self::bigint_less_than_number(&a_int, b.get_float());
             }
             if b.is_bool() {
-                return Some(a_int < if b.get_bool() { 1 } else { 0 });
+                let other = crate::builtins::bignum::BigInt::from_i64(if b.get_bool() { 1 } else { 0 });
+                return Some((*a_int).cmp(&other).is_lt());
             }
             if b.is_null() {
-                return Some(a_int < 0);
+                return Some(a_int.is_negative());
             }
             return None;
         }
         if b.is_bigint() {
-            let b_int = Self::get_bigint_int(&b).unwrap_or(0);
+            let b_int = Self::get_bigint(&b);
             if a.is_string() {
                 return Self::parse_bigint_string(ctx.get_atom_str(a.get_atom()))
-                    .map(|a_int| a_int < b_int);
+                    .map(|a_int| a_int.cmp(&*b_int).is_lt());
             }
             if a.is_int() {
-                return Some((a.get_int() as i128) < b_int);
+                return Some(
+                    crate::builtins::bignum::BigInt::from_i64(a.get_int())
+                        .cmp(&*b_int)
+                        .is_lt(),
+                );
             }
             if a.is_float() {
-                return Self::number_less_than_bigint(a.get_float(), b_int);
+                return Self::number_less_than_bigint(a.get_float(), &b_int);
             }
             if a.is_bool() {
-                return Some((if a.get_bool() { 1 } else { 0 }) < b_int);
+                let other = crate::builtins::bignum::BigInt::from_i64(if a.get_bool() { 1 } else { 0 });
+                return Some(other.cmp(&*b_int).is_lt());
             }
             if a.is_null() {
-                return Some(0 < b_int);
+                return Some(b_int.is_negative());
             }
             return None;
         }
@@ -16999,8 +16984,7 @@ impl VM {
             let s = ctx.get_atom_str(v.get_atom());
             return Self::string_to_number(s);
         } else if v.is_bigint() {
-            let val = VM::get_bigint_int(v).unwrap_or(0);
-            return val as f64;
+            return VM::get_bigint(v).to_f64();
         } else if v.is_symbol() {
             return f64::NAN;
         } else if v.is_object() {
@@ -17070,15 +17054,15 @@ impl VM {
         u32_val as i32
     }
 
-    fn get_bigint_int(v: &JSValue) -> Option<i128> {
+    fn get_bigint(v: &JSValue) -> std::rc::Rc<crate::builtins::bignum::BigInt> {
         if v.is_bigint() {
-            Some(v.as_object().get_bigint_value())
+            v.as_object().get_bigint_value()
         } else {
-            None
+            std::rc::Rc::new(crate::builtins::bignum::BigInt::zero())
         }
     }
 
-    fn create_bigint(value: i128) -> JSValue {
+    fn create_bigint(value: crate::builtins::bignum::BigInt) -> JSValue {
         let mut bigint_obj = crate::object::object::JSObject::new_bigint();
         bigint_obj.set_bigint_value(value);
         let ptr = Box::into_raw(Box::new(bigint_obj)) as usize;
@@ -17167,8 +17151,7 @@ impl VM {
                 buf[..s.len()].copy_from_slice(s);
                 return (Some(buf), s.len(), None);
             } else if v.is_bigint() {
-                let val = crate::runtime::vm::VM::get_bigint_int(v);
-                let n = val.unwrap_or(0);
+                let n = crate::runtime::vm::VM::get_bigint(v);
                 let mut buf = [0u8; 24];
                 let s = n.to_string();
                 let bytes = s.as_bytes();
@@ -17330,49 +17313,42 @@ impl VM {
             return self.loose_equal_value_slow(ctx, a, JSValue::new_float(n));
         }
         if a.is_string() && b.is_bigint() {
-            let b_int = Self::get_bigint_int(&b).unwrap_or(0);
+            let b_int = Self::get_bigint(&b);
             return Some(
                 Self::parse_bigint_string(&ctx.get_atom_str(a.get_atom()))
-                    .map_or(false, |a_int| a_int == b_int),
+                    .map_or(false, |a_int| a_int == *b_int),
             );
         }
         if a.is_bigint() && b.is_string() {
-            let a_int = Self::get_bigint_int(&a).unwrap_or(0);
+            let a_int = Self::get_bigint(&a);
             return Some(
                 Self::parse_bigint_string(&ctx.get_atom_str(b.get_atom()))
-                    .map_or(false, |b_int| a_int == b_int),
+                    .map_or(false, |b_int| *a_int == b_int),
             );
         }
-        if a.is_bigint() && (b.is_int() || b.is_float()) {
-            let a_int = Self::get_bigint_int(&a).unwrap_or(0);
-            let n = if b.is_int() {
-                b.get_int() as f64
-            } else {
-                b.get_float()
-            };
-            return Some(Self::bigint_number_equal(a_int, n));
+        if a.is_bigint() && b.is_int() {
+            return Some(
+                *Self::get_bigint(&a)
+                    == crate::builtins::bignum::BigInt::from_i64(b.get_int()),
+            );
         }
-        if (a.is_int() || a.is_float()) && b.is_bigint() {
-            let b_int = Self::get_bigint_int(&b).unwrap_or(0);
-            let n = if a.is_int() {
-                a.get_int() as f64
-            } else {
-                a.get_float()
-            };
-            return Some(Self::bigint_number_equal(b_int, n));
+        if a.is_bigint() && b.is_float() {
+            return Some(Self::bigint_number_equal(&Self::get_bigint(&a), b.get_float()));
+        }
+        if a.is_int() && b.is_bigint() {
+            return Some(
+                crate::builtins::bignum::BigInt::from_i64(a.get_int())
+                    == *Self::get_bigint(&b),
+            );
+        }
+        if a.is_float() && b.is_bigint() {
+            return Some(Self::bigint_number_equal(&Self::get_bigint(&b), a.get_float()));
         }
         Some(false)
     }
 
-    fn bigint_number_equal(b: i128, n: f64) -> bool {
-        if !n.is_finite() || n.fract() != 0.0 {
-            return false;
-        }
-        let two_127 = 170141183460469231731687303715884105728.0f64;
-        if n >= two_127 || n < -two_127 {
-            return false;
-        }
-        (n as i128) == b
+    fn bigint_number_equal(b: &crate::builtins::bignum::BigInt, n: f64) -> bool {
+        matches!(b.cmp_f64(n), Some(std::cmp::Ordering::Equal))
     }
 }
 

@@ -699,7 +699,7 @@ pub enum PrivateKind {
 }
 
 pub struct ObjectExtra {
-    pub bigint_value: i128,
+    pub bigint_value: std::rc::Rc<crate::builtins::bignum::BigInt>,
     pub private_fields: Option<Box<FxHashMap<PrivateKey, JSValue>>>,
     pub private_accessors: Option<Box<FxHashMap<PrivateKey, AccessorEntry>>>,
     pub private_methods: Option<Box<FxHashMap<PrivateKey, JSValue>>>,
@@ -764,7 +764,7 @@ impl JSObject {
     pub fn ensure_extra(&mut self) -> &mut ObjectExtra {
         self.extra.get_or_insert_with(|| {
             Box::new(ObjectExtra {
-                bigint_value: 0,
+                bigint_value: std::rc::Rc::new(crate::builtins::bignum::BigInt::zero()),
                 private_fields: None,
                 private_brands: None,
                 array_elements: None,
@@ -1079,12 +1079,15 @@ impl JSObject {
     }
 
     #[inline(always)]
-    pub fn get_bigint_value(&self) -> i128 {
-        self.extra.as_ref().map_or(0, |e| e.bigint_value)
+    pub fn get_bigint_value(&self) -> std::rc::Rc<crate::builtins::bignum::BigInt> {
+        self.extra.as_ref().map_or_else(
+            || std::rc::Rc::new(crate::builtins::bignum::BigInt::zero()),
+            |e| std::rc::Rc::clone(&e.bigint_value),
+        )
     }
     #[inline(always)]
-    pub fn set_bigint_value(&mut self, val: i128) {
-        self.ensure_extra().bigint_value = val;
+    pub fn set_bigint_value(&mut self, val: impl Into<crate::builtins::bignum::BigInt>) {
+        self.ensure_extra().bigint_value = std::rc::Rc::new(val.into());
     }
 
     #[inline(always)]
@@ -3505,9 +3508,9 @@ mod tests {
     #[test]
     fn test_object_bigint_value() {
         let mut obj = JSObject::new();
-        assert_eq!(obj.get_bigint_value(), 0);
-        obj.set_bigint_value(123456789);
-        assert_eq!(obj.get_bigint_value(), 123456789);
+        assert_eq!(obj.get_bigint_value().to_u128(), Some(0));
+        obj.set_bigint_value(123456789i128);
+        assert_eq!(obj.get_bigint_value().to_u128(), Some(123456789));
     }
 
     #[test]

@@ -2430,7 +2430,7 @@ fn number_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     if args[0].is_bigint() {
         let bv = args[0].as_object().get_bigint_value();
-        let f = bv as f64;
+        let f = bv.to_f64();
         if f.is_nan() {
             return JSValue::new_float(f64::NAN);
         }

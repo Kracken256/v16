@@ -1,6 +1,7 @@
 pub mod array;
 pub mod base64;
 pub mod bigint;
+pub mod bignum;
 pub mod date;
 pub mod error;
 #[cfg(feature = "fetch")]
