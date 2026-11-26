@@ -501,7 +501,7 @@ impl SmallPropVec {
     #[inline(always)]
     pub fn get(&self, idx: usize) -> Option<&PropSlot> {
         if idx < self.len as usize {
-            Some(unsafe { self.inline[idx].assume_init_ref() })
+            Some(self.inline_ref(idx))
         } else if let Some(ref v) = self.heap {
             v.get(idx - INLINE_PROPS)
         } else {
@@ -512,12 +512,30 @@ impl SmallPropVec {
     #[inline(always)]
     pub fn get_mut(&mut self, idx: usize) -> Option<&mut PropSlot> {
         if idx < self.len as usize {
-            Some(unsafe { self.inline[idx].assume_init_mut() })
+            Some(self.inline_mut(idx))
         } else if let Some(ref mut v) = self.heap {
             v.get_mut(idx - INLINE_PROPS)
         } else {
             None
         }
+    }
+
+    #[inline(always)]
+    pub fn inline_ref(&self, idx: usize) -> &PropSlot {
+        debug_assert!(idx < self.len as usize);
+        unsafe { self.inline[idx].assume_init_ref() }
+    }
+
+    #[inline(always)]
+    pub fn inline_mut(&mut self, idx: usize) -> &mut PropSlot {
+        debug_assert!(idx < self.len as usize);
+        unsafe { self.inline[idx].assume_init_mut() }
+    }
+
+    #[inline(always)]
+    pub fn inline_read(&mut self, idx: usize) -> PropSlot {
+        debug_assert!(idx < self.len as usize);
+        unsafe { self.inline[idx].assume_init_read() }
     }
 
     #[inline(always)]
@@ -539,10 +557,10 @@ impl SmallPropVec {
         let mut write = 0usize;
         let read_len = self.len as usize;
         for read in 0..read_len {
-            let keep = unsafe { f(self.inline[read].assume_init_mut()) };
+            let keep = f(self.inline_mut(read));
             if keep {
                 if write != read {
-                    let val = unsafe { self.inline[read].assume_init_read() };
+                    let val = self.inline_read(read);
                     self.inline[write].write(val);
                 }
                 write += 1;
@@ -582,7 +600,7 @@ impl SmallPropVec {
         let total = self.len();
         let mut out = Vec::with_capacity(total);
         for i in 0..self.len as usize {
-            out.push(unsafe { self.inline[i].assume_init_read() });
+            out.push(self.inline_read(i));
         }
         self.len = 0;
         if let Some(mut v) = self.heap.take() {
@@ -622,9 +640,7 @@ impl Clone for SmallPropVec {
         let mut new = SmallPropVec::new();
         new.len = self.len;
         for i in 0..self.len as usize {
-            unsafe {
-                new.inline[i].write(self.inline[i].assume_init_ref().clone());
-            }
+            new.inline[i].write(self.inline_ref(i).clone());
         }
         new.heap = self.heap.clone();
         new
@@ -1615,7 +1631,7 @@ impl JSObject {
     #[inline(always)]
     pub fn get_by_offset(&self, offset: usize) -> Option<JSValue> {
         if offset < self.props.len as usize {
-            let slot = unsafe { self.props.inline[offset].assume_init_ref() };
+            let slot = self.props.inline_ref(offset);
             if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) == 0 {
                 return Some(slot.value);
             }
@@ -1635,7 +1651,7 @@ impl JSObject {
 
     #[inline(always)]
     pub fn set_by_offset_fast(&mut self, offset: usize, value: JSValue) {
-        unsafe { self.props.inline[offset].assume_init_mut() }.value = value;
+        self.props.inline_mut(offset).value = value;
     }
 
     #[inline(always)]
@@ -1645,10 +1661,10 @@ impl JSObject {
             "offset out of inline range in get_by_offset_fast"
         );
         debug_assert!(
-            unsafe { self.props.inline[offset].assume_init_ref() }.attrs != ATTR_DELETED,
+            self.props.inline_ref(offset).attrs != ATTR_DELETED,
             "deleted prop in get_by_offset_fast"
         );
-        unsafe { self.props.inline[offset].assume_init_ref() }.value
+        self.props.inline_ref(offset).value
     }
 
     #[inline(always)]
@@ -1664,7 +1680,7 @@ impl JSObject {
     #[inline(always)]
     pub fn set_by_offset(&mut self, offset: usize, value: JSValue) -> bool {
         if offset < self.props.len as usize {
-            let slot = unsafe { self.props.inline[offset].assume_init_mut() };
+            let slot = self.props.inline_mut(offset);
             if slot.attrs & (ATTR_DELETED | ATTR_ACCESSOR) != 0 {
                 return false;
             }
@@ -3293,7 +3309,7 @@ impl JSObject {
 
         let inline_len = self.props.len().min(INLINE_PROPS);
         for i in 0..inline_len {
-            let slot = unsafe { self.props.inline[i].assume_init_ref() };
+            let slot = self.props.inline_ref(i);
             if slot.attrs != ATTR_DELETED {
                 current = cache.transition(current, slot.atom);
             }
