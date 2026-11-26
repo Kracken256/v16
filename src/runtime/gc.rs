@@ -9,6 +9,12 @@ pub const TAG_OBJECT: u8 = 0;
 pub const TAG_ARRAY: u8 = 1;
 pub const TAG_FUNCTION: u8 = 2;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeakObjectHandle {
+    slot: u32,
+    generation: u64,
+}
+
 const COLOR_WHITE: u8 = 0;
 const COLOR_GRAY: u8 = 1;
 const COLOR_BLACK: u8 = 2;
@@ -188,6 +194,7 @@ pub struct GcHeap {
     objects: Vec<*mut JSObject>,
     marks: Vec<u8>,
     tags: Vec<u8>,
+    generations: Vec<u64>,
     free_list: Vec<usize>,
     gray_stack: Vec<usize>,
     total_allocated: usize,
@@ -223,6 +230,7 @@ impl GcHeap {
             objects: Vec::new(),
             marks: Vec::new(),
             tags: Vec::new(),
+            generations: Vec::new(),
             free_list: Vec::new(),
             gray_stack: Vec::new(),
             total_allocated: 0,
@@ -252,12 +260,14 @@ impl GcHeap {
             self.objects[idx] = ptr;
             self.marks[idx] = 0;
             self.tags[idx] = tag;
+            self.generations[idx] = self.generations[idx].wrapping_add(1);
             idx
         } else {
             let idx = self.objects.len();
             self.objects.push(ptr);
             self.marks.push(0);
             self.tags.push(tag);
+            self.generations.push(0);
             idx
         };
 
@@ -280,12 +290,14 @@ impl GcHeap {
             self.objects[idx] = ptr;
             self.marks[idx] = 0;
             self.tags[idx] = tag;
+            self.generations[idx] = self.generations[idx].wrapping_add(1);
             idx
         } else {
             let idx = self.objects.len();
             self.objects.push(ptr);
             self.marks.push(0);
             self.tags.push(tag);
+            self.generations.push(0);
             idx
         };
 
@@ -1214,6 +1226,35 @@ impl GcHeap {
         self.objects.get(slot as usize) == Some(&ptr)
     }
 
+    #[inline]
+    pub fn weak_handle(&self, object: &JSObject) -> Option<WeakObjectHandle> {
+        let slot = object.gc_slot;
+        if slot == u32::MAX {
+            return None;
+        }
+        let idx = slot as usize;
+        if self.objects.get(idx) != Some(&(object as *const JSObject as *mut JSObject)) {
+            return None;
+        }
+        Some(WeakObjectHandle {
+            slot,
+            generation: *self.generations.get(idx)?,
+        })
+    }
+
+    #[inline]
+    pub fn resolve_weak(&self, handle: WeakObjectHandle) -> Option<JSValue> {
+        let idx = handle.slot as usize;
+        let ptr = *self.objects.get(idx)?;
+        if ptr.is_null() || *self.generations.get(idx)? != handle.generation {
+            return None;
+        }
+        if *self.tags.get(idx)? == TAG_FUNCTION {
+            return Some(JSValue::new_function(ptr.cast::<JSFunction>()));
+        }
+        Some(JSValue::new_object(ptr))
+    }
+
     fn clean_stale_properties_on_nursery_survivors(&mut self) {
         for &idx in &self.nursery_indices {
             if self.marks[idx] == COLOR_WHITE {
@@ -1489,6 +1530,57 @@ mod tests {
         assert_eq!(freed, 1);
         assert_eq!(heap.object_count(), 0);
         assert!(heap.nursery_indices.is_empty());
+    }
+
+    #[test]
+    fn test_weak_handle_resolves_only_live_objects() {
+        let mut heap = GcHeap::new();
+        let ptr = heap.alloc_object().expect("nursery alloc should succeed");
+        let handle = heap
+            .weak_handle(JSValue::new_object(ptr).as_object())
+            .expect("nursery object should have a weak handle");
+
+        assert_eq!(
+            heap.resolve_weak(handle).map(|value| value.get_ptr()),
+            Some(ptr)
+        );
+
+        let roots = [JSValue::new_object(ptr)];
+        heap.minor_gc(&roots);
+        assert_eq!(
+            heap.resolve_weak(handle).map(|value| value.get_ptr()),
+            Some(ptr)
+        );
+
+        heap.minor_gc(&[]);
+        assert!(heap.resolve_weak(handle).is_none());
+
+        let reused = heap.alloc_object().expect("nursery alloc should succeed");
+        assert!(heap.resolve_weak(handle).is_none());
+
+        let reused_handle = heap
+            .weak_handle(JSValue::new_object(reused).as_object())
+            .expect("reused nursery object should have a weak handle");
+        assert_eq!(
+            heap.resolve_weak(reused_handle)
+                .map(|value| value.get_ptr()),
+            Some(reused)
+        );
+
+        let func_ptr = Box::into_raw(Box::new(JSFunction::new()));
+        heap.track_function(func_ptr);
+        let func_handle = heap
+            .weak_handle(JSValue::new_function(func_ptr).as_object())
+            .expect("function should have a weak handle");
+        let resolved = heap
+            .resolve_weak(func_handle)
+            .expect("live function should resolve");
+        assert!(resolved.is_function());
+        heap.untrack(func_ptr.cast::<JSObject>());
+        // SAFETY: the function pointer came from `Box::into_raw` above and is reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(func_ptr);
+        }
     }
 
     #[test]

@@ -2,7 +2,13 @@ use crate::host::HostFunction;
 use crate::object::function::JSFunction;
 use crate::object::object::JSObject;
 use crate::runtime::context::JSContext;
+use crate::runtime::gc::WeakObjectHandle;
 use crate::value::JSValue;
+
+struct WeakRefState {
+    target: Option<WeakObjectHandle>,
+}
+
 fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let mut func = JSFunction::new_builtin(ctx.intern(name), 1);
     func.set_builtin_marker(ctx, name);
@@ -146,28 +152,16 @@ pub fn weakref_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         obj.prototype = Some(proto_ptr);
     }
 
-    if args.is_empty() {
-        obj.set(ctx.intern("__weakref_target__"), JSValue::undefined());
-        let ptr = Box::into_raw(Box::new(obj));
-        return JSValue::new_object(ptr);
-    }
-
-    let target = &args[0];
-    if !target.is_object() {
-        obj.set(ctx.intern("__weakref_target__"), target.clone());
-        let ptr = Box::into_raw(Box::new(obj));
-        return JSValue::new_object(ptr);
-    }
-
-    let target_ptr = target.get_ptr();
-
-    obj.set(
-        ctx.intern("__weakref_target__"),
-        JSValue::new_int(target_ptr as i64),
-    );
-    obj.set(ctx.intern("__is_weakref__"), JSValue::bool(true));
+    let target = match args.first() {
+        Some(value) if value.is_object_like() => {
+            ctx.runtime_mut().gc_heap().weak_handle(value.as_object())
+        }
+        _ => None,
+    };
+    obj.set_native_data(Box::new(WeakRefState { target }));
 
     let ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -183,33 +177,15 @@ pub fn weakref_deref(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let obj = this.as_object();
 
-    let _is_weakref_check = obj.get(ctx.intern("__is_weakref__"));
-    match _is_weakref_check {
-        Some(v) if !v.is_undefined() && v.get_bool() => {}
-        _ => return JSValue::undefined(),
-    };
-
-    let target_value = obj.get(ctx.intern("__weakref_target__"));
-    let target_value = match target_value {
-        Some(v) => v,
+    let target = match obj.get_native_data::<WeakRefState>() {
+        Some(state) => state.target,
         None => return JSValue::undefined(),
     };
 
-    if target_value.is_undefined() {
-        return JSValue::undefined();
+    match target.and_then(|handle| ctx.runtime().gc_heap().resolve_weak(handle)) {
+        Some(value) => value,
+        None => JSValue::undefined(),
     }
-
-    if target_value.is_int() {
-        let target_ptr = target_value.get_int() as usize;
-
-        if target_ptr == 0 {
-            return JSValue::undefined();
-        }
-
-        return JSValue::new_object(target_ptr as *mut crate::object::object::JSObject);
-    }
-
-    target_value
 }
 
 pub fn finalization_registry_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
