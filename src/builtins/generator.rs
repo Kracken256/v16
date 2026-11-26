@@ -380,7 +380,21 @@ fn dynamic_generator_function_constructor(
             }
             val
         }
-        Err(_) => JSValue::undefined(),
+        Err(e) => {
+            let mut err = JSObject::new();
+            err.set(
+                ctx.intern("name"),
+                JSValue::new_string(ctx.intern("SyntaxError")),
+            );
+            err.set(ctx.intern("message"), JSValue::new_string(ctx.intern(&e)));
+            if let Some(proto) = ctx.get_syntax_error_prototype() {
+                err.prototype = Some(proto);
+            }
+            let ptr = Box::into_raw(Box::new(err)) as usize;
+            ctx.runtime_mut().gc_heap_mut().track(ptr);
+            ctx.pending_exception = Some(JSValue::new_object(ptr));
+            JSValue::undefined()
+        }
     }
 }
 
