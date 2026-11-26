@@ -272,9 +272,7 @@ impl GcHeap {
             idx
         };
 
-        unsafe {
-            (*(ptr as *mut JSObject)).gc_slot = idx as u32;
-        }
+        JSValue::new_object(ptr).as_object_mut().gc_slot = idx as u32;
         let size = if tag == TAG_ARRAY {
             std::mem::size_of::<JSArrayObject>()
         } else if tag == TAG_FUNCTION {
@@ -302,9 +300,7 @@ impl GcHeap {
             idx
         };
 
-        unsafe {
-            (*(ptr as *mut JSObject)).gc_slot = idx as u32;
-        }
+        JSValue::new_object(ptr).as_object_mut().gc_slot = idx as u32;
         self.nursery_indices.push(idx);
         self.debug_alloc(idx, ptr, tag, true);
         idx
@@ -404,7 +400,7 @@ impl GcHeap {
     }
 
     pub fn untrack(&mut self, ptr: usize) {
-        let idx = unsafe { (*(ptr as *const JSObject)).gc_slot };
+        let idx = JSValue::new_object(ptr).as_object().gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
             if self.objects.get(idx) == Some(&ptr) {
@@ -488,12 +484,12 @@ impl GcHeap {
 
     #[inline(always)]
     pub fn is_array_ptr(&self, ptr: usize) -> bool {
-        unsafe { (*(ptr as *const JSObject)).is_dense_array() }
+        JSValue::new_object(ptr).as_object().is_dense_array()
     }
 
     #[inline]
     pub fn mark(&mut self, ptr: usize) -> bool {
-        let idx = unsafe { (*(ptr as *const JSObject)).gc_slot };
+        let idx = JSValue::new_object(ptr).as_object().gc_slot;
         if idx == u32::MAX {
             return false;
         }
@@ -733,7 +729,7 @@ impl GcHeap {
             format!("bigint(ptr={:#x})", value.get_ptr())
         } else if value.is_function() {
             let ptr = value.get_ptr();
-            let handle = unsafe { (*(ptr as *const JSObject)).gc_slot };
+            let handle = value.as_object().gc_slot;
             if handle != u32::MAX {
                 format!("function(handle={} ptr={:#x})", handle, ptr)
             } else {
@@ -741,7 +737,7 @@ impl GcHeap {
             }
         } else if value.is_object() {
             let ptr = value.get_ptr();
-            let handle = unsafe { (*(ptr as *const JSObject)).gc_slot };
+            let handle = value.as_object().gc_slot;
             if handle != u32::MAX {
                 format!("object(handle={} ptr={:#x})", handle, ptr)
             } else {
@@ -1132,7 +1128,7 @@ impl GcHeap {
     }
 
     pub fn write_barrier(&mut self, obj_ptr: usize, new_value: &JSValue) {
-        let idx = unsafe { (*(obj_ptr as *const JSObject)).gc_slot };
+        let idx = JSValue::new_object(obj_ptr).as_object().gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
             if self.marks[idx] == COLOR_BLACK {
@@ -1203,7 +1199,7 @@ impl GcHeap {
 
     #[inline]
     pub fn is_ptr_alive(&self, ptr: usize) -> bool {
-        let slot = unsafe { (*(ptr as *const JSObject)).gc_slot };
+        let slot = JSValue::new_object(ptr).as_object().gc_slot;
         if slot == u32::MAX {
             return true;
         }
@@ -1216,18 +1212,17 @@ impl GcHeap {
                 continue;
             }
             let tag = self.tags[idx];
-            unsafe {
-                match tag {
-                    TAG_OBJECT | TAG_FUNCTION => {
-                        let obj = &mut *(self.objects[idx] as *mut JSObject);
-                        obj.clean_stale_properties(self);
-                    }
-                    TAG_ARRAY => {
-                        let arr = &mut *(self.objects[idx] as *mut JSArrayObject);
-                        arr.header.clean_stale_properties(self);
-                    }
-                    _ => {}
+            match tag {
+                TAG_OBJECT | TAG_FUNCTION => {
+                    JSValue::new_object(self.objects[idx])
+                        .as_object_mut()
+                        .clean_stale_properties(self);
                 }
+                TAG_ARRAY => {
+                    let arr = unsafe { &mut *(self.objects[idx] as *mut JSArrayObject) };
+                    arr.header.clean_stale_properties(self);
+                }
+                _ => {}
             }
         }
     }
