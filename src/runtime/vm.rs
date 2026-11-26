@@ -15678,7 +15678,7 @@ impl VM {
         &mut self,
         ctx: &mut JSContext,
         obj_val: JSValue,
-        value: JSValue,
+        mut value: JSValue,
         atom: crate::runtime::atom::Atom,
         ic_pc: usize,
     ) -> bool {
@@ -15695,6 +15695,37 @@ impl VM {
         if obj_val.is_object_like() {
             let ptr = obj_val.get_ptr();
             let js_obj = unsafe { JSValue::object_from_ptr_mut(ptr) };
+            if js_obj.is_dense_array() && atom == ctx.common_atoms.length {
+                let writable = js_obj
+                    .find_offset(atom)
+                    .map(|offset| js_obj.is_prop_writable_at(Some(offset)))
+                    .unwrap_or(true);
+                if !writable {
+                    if self.frames[self.frame_index].is_strict_frame {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Cannot assign to read only property 'length'",
+                        );
+                    }
+                    return false;
+                }
+                let new_len = Self::js_to_number(&value, ctx);
+                if new_len.is_nan()
+                    || new_len < 0.0
+                    || new_len.fract() != 0.0
+                    || new_len > u32::MAX as f64
+                {
+                    self.set_pending_range_error(ctx, "Invalid array length");
+                    return false;
+                }
+                value = JSValue::new_int(new_len as i64);
+                let arr = unsafe {
+                    &mut *(ptr as *mut crate::object::array_obj::JSArrayObject)
+                };
+                if (new_len as usize) < arr.elements.len() {
+                    arr.elements.truncate(new_len as usize);
+                }
+            }
             if js_obj.is_mapped_arguments() {
                 let entry_state = js_obj.argument_entry(atom).map(|entry| {
                     (
