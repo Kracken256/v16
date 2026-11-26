@@ -200,19 +200,18 @@ pub fn number_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 is_number_wrapper = true;
             }
             if !is_number_wrapper {
-                let mut current = this.as_object().prototype;
+                let np_usize = np as usize;
+                let mut current = this.as_object().prototype_object();
                 let mut depth = 0u32;
                 while let Some(p) = current {
-                    if p.is_null() || depth > 10 {
+                    if depth > 10 {
                         break;
                     }
-                    if p as usize == np as usize {
+                    if p as *const crate::object::object::JSObject as usize == np_usize {
                         is_number_wrapper = true;
                         break;
                     }
-                    unsafe {
-                        current = (*p).prototype;
-                    }
+                    current = p.prototype_object();
                     depth += 1;
                 }
             }
