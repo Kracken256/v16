@@ -4279,6 +4279,17 @@ impl CodeGenerator {
                                     }
                                 }
                             };
+                            let early_name = self.binding_target_with_scope_name(value, kind);
+                            if *computed && early_name.is_some() {
+                                self.emit(Opcode::ToPropertyKey);
+                                self.emit_u16(key_reg);
+                            }
+                            let early_resolved = if let Some(name) = early_name {
+                                let object_reg = self.emit_with_resolve(&name, ctx);
+                                Some((name, object_reg))
+                            } else {
+                                None
+                            };
                             let elem_reg = self.alloc_register();
                             self.emit(Opcode::GetProp);
                             self.emit_u16(elem_reg);
@@ -4290,7 +4301,26 @@ impl CodeGenerator {
                                 self.emit_u16(key_reg);
                             }
                             self.free_register(key_reg);
-                            self.gen_assignment_target_binding(value, elem_reg, kind, ctx)?;
+                            if let Some((name, object_reg)) = early_resolved {
+                                if let AssignmentTarget::AssignmentPattern(ap) = value {
+                                    self.gen_default_value_binding(
+                                        &ap.right,
+                                        elem_reg,
+                                        Some(&name),
+                                        ctx,
+                                    )?;
+                                }
+                                self.gen_resolved_binding_store(
+                                    &name,
+                                    object_reg,
+                                    elem_reg,
+                                    kind,
+                                    ctx,
+                                )?;
+                                self.free_register(object_reg);
+                            } else {
+                                self.gen_assignment_target_binding(value, elem_reg, kind, ctx)?;
+                            }
                             self.free_register(elem_reg);
                         }
                         ObjectPatternProperty::RestElement(rest) => {
@@ -4400,6 +4430,55 @@ impl CodeGenerator {
             }
             _ => Err("Unsupported target in binding pattern".to_string()),
         }
+    }
+
+    fn binding_target_with_scope_name(
+        &self,
+        target: &AssignmentTarget,
+        kind: VariableKind,
+    ) -> Option<String> {
+        if kind != VariableKind::Var || self.with_scopes.is_empty() {
+            return None;
+        }
+        let name = match target {
+            AssignmentTarget::Identifier(name) => name.clone(),
+            AssignmentTarget::AssignmentPattern(ap) => match &*ap.left {
+                AssignmentTarget::Identifier(name) => name.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let is_with_target = match self.lookup_var_scope_index(&name) {
+            Some(index) => self.with_applies_to_local(&name, index),
+            None => self.with_applies_to_outer(&name),
+        };
+        if is_with_target { Some(name) } else { None }
+    }
+
+    fn gen_resolved_binding_store(
+        &mut self,
+        name: &str,
+        object_reg: u16,
+        value_reg: u16,
+        kind: VariableKind,
+        ctx: &mut JSContext,
+    ) -> Result<(), String> {
+        let fallback_jump = self.emit_jump_if_nullish(object_reg);
+        self.emit_with_set_resolved(object_reg, value_reg, name, ctx);
+        let end_jump = self.code.len();
+        self.emit(Opcode::Jump);
+        self.emit_i32(0);
+        let fallback = self.code.len();
+        self.patch_jump(fallback_jump, fallback);
+        self.gen_assignment_target_binding(
+            &AssignmentTarget::Identifier(name.to_string()),
+            value_reg,
+            kind,
+            ctx,
+        )?;
+        let end = self.code.len();
+        self.patch_jump(end_jump, end);
+        Ok(())
     }
 
     fn gen_default_value_binding(
