@@ -103,7 +103,8 @@ pub fn init_error(ctx: &mut JSContext) {
     ctx.set_error_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     if ctx.get_builtin_func("error_constructor").is_some() {
-        let f = unsafe { JSValue::function_from_ptr_mut(error_ptr) };
+        let f_binding = JSValue::new_function(error_ptr);
+        let f = f_binding.as_function_mut();
         set_ctor_prototype(&mut f.base, ctx.intern("prototype"), proto_value);
     }
 
@@ -132,7 +133,7 @@ pub fn init_error(ctx: &mut JSContext) {
                     let atom = ctx.intern(name);
                     if let Some(ctor_val) = global.as_object().get(atom) {
                         if ctor_val.is_function() {
-                            let ctor = unsafe { JSValue::function_from_ptr_mut(ctor_val.get_ptr()) };
+                            let ctor = ctor_val.as_function_mut();
                             ctor.base.set_prototype_raw(error_ctor_ptr);
                         }
                     }
@@ -198,7 +199,8 @@ fn init_type_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_type_error_prototype(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -251,7 +253,8 @@ fn init_reference_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_reference_error_prototype(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 
     let global = ctx.global();
@@ -310,7 +313,8 @@ fn init_syntax_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_syntax_error_prototype(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 
     let global = ctx.global();
@@ -369,7 +373,8 @@ fn init_range_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_range_error_prototype(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 
     let global = ctx.global();
@@ -435,7 +440,8 @@ fn init_uri_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_uri_error_prototype(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -495,7 +501,8 @@ fn init_eval_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_eval_error_prototype(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -732,7 +739,8 @@ fn init_suppressed_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_suppressed_error_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -816,7 +824,8 @@ fn init_aggregate_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_aggregate_error_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
-    let ctor = unsafe { JSValue::function_from_ptr_mut(ptr) };
+    let ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.as_function_mut();
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
