@@ -66,7 +66,7 @@ pub struct CallFrame {
 
     pub has_upvalues: bool,
 
-    pub var_name_map: *const Vec<(u32, u16, u8)>,
+    pub var_name_map: Option<std::rc::Rc<Vec<(u32, u16, u8)>>>,
     pub eval_bindings: Option<Box<std::collections::HashMap<u32, JSValue>>>,
     pub cached_arguments: Option<usize>,
     pub with_env: Option<JSValue>,
@@ -107,7 +107,7 @@ impl CallFrame {
             current_pc: 0,
             is_strict_frame: false,
             has_upvalues: false,
-            var_name_map: std::ptr::null(),
+            var_name_map: None,
             eval_bindings: None,
             cached_arguments: None,
             with_env: None,
@@ -1386,16 +1386,14 @@ impl VM {
         if let Some(fptr) = function_ptr {
             let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
             frame.is_strict_frame = func.is_strict();
-            frame.var_name_map = func.bytecode.as_ref().map_or(std::ptr::null(), |bc| {
-                std::rc::Rc::as_ptr(&bc.var_name_to_slot)
-            });
+            frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
             frame.has_upvalues = func
                 .upvalues
                 .as_ref()
                 .map_or(false, |uv| !uv.upvalue_slots.is_empty());
         } else {
             frame.is_strict_frame = false;
-            frame.var_name_map = std::ptr::null();
+            frame.var_name_map = None;
             frame.has_upvalues = false;
         }
         frame.cached_arguments = None;
@@ -1539,16 +1537,14 @@ impl VM {
         if let Some(fptr) = function_ptr {
             let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
             frame.is_strict_frame = func.is_strict();
-            frame.var_name_map = func.bytecode.as_ref().map_or(std::ptr::null(), |bc| {
-                std::rc::Rc::as_ptr(&bc.var_name_to_slot)
-            });
+            frame.var_name_map = func.bytecode.as_ref().map(|bc| bc.var_name_to_slot.clone());
             frame.has_upvalues = func
                 .upvalues
                 .as_ref()
                 .map_or(false, |uv| !uv.upvalue_slots.is_empty());
         } else {
             frame.is_strict_frame = false;
-            frame.var_name_map = std::ptr::null();
+            frame.var_name_map = None;
             frame.has_upvalues = false;
         }
         frame.cached_arguments = None;
@@ -1755,8 +1751,7 @@ impl VM {
     pub fn find_var_in_frame_stack(&self, name_atom: u32) -> Option<(usize, u16)> {
         for fi in (0..=self.frame_index).rev() {
             let frame = &self.frames[fi];
-            if !frame.var_name_map.is_null() {
-                let map = unsafe { &*frame.var_name_map };
+            if let Some(map) = frame.var_name_map.as_ref() {
                 for &(an, slot, _) in map.iter().rev() {
                     if an == name_atom {
                         return Some((fi, slot));
@@ -1798,8 +1793,7 @@ impl VM {
                 ) {
                     return Some(val);
                 }
-                if !frame.var_name_map.is_null() {
-                    let map = unsafe { &*frame.var_name_map };
+                if let Some(map) = frame.var_name_map.as_ref() {
                     for &(an, slot, tag) in map.iter().rev() {
                         if an == name_atom {
                             if tag >= 2 {
@@ -1859,8 +1853,7 @@ impl VM {
                         }
                     }
                 }
-                if !frame.var_name_map.is_null() {
-                    let map = unsafe { &*frame.var_name_map };
+                if let Some(map) = frame.var_name_map.as_ref() {
                     for &(an, slot, _) in map.iter() {
                         if an == name_atom {
                             let base = frame.registers_base;
@@ -1920,8 +1913,8 @@ impl VM {
                 {
                     return CallerVarSet::Stored;
                 }
-                if !parameter_environment_only && !caller.frames[fi].var_name_map.is_null() {
-                    let map = unsafe { &*caller.frames[fi].var_name_map };
+                if !parameter_environment_only && caller.frames[fi].var_name_map.is_some() {
+                    let map = caller.frames[fi].var_name_map.clone().unwrap();
                     for &(an, slot, tag) in map.iter().rev() {
                         if an == name_atom {
                             if tag == 1 {
@@ -2043,8 +2036,7 @@ impl VM {
             }
             if !caller.frames[fi].in_parameter_initializer
                 || caller.eval_direct_scope_contains(name_atom) {
-                if !caller.frames[fi].var_name_map.is_null() {
-                    let map = unsafe { &*caller.frames[fi].var_name_map };
+                if let Some(map) = caller.frames[fi].var_name_map.as_ref() {
                     if map.iter().any(|&(an, _, tag)| an == name_atom && tag == 0) {
                         return true;
                     }
@@ -2084,8 +2076,8 @@ impl VM {
     pub fn set_var_in_frame_stack(&mut self, ctx: &mut JSContext, name: &str, value: JSValue) {
         let atom = ctx.intern(name);
         for fi in (0..=self.frame_index).rev() {
-            if !self.frames[fi].var_name_map.is_null() {
-                let map = unsafe { &*self.frames[fi].var_name_map };
+            if self.frames[fi].var_name_map.is_some() {
+                let map = self.frames[fi].var_name_map.clone().unwrap();
                 for &(an, slot, _) in map.iter().rev() {
                     if an == atom.0 {
                         let base = self.frames[fi].registers_base;
@@ -5631,7 +5623,7 @@ impl VM {
         frame.upvalue_sync_map = None;
         frame.upvalue_sync_bitset = 0;
         frame.uses_arguments = false;
-        frame.var_name_map = std::rc::Rc::as_ptr(&bytecode.var_name_to_slot);
+        frame.var_name_map = Some(bytecode.var_name_to_slot.clone());
         frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
         frame.super_ctor = JSValue::undefined();
         frame.super_base = JSValue::undefined();
@@ -5848,8 +5840,7 @@ impl VM {
                     }
                 }
             }
-            if !frame.var_name_map.is_null() {
-                let map = unsafe { &*frame.var_name_map };
+            if let Some(map) = frame.var_name_map.as_ref() {
                 for &(name_atom, _, _) in map.iter() {
                     let name = ctx
                         .get_atom_str(crate::runtime::atom::Atom(name_atom))
@@ -6128,7 +6119,7 @@ impl VM {
                 }
             }
             frame.uses_arguments = false;
-            frame.var_name_map = std::rc::Rc::as_ptr(&bytecode.var_name_to_slot);
+            frame.var_name_map = Some(bytecode.var_name_to_slot.clone());
             frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
             frame.has_upvalues = match frame.function_ptr {
                 Some(ptr) => {
@@ -8104,9 +8095,10 @@ impl VM {
                                     found = global.as_object().get_own(atom).is_some();
                                 }
 
-                                if !found && !self.frames[0].var_name_map.is_null() {
-                                    let vnm = unsafe { &*self.frames[0].var_name_map };
-                                    found = vnm.iter().any(|&(an, _, _)| an == atom.0);
+                                if !found {
+                                    if let Some(vnm) = self.frames[0].var_name_map.as_ref() {
+                                        found = vnm.iter().any(|&(an, _, _)| an == atom.0);
+                                    }
                                 }
                             } else if self.eval_binding_frames > 0 {
                                 for fi in (0..=self.frame_index).rev() {
@@ -8116,8 +8108,7 @@ impl VM {
                                             break;
                                         }
                                     }
-                                    if !self.frames[fi].var_name_map.is_null() {
-                                        let vnm = unsafe { &*self.frames[fi].var_name_map };
+                                    if let Some(vnm) = self.frames[fi].var_name_map.as_ref() {
                                         if vnm.iter().any(|&(an, _, _)| an == atom.0) {
                                             found = true;
                                             break;
@@ -8288,9 +8279,10 @@ impl VM {
                                 if global.is_object() {
                                     found = global.as_object().get_own(atom).is_some();
                                 }
-                                if !found && !self.frames[0].var_name_map.is_null() {
-                                    let vnm = unsafe { &*self.frames[0].var_name_map };
-                                    found = vnm.iter().any(|&(an, _, _)| an == atom.0);
+                                if !found {
+                                    if let Some(vnm) = self.frames[0].var_name_map.as_ref() {
+                                        found = vnm.iter().any(|&(an, _, _)| an == atom.0);
+                                    }
                                 }
                             } else if self.eval_binding_frames > 0 {
                                 for fi in (0..=self.frame_index).rev() {
@@ -8300,8 +8292,7 @@ impl VM {
                                             break;
                                         }
                                     }
-                                    if !self.frames[fi].var_name_map.is_null() {
-                                        let vnm = unsafe { &*self.frames[fi].var_name_map };
+                                    if let Some(vnm) = self.frames[fi].var_name_map.as_ref() {
                                         if vnm.iter().any(|&(an, _, _)| an == atom.0) {
                                             found = true;
                                             break;
