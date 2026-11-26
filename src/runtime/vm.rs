@@ -4856,6 +4856,26 @@ impl VM {
             if pv.is_object() || pv.is_function() {
                 roots.push(pv);
             }
+            for v in &frame.saved_args {
+                if v.is_object() || v.is_function() {
+                    roots.push(*v);
+                }
+            }
+            if let Some(env) = frame.eval_bindings.as_ref() {
+                for &v in env.values() {
+                    if v.is_object() || v.is_function() {
+                        roots.push(v);
+                    }
+                }
+            }
+            if let Some(ptr) = frame.cached_arguments {
+                roots.push(JSValue::new_object(ptr));
+            }
+            if let Some(env) = frame.with_env {
+                if env.is_object() || env.is_function() {
+                    roots.push(env);
+                }
+            }
         }
 
         macro_rules! push_proto {
@@ -4928,6 +4948,26 @@ impl VM {
             let pv = frame.param_env;
             if pv.is_object() || pv.is_function() {
                 roots.push(pv);
+            }
+            for v in &frame.saved_args {
+                if v.is_object() || v.is_function() {
+                    roots.push(*v);
+                }
+            }
+            if let Some(env) = frame.eval_bindings.as_ref() {
+                for &v in env.values() {
+                    if v.is_object() || v.is_function() {
+                        roots.push(v);
+                    }
+                }
+            }
+            if let Some(ptr) = frame.cached_arguments {
+                roots.push(JSValue::new_object(ptr));
+            }
+            if let Some(env) = frame.with_env {
+                if env.is_object() || env.is_function() {
+                    roots.push(env);
+                }
             }
         }
 
@@ -18615,6 +18655,43 @@ mod tests {
 
         let result = run_bytecode(code, vec![], 2);
         assert_eq!(result.get_int(), 40);
+    }
+
+    #[test]
+    fn test_fill_gc_roots_covers_frame_value_slots() {
+        let mut rt = JSRuntime::new();
+        let mut ctx = JSContext::new(&mut rt);
+
+        let make = |ctx: &mut JSContext| -> JSValue {
+            let obj = crate::object::object::JSObject::new();
+            let ptr = Box::into_raw(Box::new(obj));
+            ctx.runtime_mut().gc_heap_mut().track(ptr);
+            JSValue::new_object(ptr)
+        };
+
+        let saved_arg = make(&mut ctx);
+        let eval_binding = make(&mut ctx);
+        let arguments_obj = make(&mut ctx);
+        let with_env = make(&mut ctx);
+
+        let mut vm = VM::new();
+        let frame = &mut vm.frames[0];
+        frame.saved_args.push(saved_arg);
+        frame.eval_bindings = Some(Box::new(std::collections::HashMap::from([(
+            0u32,
+            eval_binding,
+        )])));
+        frame.cached_arguments = Some(arguments_obj.get_ptr());
+        frame.with_env = Some(with_env);
+
+        vm.fill_gc_roots(&ctx);
+
+        let roots = &vm.gc_roots;
+        let is_rooted = |value: JSValue| roots.iter().any(|r| r.raw_bits() == value.raw_bits());
+        assert!(is_rooted(saved_arg));
+        assert!(is_rooted(eval_binding));
+        assert!(is_rooted(arguments_obj));
+        assert!(is_rooted(with_env));
     }
 }
 
