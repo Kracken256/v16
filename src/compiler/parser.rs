@@ -260,6 +260,14 @@ impl Parser {
                 self.parse_function_declaration(false, generator)
             }
             Some((TokenType::Keyword, "async")) => {
+                let next_is_function = self.peek_at("function")
+                    && !self
+                        .peek_token
+                        .as_ref()
+                        .map_or(false, |t| t.line_terminator_before);
+                if !next_is_function {
+                    return self.parse_expression_statement_or_labelled();
+                }
                 self.advance();
                 self.expect("function")?;
                 let generator = self.at_punct("*");
