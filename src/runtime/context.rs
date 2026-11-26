@@ -308,6 +308,7 @@ pub struct JSContext {
     generator_function_prototype: Option<usize>,
     async_generator_function_prototype: Option<usize>,
     promise_prototype: Option<usize>,
+    promise_constructor: Option<usize>,
 
     active_realm: usize,
 
@@ -405,6 +406,7 @@ impl JSContext {
             generator_function_prototype: None,
             async_generator_function_prototype: None,
             promise_prototype: None,
+            promise_constructor: None,
 
             active_realm: 0,
             register_vm_ptr: None,
@@ -671,6 +673,10 @@ impl JSContext {
         std::mem::swap(
             &mut self.promise_prototype,
             &mut other.promise_prototype,
+        );
+        std::mem::swap(
+            &mut self.promise_constructor,
+            &mut other.promise_constructor,
         );
     }
 
@@ -1119,6 +1125,14 @@ impl JSContext {
 
     pub fn get_promise_prototype(&self) -> Option<*mut JSObject> {
         self.promise_prototype.map(|p| p as *mut JSObject)
+    }
+
+    pub fn set_promise_constructor(&mut self, ptr: usize) {
+        self.promise_constructor = Some(ptr);
+    }
+
+    pub fn get_promise_constructor(&self) -> Option<usize> {
+        self.promise_constructor
     }
 
     pub fn set_register_vm_ptr(&mut self, ptr: Option<usize>) {

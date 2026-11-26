@@ -3018,7 +3018,7 @@ impl VM {
         atom
     }
 
-    fn get_property_value_full(
+    pub(crate) fn get_property_value_full(
         &mut self,
         ctx: &mut JSContext,
         obj_val: JSValue,
@@ -15139,65 +15139,97 @@ impl VM {
                         self.set_pending_type_error(ctx, msg);
                         return Err(msg.to_string());
                     }
-                    let value = match self.get_prop_value(ctx, result, value_atom) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.rethrow_last_caught(ctx);
-                            return Err(e);
-                        }
-                    };
+                    let continuation = crate::builtins::promise::new_pending_promise(ctx);
+                    let mut failure: Option<JSValue> = None;
                     let done_val = match self.get_prop_value(ctx, result, done_atom) {
                         Ok(v) => v,
-                        Err(e) => {
-                            self.rethrow_last_caught(ctx);
-                            return Err(e);
+                        Err(_) => {
+                            failure = Some(
+                                self.take_pending_exception(ctx)
+                                    .unwrap_or_else(JSValue::undefined),
+                            );
+                            JSValue::undefined()
                         }
                     };
-                    if done_val.is_truthy() {
-                        self.set_reg(dst_val, value);
-                        self.set_reg(dst_done, JSValue::bool(true));
-                        return Ok(false);
-                    }
-                    let promise = ctx.call_builtin("promise_resolve", &[value]);
-                    match self.promise_settlement(ctx, promise) {
-                        PromiseSettlement::Fulfilled(v) => {
-                            self.set_reg(dst_val, v);
-                            self.set_reg(dst_done, JSValue::bool(false));
-                            return Ok(false);
-                        }
-                        PromiseSettlement::Rejected(reason) => {
-                            self.set_reg(dst_done, JSValue::bool(true));
-                            self.last_caught_exception = Some(reason);
-                            self.pending_throw = Some(reason);
-                            return Err("awaited promise rejected".to_string());
-                        }
-                        PromiseSettlement::Pending => {
-                            if let Some(r) = state_reg {
-                                self.set_reg(r, JSValue::new_int(2));
+                    let mut value = JSValue::undefined();
+                    if failure.is_none() {
+                        match self.get_prop_value(ctx, result, value_atom) {
+                            Ok(v) => value = v,
+                            Err(_) => {
+                                failure =
+                                    Some(self.take_pending_exception(ctx).unwrap_or_else(JSValue::undefined));
                             }
-                            self.await_suspend = Some((promise, dst_val));
-                            self.pc = instr_pc;
-                            return Ok(true);
                         }
                     }
+                    if failure.is_none() {
+                        match crate::builtins::promise::promise_resolve_internal(ctx, self, value) {
+                            Ok(wrapper) => {
+                                let wrapper_atom = ctx.intern("__v16_value_wrapper__");
+                                continuation.as_object_mut().set(wrapper_atom, wrapper);
+                                crate::builtins::promise::schedule_settlement_reaction(
+                                    ctx,
+                                    wrapper,
+                                    continuation,
+                                );
+                            }
+                            Err(_) => {
+                                failure =
+                                    Some(self.take_pending_exception(ctx).unwrap_or_else(JSValue::undefined));
+                            }
+                        }
+                    }
+                    if let Some(reason) = failure {
+                        crate::builtins::promise::reject_pending_promise(
+                            ctx,
+                            continuation,
+                            reason,
+                        );
+                    }
+                    self.set_reg(dst_done, JSValue::bool(done_val.is_truthy()));
+                    let awaited =
+                        match crate::builtins::promise::promise_resolve_internal(ctx, self, continuation) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                self.rethrow_last_caught(ctx);
+                                return Err(e);
+                            }
+                        };
+                    if let Some(r) = state_reg {
+                        self.set_reg(r, JSValue::new_int(2));
+                    }
+                    self.await_suspend = Some((awaited, dst_val));
+                    self.pc = instr_pc;
+                    return Ok(true);
                 } else {
-                    let promise = ctx.call_builtin("promise_resolve", &[result]);
-                    match self.promise_settlement(ctx, promise) {
-                        PromiseSettlement::Fulfilled(v) => result = v,
-                        PromiseSettlement::Rejected(reason) => {
-                            self.set_reg(dst_done, JSValue::bool(true));
-                            self.last_caught_exception = Some(reason);
-                            self.pending_throw = Some(reason);
-                            return Err("awaited promise rejected".to_string());
-                        }
-                        PromiseSettlement::Pending => {
-                            if let Some(r) = state_reg {
-                                self.set_reg(r, JSValue::new_int(1));
+                    let promise =
+                        match crate::builtins::promise::promise_resolve_internal(ctx, self, result) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                self.rethrow_last_caught(ctx);
+                                return Err(e);
                             }
+                        };
+                    match state_reg {
+                        Some(r) => {
+                            self.set_reg(r, JSValue::new_int(1));
                             self.await_suspend = Some((promise, dst_val));
                             self.pc = instr_pc;
                             return Ok(true);
                         }
+                        None => match self.promise_settlement(ctx, promise) {
+                            PromiseSettlement::Fulfilled(v) => result = v,
+                            PromiseSettlement::Rejected(reason) => {
+                                self.set_reg(dst_done, JSValue::bool(true));
+                                self.last_caught_exception = Some(reason);
+                                self.pending_throw = Some(reason);
+                                return Err("awaited promise rejected".to_string());
+                            }
+                            PromiseSettlement::Pending => {
+                                self.await_suspend = Some((promise, dst_val));
+                                self.pc = instr_pc;
+                                return Ok(true);
+                            }
+                        },
                     }
                 }
             }
@@ -15210,7 +15242,6 @@ impl VM {
             if let Some(r) = state_reg {
                 self.set_reg(r, JSValue::new_int(0));
             }
-            self.set_reg(dst_done, JSValue::bool(false));
             return Ok(false);
         }
 

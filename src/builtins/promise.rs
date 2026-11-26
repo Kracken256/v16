@@ -894,7 +894,7 @@ fn reject_promise_with_type_error(ctx: &mut JSContext, target: JSValue, message:
 /// Implements the Promise Resolution Procedure (ECMA-262 25.6.1.3.2) for `target`.
 /// If `value` is a thenable (including another promise) this adopts its eventual
 /// state, otherwise it fulfills `target` with `value`.
-fn resolve_promise_value(
+pub(crate) fn resolve_promise_value(
     ctx: &mut JSContext,
     vm: &mut crate::runtime::vm::VM,
     target: JSValue,
@@ -1146,6 +1146,7 @@ pub fn init_promise(ctx: &mut JSContext) {
     let promise_ptr = Box::into_raw(Box::new(promise_func)) as usize;
     ctx.runtime_mut().gc_heap_mut().track_function(promise_ptr);
     let promise_value = JSValue::new_function(promise_ptr);
+    ctx.set_promise_constructor(promise_ptr);
 
     crate::builtins::symbol::install_species_accessor(ctx, &promise_value);
 
@@ -1368,6 +1369,45 @@ pub fn new_pending_promise(ctx: &mut JSContext) -> JSValue {
     JSValue::new_object(ptr)
 }
 
+pub(crate) fn promise_resolve_internal(
+    ctx: &mut JSContext,
+    vm: &mut crate::runtime::vm::VM,
+    resolution: JSValue,
+) -> Result<JSValue, String> {
+    if is_promise(&resolution) {
+        let constructor_atom = ctx.intern("constructor");
+        let resolved_constructor = match vm.get_property_value_full(ctx, resolution, constructor_atom)
+        {
+            Some(value) => value,
+            None => {
+                if vm.pending_throw.is_some() {
+                    return Err("constructor lookup threw".to_string());
+                }
+                JSValue::undefined()
+            }
+        };
+        if resolved_constructor.is_function()
+            && let Some(intrinsic) = ctx.get_promise_constructor()
+            && resolved_constructor.get_ptr() == intrinsic
+        {
+            return Ok(resolution);
+        }
+    }
+    let promise = new_pending_promise(ctx);
+    resolve_promise_value(ctx, vm, promise, resolution);
+    Ok(promise)
+}
+
+pub(crate) fn reject_pending_promise(ctx: &mut JSContext, promise: JSValue, reason: JSValue) {
+    if !promise.is_object() {
+        return;
+    }
+    let target = promise.as_object_mut();
+    if target.is_promise() && get_promise_state(ctx, target).is_pending() {
+        reject_promise(ctx, target, reason);
+    }
+}
+
 pub fn schedule_async_resume(
     ctx: &mut JSContext,
     promise: JSValue,
@@ -1408,6 +1448,45 @@ pub fn schedule_async_resume(
             reactions.push(reaction);
             let reactions_arr = create_reaction_array(ctx, reactions);
             promise.set(reactions_atom, reactions_arr);
+        }
+    }
+}
+
+pub fn schedule_settlement_reaction(ctx: &mut JSContext, source: JSValue, target: JSValue) {
+    if !source.is_object() {
+        return;
+    }
+    let source_obj = source.as_object_mut();
+    if !source_obj.is_promise() {
+        return;
+    }
+    let reactions_atom = intern_str(ctx, PROMISE_REACTIONS_SLOT);
+    let reaction = Reaction {
+        handler: JSValue::undefined(),
+        is_reject: false,
+        is_all_settled: false,
+        is_finally: false,
+        target_promise: target,
+    };
+    match get_promise_state(ctx, source_obj) {
+        PromiseState::Fulfilled => {
+            let result = get_promise_result(ctx, source_obj);
+            ctx.microtask_enqueue(Microtask::Reaction(reaction, result));
+        }
+        PromiseState::Rejected => {
+            let reason = get_promise_result(ctx, source_obj);
+            let mut reject_reaction = reaction.clone();
+            reject_reaction.is_reject = true;
+            ctx.microtask_enqueue(Microtask::Reaction(reject_reaction, reason));
+        }
+        PromiseState::Pending => {
+            let mut reactions = get_promise_reactions(ctx, source_obj);
+            reactions.push(reaction.clone());
+            let mut reject_reaction = reaction;
+            reject_reaction.is_reject = true;
+            reactions.push(reject_reaction);
+            let reactions_arr = create_reaction_array(ctx, reactions);
+            source_obj.set(reactions_atom, reactions_arr);
         }
     }
 }
