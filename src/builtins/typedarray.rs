@@ -1138,27 +1138,31 @@ pub fn ta_set_element(ctx: &mut JSContext, obj: &mut JSObject, index: usize, val
     let num = value.to_number();
     match kind {
         TypedArrayKind::Int8 => {
-            let v = num as i8;
+            let v = to_int_modulo(num, 8) as u8;
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
-        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
-            let v = num as u8;
+        TypedArrayKind::Uint8 => {
+            let v = to_int_modulo(num, 8) as u8;
+            data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
+        }
+        TypedArrayKind::Uint8Clamped => {
+            let v = to_uint8_clamp(num);
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
         TypedArrayKind::Int16 => {
-            let v = num as i16;
+            let v = to_int_modulo(num, 16) as u16;
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
         TypedArrayKind::Uint16 => {
-            let v = num as u16;
+            let v = to_int_modulo(num, 16) as u16;
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
         TypedArrayKind::Int32 => {
-            let v = num as i32;
+            let v = to_int_modulo(num, 32) as u32;
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
         TypedArrayKind::Uint32 => {
-            let v = num as u32;
+            let v = to_int_modulo(num, 32) as u32;
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
         TypedArrayKind::Float32 => {
@@ -2220,7 +2224,8 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     ta_proto.prototype = Some(ta_parent_ptr as *mut JSObject);
 
     let to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
-    ta_proto.set(to_string_tag_key, JSValue::new_string(ctx.intern("TypedArray")));
+    let to_string_tag_getter = create_builtin_function(ctx, "typedarray_to_string_tag");
+    ta_proto.define_accessor_flags(to_string_tag_key, Some(to_string_tag_getter), None, false, true);
 
     let ta_proto_ptr = Box::into_raw(Box::new(ta_proto)) as usize;
     ctx.runtime_mut().gc_heap_mut().track(ta_proto_ptr);
@@ -2262,15 +2267,6 @@ pub fn init_typed_array(ctx: &mut JSContext) {
                 if !species_sym.is_undefined() {
                     ctor_obj.set(species_sym.get_atom(), species_fn);
                 }
-            }
-        }
-    }
-
-    let ta_sym_tag = crate::builtins::symbol::get_symbol_to_string_tag(ctx);
-    if !ta_sym_tag.is_undefined() {
-        if let Some(proto_obj) = ctx.get_typed_array_prototype() {
-            unsafe {
-                (*proto_obj).set(ta_sym_tag.get_atom(), JSValue::new_string(ctx.intern("TypedArray")));
             }
         }
     }
@@ -2350,6 +2346,10 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "typedarray_length",
         HostFunction::method("length", 0, typed_array_get_length),
+    );
+    ctx.register_builtin(
+        "typedarray_to_string_tag",
+        HostFunction::method("get [Symbol.toStringTag]", 0, typed_array_to_string_tag),
     );
 
     ctx.register_builtin(
