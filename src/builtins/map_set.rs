@@ -263,7 +263,9 @@ fn make_array(ctx: &mut JSContext, items: Vec<JSValue>) -> JSValue {
         arr.set(key, v);
     }
     arr.set(ctx.common_atoms.length, JSValue::new_int(len as i64));
-    JSValue::new_object(Box::into_raw(Box::new(arr)))
+    let ptr = Box::into_raw(Box::new(arr));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
+    JSValue::new_object(ptr)
 }
 
 pub fn iterate_values(ctx: &mut JSContext, iterable: JSValue) -> Vec<JSValue> {
@@ -551,7 +553,9 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let size_atom = ctx.intern("__map_size__");
     obj.set(size_atom, JSValue::new_int(0));
 
-    let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)));
+    let this_ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(this_ptr);
+    let this_val = JSValue::new_object(this_ptr);
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -1291,6 +1295,7 @@ fn weakmap_constructor(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     let size_atom = ctx.intern("__weakmap_size__");
     obj.set(size_atom, JSValue::new_int(0));
     let ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -1443,6 +1448,7 @@ fn weakset_constructor(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
     let size_atom = ctx.intern("__weakset_size__");
     obj.set(size_atom, JSValue::new_int(0));
     let ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -1560,7 +1566,9 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let size_atom = ctx.intern("__set_size__");
     obj.set(size_atom, JSValue::new_int(0));
 
-    let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)));
+    let this_ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(this_ptr);
+    let this_val = JSValue::new_object(this_ptr);
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -2604,4 +2612,51 @@ pub fn register_builtins(ctx: &mut JSContext) {
         "weakset_delete",
         HostFunction::method("delete", 1, weakset_delete),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root(ctx: &mut JSContext, value: JSValue) {
+        ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
+    }
+
+    fn assert_tracked_after_gc(ctx: &mut JSContext, value: JSValue) {
+        assert!(value.is_object());
+        let ptr = value.get_ptr();
+        let slot = value.as_object().gc_slot as usize;
+        root(ctx, value);
+        let mut vm = crate::runtime::vm::VM::new();
+        vm.run_gc(ctx);
+        assert_eq!(ctx.runtime().gc_heap().tracked_ptr_at(slot), Some(ptr));
+    }
+
+    #[test]
+    fn test_collection_objects_are_tracked() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        for source in [
+            "new Map()",
+            "new Set()",
+            "new WeakMap()",
+            "new WeakSet()",
+            "new Map([[1, 2]]).entries().next().value",
+            "Map.groupBy([1, 2], function (x) { return x % 2; }).get(1)",
+        ] {
+            eprintln!("SOURCE: {source}");
+            let value = crate::eval(&mut ctx, source).unwrap();
+            assert_tracked_after_gc(&mut ctx, value);
+        }
+    }
+
+    #[test]
+    fn test_map_iterator_results_trace_entry_arrays() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        let result = crate::eval(&mut ctx, "new Map([[1, 2]]).entries().next()").unwrap();
+        root(&mut ctx, result);
+        let pair = result.as_object().get(ctx.intern("value")).unwrap();
+        assert_tracked_after_gc(&mut ctx, pair);
+    }
 }
