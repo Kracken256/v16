@@ -2501,6 +2501,26 @@ impl VM {
     }
 
     #[inline(always)]
+    fn ic_table(&self) -> Option<&crate::compiler::InlineCacheTable> {
+        let ptr = self.cached_ic_table_ptr;
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &*ptr })
+        }
+    }
+
+    #[inline(always)]
+    fn ic_table_mut(&mut self) -> Option<&mut crate::compiler::InlineCacheTable> {
+        let ptr = self.cached_ic_table_ptr;
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &mut *ptr })
+        }
+    }
+
+    #[inline(always)]
     fn upvalue_get(&self, slot: usize) -> JSValue {
         let Some(fptr) = self.frames[self.frame_index].function_ptr else {
             return JSValue::undefined();
@@ -7784,21 +7804,17 @@ impl VM {
                                 let global_obj = global.as_object();
 
                                 let global_shape_id = global_obj.shape_id_cache;
-                                let ic_table_ptr = self.cached_ic_table_ptr;
                                 let mut ic_hit = false;
-                                if !ic_table_ptr.is_null() {
-                                    if let Some(offset) = unsafe {
-                                        (*ic_table_ptr).get_global_cache(
-                                            ic_pc,
-                                            global_shape_id,
-                                            atom.0,
-                                        )
-                                    } {
-                                        result = global_obj
-                                            .get_by_offset(offset as usize)
-                                            .unwrap_or(JSValue::undefined());
-                                        ic_hit = true;
-                                    }
+                                if let Some(offset) = self
+                                    .ic_table()
+                                    .and_then(|ic_table| {
+                                        ic_table.get_global_cache(ic_pc, global_shape_id, atom.0)
+                                    })
+                                {
+                                    result = global_obj
+                                        .get_by_offset(offset as usize)
+                                        .unwrap_or(JSValue::undefined());
+                                    ic_hit = true;
                                 }
                                 if !ic_hit {
                                     if let Some(accessor) = global_obj.get_own_accessor_entry(atom)
@@ -7835,16 +7851,14 @@ impl VM {
                                     } else if let Some(value) = global_obj.get(atom) {
                                         result = value;
 
-                                        if !ic_table_ptr.is_null() {
-                                            if let Some(offset) = global_obj.find_offset(atom) {
-                                                unsafe {
-                                                    (*ic_table_ptr).insert_global_cache(
-                                                        ic_pc,
-                                                        global_shape_id,
-                                                        offset as u32,
-                                                        atom.0,
-                                                    );
-                                                }
+                                        if let Some(offset) = global_obj.find_offset(atom) {
+                                            if let Some(ic_table) = self.ic_table_mut() {
+                                                ic_table.insert_global_cache(
+                                                    ic_pc,
+                                                    global_shape_id,
+                                                    offset as u32,
+                                                    atom.0,
+                                                );
                                             }
                                         }
                                     }
@@ -15770,13 +15784,8 @@ impl VM {
                 if let Some(val) = pobj.get_own(atom) {
                     self.set_reg(dst, val);
 
-                    let ic_table_ptr = if ic_pc == usize::MAX {
-                std::ptr::null_mut()
-            } else {
-                self.cached_ic_table_ptr
-            };
-                    if !ic_table_ptr.is_null() {
-                        let pc = if ic_pc == usize::MAX { 0 } else { ic_pc };
+                    if ic_pc != usize::MAX {
+                        let pc = ic_pc;
                         let pseudo_id = if obj_val.is_string() {
                             PRIM_STRING_SHAPE_ID
                         } else if obj_val.is_bool() {
@@ -15785,9 +15794,9 @@ impl VM {
                             PRIM_NUMBER_SHAPE_ID
                         };
                         if let Some(offset) = pobj.find_offset(atom) {
-                            unsafe {
-                                (*ic_table_ptr).ensure_capacity(pc + 1);
-                                if let Some(ic) = (*ic_table_ptr).get_mut(pc) {
+                            if let Some(ic_table) = self.ic_table_mut() {
+                                ic_table.ensure_capacity(pc + 1);
+                                if let Some(ic) = ic_table.get_mut(pc) {
                                     ic.insert(
                                         crate::object::shape::ShapeId(pseudo_id),
                                         offset as u32,
@@ -15842,57 +15851,52 @@ impl VM {
                     }
                 }
             }
-            let ic_table_ptr = if ic_pc == usize::MAX {
-                std::ptr::null_mut()
-            } else {
-                self.cached_ic_table_ptr
-            };
-
             let pc = if ic_pc == usize::MAX { 0 } else { ic_pc };
             let mut ic_hit = false;
-            if let Some(shape_id) = js_obj.get_shape_id() {
-                if !ic_table_ptr.is_null() {
-                    let ic_table = unsafe { &*ic_table_ptr };
-                    if let Some(ic) = ic_table.get(pc) {
-                        if let Some((offset, proto_ptr)) = ic.get(shape_id) {
-                            if offset == u32::MAX && proto_ptr.is_none() {
-                                self.set_reg(dst, JSValue::undefined());
-                                ic_hit = true;
-                            } else {
-                                let val = if let Some(proto) = proto_ptr {
-                                    let mut proto_matches = js_obj
-                                        .prototype
-                                        .map(|p| !p.is_null() && p as usize == proto)
-                                        .unwrap_or(false);
-                                    if !proto_matches {
-                                        let mut cur = js_obj.prototype;
-                                        let mut depth = 0u32;
-                                        while let Some(p) = cur {
-                                            if p.is_null() || depth > 1000 {
-                                                break;
-                                            }
-                                            if p as usize == proto {
-                                                proto_matches = true;
-                                                break;
-                                            }
-                                            depth += 1;
-                                            let p_val = JSValue::new_object(p as usize);
-                                            cur = p_val.as_object().prototype;
-                                        }
-                                    }
-                                    if proto_matches {
-                                        let proto_obj = JSValue::new_object(proto);
-                                        let proto_obj = proto_obj.as_object();
-                                        proto_obj.get_by_offset(offset as usize)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    js_obj.get_by_offset(offset as usize)
-                                };
-                                if let Some(v) = val {
-                                    self.set_reg(dst, v);
+            if ic_pc != usize::MAX {
+                if let Some(shape_id) = js_obj.get_shape_id() {
+                    if let Some(ic_table) = self.ic_table() {
+                        if let Some(ic) = ic_table.get(pc) {
+                            if let Some((offset, proto_ptr)) = ic.get(shape_id) {
+                                if offset == u32::MAX && proto_ptr.is_none() {
+                                    self.set_reg(dst, JSValue::undefined());
                                     ic_hit = true;
+                                } else {
+                                    let val = if let Some(proto) = proto_ptr {
+                                        let mut proto_matches = js_obj
+                                            .prototype
+                                            .map(|p| !p.is_null() && p as usize == proto)
+                                            .unwrap_or(false);
+                                        if !proto_matches {
+                                            let mut cur = js_obj.prototype;
+                                            let mut depth = 0u32;
+                                            while let Some(p) = cur {
+                                                if p.is_null() || depth > 1000 {
+                                                    break;
+                                                }
+                                                if p as usize == proto {
+                                                    proto_matches = true;
+                                                    break;
+                                                }
+                                                depth += 1;
+                                                let p_val = JSValue::new_object(p as usize);
+                                                cur = p_val.as_object().prototype;
+                                            }
+                                        }
+                                        if proto_matches {
+                                            let proto_obj = JSValue::new_object(proto);
+                                            let proto_obj = proto_obj.as_object();
+                                            proto_obj.get_by_offset(offset as usize)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        js_obj.get_by_offset(offset as usize)
+                                    };
+                                    if let Some(v) = val {
+                                        self.set_reg(dst, v);
+                                        ic_hit = true;
+                                    }
                                 }
                             }
                         }
@@ -15905,10 +15909,10 @@ impl VM {
                     if let Some(offset) = js_obj.find_offset(atom) {
                         let v = js_obj.get_by_offset(offset).unwrap_or(JSValue::undefined());
                         self.set_reg(dst, v);
-                        if !ic_table_ptr.is_null() {
-                            unsafe {
-                                (*ic_table_ptr).ensure_capacity(pc + 1);
-                                if let Some(ic) = (*ic_table_ptr).get_mut(pc) {
+                        if ic_pc != usize::MAX {
+                            if let Some(ic_table) = self.ic_table_mut() {
+                                ic_table.ensure_capacity(pc + 1);
+                                if let Some(ic) = ic_table.get_mut(pc) {
                                     ic.insert(shape_id, offset as u32, None);
                                 }
                             }
@@ -15949,10 +15953,10 @@ impl VM {
                                         .get_by_offset(offset)
                                         .unwrap_or(JSValue::undefined());
                                     self.set_reg(dst, v);
-                                    if !ic_table_ptr.is_null() {
-                                        unsafe {
-                                            (*ic_table_ptr).ensure_capacity(pc + 1);
-                                            if let Some(ic) = (*ic_table_ptr).get_mut(pc) {
+                                    if ic_pc != usize::MAX {
+                                        if let Some(ic_table) = self.ic_table_mut() {
+                                            ic_table.ensure_capacity(pc + 1);
+                                            if let Some(ic) = ic_table.get_mut(pc) {
                                                 ic.insert(
                                                     shape_id,
                                                     offset as u32,
@@ -16055,10 +16059,10 @@ impl VM {
                             }
                             if !found {
                                 self.set_reg(dst, JSValue::undefined());
-                                if !ic_table_ptr.is_null() {
-                                    unsafe {
-                                        (*ic_table_ptr).ensure_capacity(pc + 1);
-                                        if let Some(ic) = (*ic_table_ptr).get_mut(pc) {
+                                if ic_pc != usize::MAX {
+                                    if let Some(ic_table) = self.ic_table_mut() {
+                                        ic_table.ensure_capacity(pc + 1);
+                                        if let Some(ic) = ic_table.get_mut(pc) {
                                             ic.insert(shape_id, u32::MAX, None);
                                         }
                                     }
@@ -16243,10 +16247,9 @@ impl VM {
             }
             let shape_id = js_obj.shape_id_cache;
             if shape_id != usize::MAX {
-                let ic_table_ptr = self.cached_ic_table_ptr;
-                if !ic_table_ptr.is_null() {
+                if let Some(ic_table) = self.ic_table() {
                     let (ic_hit, r0_offset, r0_proto) =
-                        unsafe { (*ic_table_ptr).get_reads0_values(instr_pc, shape_id) };
+                        ic_table.get_reads0_values(instr_pc, shape_id);
                     if ic_hit {
                         if r0_proto == 0 {
                             let val = if r0_offset == u32::MAX {
@@ -16312,10 +16315,9 @@ impl VM {
         instr_pc: usize,
         shape_id: usize,
     ) -> bool {
-        let ic_table_ptr = self.cached_ic_table_ptr;
-        if !ic_table_ptr.is_null() {
+        if let Some(ic_table) = self.ic_table() {
             let (ic_hit, r_offset, r_proto) =
-                unsafe { (*ic_table_ptr).get_reads123_values(instr_pc, shape_id) };
+                ic_table.get_reads123_values(instr_pc, shape_id);
             if ic_hit {
                 let js_obj = obj_val.as_object();
                 if r_proto == 0 {
@@ -16415,10 +16417,9 @@ impl VM {
             } else {
                 PRIM_NUMBER_SHAPE_ID
             };
-            let ic_table_ptr = self.cached_ic_table_ptr;
-            if !ic_table_ptr.is_null() {
+            if let Some(ic_table) = self.ic_table() {
                 let (ic_hit, r0_offset, r0_proto) =
-                    unsafe { (*ic_table_ptr).get_reads0_values(instr_pc, pseudo_id) };
+                    ic_table.get_reads0_values(instr_pc, pseudo_id);
                 if ic_hit {
                     if r0_proto != 0 {
                         let proto_obj = JSValue::new_object(r0_proto);
@@ -16863,8 +16864,6 @@ impl VM {
                     return true;
                 }
             }
-            let ic_table_ptr = self.cached_ic_table_ptr;
-
             // For shapeless objects with no properties yet, treat as root shape for IC
             // (all new objects start at root shape before any property is assigned)
             let effective_shape_id = js_obj.get_shape_id().or_else(|| {
@@ -16875,8 +16874,7 @@ impl VM {
                 }
             });
             if let Some(shape_id) = effective_shape_id {
-                if !ic_table_ptr.is_null() {
-                    let ic_table = unsafe { &*ic_table_ptr };
+                if let Some(ic_table) = self.ic_table() {
                     if let Some(ic) = ic_table.get(ic_pc) {
                         if let Some((offset, new_shape_ptr)) = ic.get_transition(shape_id) {
                             if new_shape_ptr.is_null() {
@@ -16922,16 +16920,18 @@ impl VM {
 
             let (has_accessor, setter) = if pre_offset.is_some() {
                 (false, None)
-            } else if !ic_table_ptr.is_null() {
-                let ic_table = unsafe { &*ic_table_ptr };
+            } else if !self.cached_ic_table_ptr.is_null() {
                 if let Some(shape_id) = js_obj.get_shape_id() {
-                    if ic_table.get_write_no_accessor(ic_pc, shape_id) {
+                    if self
+                        .ic_table()
+                        .map_or(false, |ic_table| ic_table.get_write_no_accessor(ic_pc, shape_id))
+                    {
                         (false, None)
                     } else {
                         let r = self.proto_chain_has_accessors(obj_val, atom);
                         if !r.0 {
-                            unsafe {
-                                (*ic_table_ptr).set_write_no_accessor(ic_pc);
+                            if let Some(ic_table) = self.ic_table_mut() {
+                                ic_table.set_write_no_accessor(ic_pc);
                             }
                         }
                         r
@@ -17026,8 +17026,6 @@ impl VM {
         atom: crate::runtime::atom::Atom,
         ic_pc: usize,
     ) {
-        let ic_table_ptr = self.cached_ic_table_ptr;
-
         let pre_shape_id = js_obj.get_shape_id();
         let pre_props_len = js_obj.props_len();
         let pre_offset = js_obj.find_offset(atom);
@@ -17035,10 +17033,10 @@ impl VM {
         if let Some(shape_id) = js_obj.get_shape_id() {
             let offset = pre_offset.or_else(|| js_obj.find_offset(atom));
             if let Some(offset) = offset {
-                if !ic_table_ptr.is_null() && ic_pc != usize::MAX {
-                    unsafe {
-                        (*ic_table_ptr).ensure_capacity((ic_pc) + 1);
-                        if let Some(ic) = (*ic_table_ptr).get_mut(ic_pc) {
+                if ic_pc != usize::MAX {
+                    if let Some(ic_table) = self.ic_table_mut() {
+                        ic_table.ensure_capacity(ic_pc + 1);
+                        if let Some(ic) = ic_table.get_mut(ic_pc) {
                             let was_transition = offset == pre_props_len;
                             if was_transition {
                                 if let Some(pre_id) = pre_shape_id {
@@ -17048,8 +17046,6 @@ impl VM {
                                         ic.insert(shape_id, offset as u32, None);
                                     }
                                 } else if pre_props_len == 0 {
-                                    // Object was shapeless with no props (at root state)
-                                    // Record transition from root shape so future IC lookups hit
                                     if let Some(new_shape_ptr) = js_obj.get_shape_ptr() {
                                         ic.insert_transition(
                                             crate::object::shape::ShapeId::root(),
