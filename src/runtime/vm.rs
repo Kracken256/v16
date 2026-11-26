@@ -1710,10 +1710,7 @@ impl VM {
         self.frame_index -= 1;
         self.pc = return_pc;
         self.refresh_cache();
-        let regs_ptr = self.cached_registers_ptr;
-        unsafe {
-            *regs_ptr.add(dst_reg as usize) = return_value;
-        }
+        self.registers[self.cached_registers_base + dst_reg as usize] = return_value;
 
         let caller = &mut self.frames[self.frame_index];
         let mut pending_elements = None;
@@ -1727,9 +1724,7 @@ impl VM {
                 caller.this_initialized = true;
                 if return_value.is_object_like() {
                     caller.this_value = return_value;
-                    unsafe {
-                        *regs_ptr = return_value;
-                    }
+                    self.registers[self.cached_registers_base] = return_value;
                 }
                 if let Some(cell) = caller.this_cell.clone() {
                     cell.set((caller.this_value, true));
