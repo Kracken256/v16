@@ -3088,7 +3088,6 @@ impl CodeGenerator {
             },
             ic_table: crate::compiler::InlineCacheTable::new(),
             shared_ic_table_ptr: std::ptr::null_mut(),
-            shared_nested_bytecodes_ptr: std::ptr::null_mut(),
             shared_code_ptr: std::ptr::null(),
             shared_code_len: 0,
             shared_const_ptr: std::ptr::null(),

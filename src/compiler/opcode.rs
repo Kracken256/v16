@@ -625,9 +625,6 @@ pub struct Bytecode {
 
     pub shared_ic_table_ptr: *mut crate::compiler::InlineCacheTable,
 
-    pub shared_nested_bytecodes_ptr:
-        *mut std::cell::UnsafeCell<Vec<(u32, std::sync::Arc<NestedBytecode>)>>,
-
     pub shared_code_ptr: *const u8,
     pub shared_code_len: usize,
     pub shared_const_ptr: *const crate::value::JSValue,
@@ -667,7 +664,7 @@ pub struct NestedBytecode {
 
     pub ic_table: std::cell::UnsafeCell<crate::compiler::InlineCacheTable>,
 
-    pub nested_bytecodes: std::cell::UnsafeCell<Vec<(u32, std::sync::Arc<NestedBytecode>)>>,
+    pub nested_bytecodes: std::cell::RefCell<Vec<(u32, std::sync::Arc<NestedBytecode>)>>,
 }
 
 impl std::fmt::Debug for NestedBytecode {
@@ -694,7 +691,6 @@ impl Bytecode {
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
             shared_ic_table_ptr: std::ptr::null_mut(),
-            shared_nested_bytecodes_ptr: std::ptr::null_mut(),
             shared_code_ptr: std::ptr::null(),
             shared_code_len: 0,
             shared_const_ptr: std::ptr::null(),
@@ -1618,7 +1614,6 @@ impl Bytecode {
             line_number_table: None,
             ic_table: crate::compiler::InlineCacheTable::new(),
             shared_ic_table_ptr: std::ptr::null_mut(),
-            shared_nested_bytecodes_ptr: std::ptr::null_mut(),
             shared_code_ptr: std::ptr::null(),
             shared_code_len: 0,
             shared_const_ptr: std::ptr::null(),
@@ -1720,7 +1715,6 @@ mod tests {
             shared_code_len: 0,
             shared_const_ptr: std::ptr::null(),
             shared_const_len: 0,
-            shared_nested_bytecodes_ptr: std::ptr::null_mut(),
         };
 
         let output = bytecode.disassemble();
@@ -1785,7 +1779,6 @@ mod tests {
             shared_code_len: 0,
             shared_const_ptr: std::ptr::null(),
             shared_const_len: 0,
-            shared_nested_bytecodes_ptr: std::ptr::null_mut(),
         };
 
         let output = bytecode.disassemble();
@@ -1844,7 +1837,6 @@ mod tests {
             shared_code_len: 0,
             shared_const_ptr: std::ptr::null(),
             shared_const_len: 0,
-            shared_nested_bytecodes_ptr: std::ptr::null_mut(),
         };
 
         let output = bytecode.disassemble();

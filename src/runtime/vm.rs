@@ -12500,10 +12500,11 @@ impl VM {
                                     .map(|(_, v)| v.clone());
                                 if found.is_some() {
                                     found
-                                } else if !bc.shared_nested_bytecodes_ptr.is_null() {
-                                    // Fall back to the shared NestedBytecode's nested_bytecodes
-                                    // (persists across re-creations of the parent closure)
-                                    unsafe { &*(*bc.shared_nested_bytecodes_ptr).get() }
+                                } else if let Some(shared_nb) =
+                                    parent_func.shared_nb_for_ic.as_ref()
+                                {
+                                    let shared = shared_nb.nested_bytecodes.borrow();
+                                    shared
                                         .iter()
                                         .find(|(k, _)| *k == newfunc_start_pc as u32)
                                         .map(|(_, v)| v.clone())
@@ -12640,6 +12641,7 @@ impl VM {
                             let parent_func = parent_func_val.as_function_mut();
                             if let Some(bc) = parent_func.bytecode.as_mut() {
                                 let key = newfunc_start_pc as u32;
+                                let shared_nb = parent_func.shared_nb_for_ic.as_ref();
                                 // Check instance's own nested_bytecodes first
                                 let found_nb = bc
                                     .nested_bytecodes
@@ -12647,15 +12649,13 @@ impl VM {
                                     .find(|(k, _)| *k == key)
                                     .map(|(_, v)| v.clone())
                                     .or_else(|| {
-                                        if !bc.shared_nested_bytecodes_ptr.is_null() {
-                                            // Check shared NestedBytecode's nested_bytecodes
-                                            unsafe { &*(*bc.shared_nested_bytecodes_ptr).get() }
+                                        shared_nb.and_then(|shared_nb| {
+                                            let shared = shared_nb.nested_bytecodes.borrow();
+                                            shared
                                                 .iter()
                                                 .find(|(k, _)| *k == key)
                                                 .map(|(_, v)| v.clone())
-                                        } else {
-                                            None
-                                        }
+                                        })
                                     });
                                 if let Some(existing) = found_nb {
                                     nb_for_ic = Some(existing.clone());
@@ -12681,7 +12681,7 @@ impl VM {
                                             ic_table: std::cell::UnsafeCell::new(
                                                 crate::compiler::InlineCacheTable::new(),
                                             ),
-                                            nested_bytecodes: std::cell::UnsafeCell::new(Vec::new()),
+                                            nested_bytecodes: std::cell::RefCell::new(Vec::new()),
                                         },
                                     );
                                     nb_for_ic = Some(nb.clone());
@@ -12689,10 +12689,8 @@ impl VM {
                                     bc.nested_bytecodes.push((key, nb.clone()));
                                     // Also store in shared NestedBytecode's nested_bytecodes
                                     // so sub-sub-closures persist across re-creations of this closure
-                                    if !bc.shared_nested_bytecodes_ptr.is_null() {
-                                        let shared = unsafe {
-                                            &mut *(*bc.shared_nested_bytecodes_ptr).get()
-                                        };
+                                    if let Some(shared_nb) = shared_nb {
+                                        let mut shared = shared_nb.nested_bytecodes.borrow_mut();
                                         if !shared.iter().any(|(k, _)| *k == key) {
                                             shared.push((key, nb.clone()));
                                         }
@@ -12770,7 +12768,6 @@ impl VM {
                         line_number_table: line_number_table_opt,
                         ic_table: crate::compiler::InlineCacheTable::new(),
                         shared_ic_table_ptr: std::ptr::null_mut(),
-                        shared_nested_bytecodes_ptr: std::ptr::null_mut(),
                         shared_code_ptr: std::ptr::null(),
                         shared_code_len: 0,
                         shared_const_ptr: std::ptr::null(),
@@ -12790,8 +12787,6 @@ impl VM {
                     if let Some(ref nb_arc) = effective_nb {
                         if let Some(bc) = func.bytecode.as_mut() {
                             bc.shared_ic_table_ptr = nb_arc.ic_table.get();
-                            bc.shared_nested_bytecodes_ptr =
-                                &nb_arc.nested_bytecodes as *const _ as *mut _;
 
                             if bc.code.is_empty() {
                                 bc.shared_code_ptr = nb_arc.code.as_ptr();
@@ -18287,7 +18282,6 @@ mod tests {
             shared_code_len: 0,
             shared_const_ptr: std::ptr::null(),
             shared_const_len: 0,
-            shared_nested_bytecodes_ptr: std::ptr::null_mut(),
         }
     }
 
