@@ -462,6 +462,8 @@ impl GcHeap {
 
         self.mark_value(&func.param_env);
 
+        self.mark_value(&func.realm_global);
+
         self.mark_value(&func.arrow_this);
         self.mark_value(&func.arrow_super);
         self.mark_value(&func.arrow_new_target);
@@ -1387,6 +1389,33 @@ mod tests {
         unsafe {
             let _ = Box::from_raw(parent_ptr);
             let _ = Box::from_raw(child_ptr);
+        }
+    }
+
+    #[test]
+    fn test_gc_trace_function_realm_global() {
+        let mut heap = GcHeap::new();
+
+        let realm_global = JSObject::new();
+        let realm_global_ptr = Box::into_raw(Box::new(realm_global));
+        heap.track(realm_global_ptr);
+
+        let mut func = JSFunction::new_builtin(Atom(0), 0);
+        func.realm_global = JSValue::new_object(realm_global_ptr);
+        let func_ptr = Box::into_raw(Box::new(func));
+        heap.track_function(func_ptr);
+
+        let roots = vec![JSValue::new_function(func_ptr)];
+
+        let freed = heap.run_gc(&roots);
+
+        assert_eq!(freed, 0);
+        assert_eq!(heap.object_count(), 2);
+
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(func_ptr);
+            let _ = Box::from_raw(realm_global_ptr);
         }
     }
 
