@@ -255,20 +255,12 @@ impl EventLoop {
             return Ok(JSValue::undefined());
         }
 
-        let vm_ptr = ctx
-            .get_register_vm_ptr()
-            .ok_or("No VM associated with context")?;
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        vm.call_function(ctx, callback, args)
+        ctx.with_vm(|vm, ctx| vm.call_function(ctx, callback, args))
+            .ok_or("No VM associated with context")?
     }
 
     fn run_microtasks(&self, ctx: &mut JSContext) {
-        let vm_ptr = match ctx.get_register_vm_ptr() {
-            Some(ptr) => ptr,
-            None => return,
-        };
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        crate::builtins::promise::run_microtasks_with_vm(ctx, vm);
+        ctx.with_vm(|vm, ctx| crate::builtins::promise::run_microtasks_with_vm(ctx, vm));
     }
 
     fn tick_extensions(&mut self, ctx: &mut JSContext) {
