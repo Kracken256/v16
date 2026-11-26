@@ -1266,7 +1266,9 @@ impl Parser {
         self.expect("(")?;
         let test = self.parse_expression()?;
         self.expect(")")?;
-        self.expect_semicolon()?;
+        if self.at_punct(";") {
+            self.advance();
+        }
         Ok(ASTNode::DoWhileStatement(DoWhileStatement {
             body: Box::new(body),
             test,
