@@ -1,5 +1,3 @@
-use std::mem::MaybeUninit;
-
 #[derive(Clone, Copy, Debug)]
 pub struct BacktrackState {
     pub pc: u32,
@@ -26,7 +24,7 @@ impl Default for BacktrackState {
 }
 
 pub struct BacktrackPool {
-    inline: [MaybeUninit<BacktrackState>; 64],
+    inline: [BacktrackState; 64],
 
     heap: Vec<BacktrackState>,
 
@@ -37,7 +35,7 @@ impl BacktrackPool {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            inline: unsafe { MaybeUninit::uninit().assume_init() },
+            inline: [BacktrackState::default(); 64],
             heap: Vec::new(),
             used: 0,
         }
@@ -52,7 +50,7 @@ impl BacktrackPool {
     #[inline(always)]
     pub fn push(&mut self, state: BacktrackState) {
         if self.used < 64 {
-            self.inline[self.used].write(state);
+            self.inline[self.used] = state;
         } else {
             let heap_idx = self.used - 64;
             if heap_idx >= self.heap.len() {
@@ -77,7 +75,7 @@ impl BacktrackPool {
         }
         self.used -= 1;
         if self.used < 64 {
-            Some(unsafe { self.inline[self.used].assume_init() })
+            Some(self.inline[self.used])
         } else {
             Some(self.heap[self.used - 64])
         }
