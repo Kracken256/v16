@@ -163,6 +163,16 @@ enum CallerVarSet {
     NotFound,
 }
 
+fn boxed_sloppy_this(ctx: &mut JSContext, this_val: JSValue) -> JSValue {
+    if this_val.is_undefined() || this_val.is_null() {
+        ctx.global()
+    } else if this_val.is_object_like() {
+        this_val
+    } else {
+        crate::builtins::object::object_to_object(ctx, &this_val)
+    }
+}
+
 pub fn start_async_call(
     ctx: &mut JSContext,
     js_func: &crate::object::function::JSFunction,
@@ -179,8 +189,8 @@ pub fn start_async_call(
             Some(cell) => cell.get().0,
             None => js_func.arrow_this,
         }
-    } else if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null()) {
-        ctx.global()
+    } else if !js_func.is_strict() {
+        boxed_sloppy_this(ctx, this_val)
     } else {
         this_val
     };
@@ -2185,8 +2195,8 @@ impl VM {
                 }
                 let fn_this = if js_func.is_arrow() {
                     js_func.arrow_this
-                } else if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null()) {
-                    ctx.global()
+                } else if !js_func.is_strict() {
+                    boxed_sloppy_this(ctx, this_val)
                 } else {
                     this_val
                 };
@@ -5318,8 +5328,8 @@ impl VM {
                     Some(cell) => cell.get().0,
                     None => js_func.arrow_this,
                 }
-            } else if !js_func.is_strict() && (this_value.is_undefined() || this_value.is_null()) {
-                ctx.global()
+            } else if !js_func.is_strict() {
+                boxed_sloppy_this(ctx, this_value)
             } else {
                 this_value
             };
@@ -12243,11 +12253,17 @@ impl VM {
                                 continue;
                             }
                             let return_pc = self.pc;
+                            let push_this =
+                                if is_call_new || js_func.is_arrow() || js_func.is_strict() {
+                                    this_val
+                                } else {
+                                    boxed_sloppy_this(ctx, this_val)
+                                };
                             self.push_frame(
                                 rb,
                                 return_pc,
                                 Some(ptr),
-                                this_val,
+                                push_this,
                                 dst,
                                 argc,
                                 is_call_new,
@@ -13641,9 +13657,8 @@ impl VM {
     ) -> Result<Option<JSValue>, String> {
         let js_func = unsafe { JSValue::function_from_ptr(func_val.get_ptr()) };
 
-        let snapshot_this = if !js_func.is_strict() && (this_val.is_undefined() || this_val.is_null())
-        {
-            ctx.global()
+        let snapshot_this = if !js_func.is_strict() {
+            boxed_sloppy_this(ctx, this_val)
         } else {
             this_val
         };
@@ -14738,33 +14753,8 @@ impl VM {
                 if let Some(getter) = pobj.get_own_accessor_value(atom) {
                     if getter.is_function() {
                         let js_func = getter.as_function();
-                        let fn_this = if !js_func.is_strict()
-                            && (obj_val.is_int()
-                                || obj_val.is_float()
-                                || obj_val.is_string()
-                                || obj_val.is_bool())
-                        {
-                            let mut wrapper = crate::object::object::JSObject::new();
-                            if let Some(opp) = ctx.get_object_prototype() {
-                                wrapper.set_prototype_raw(opp);
-                            }
-                            if obj_val.is_string() || obj_val.is_int() || obj_val.is_float() {
-                                wrapper.set_cached(
-                                    crate::runtime::atom::Atom(0),
-                                    obj_val,
-                                    ctx.shape_cache_mut(),
-                                );
-                            } else if obj_val.is_symbol() {
-                                if let Some(sp) = ctx.get_symbol_prototype() {
-                                    wrapper.set_prototype_raw(sp);
-                                }
-                                wrapper.set_cached(
-                                    crate::runtime::atom::Atom(0),
-                                    obj_val,
-                                    ctx.shape_cache_mut(),
-                                );
-                            }
-                            JSValue::new_object(Box::into_raw(Box::new(wrapper)) as usize)
+                        let fn_this = if !js_func.is_strict() {
+                            crate::builtins::object::object_to_object(ctx, &obj_val)
                         } else {
                             obj_val
                         };
