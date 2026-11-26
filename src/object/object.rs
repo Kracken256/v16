@@ -729,7 +729,7 @@ pub struct ObjectExtra {
 
     pub compiled_regex: Option<Box<crate::regexp::Regex>>,
 
-    pub array_buffer_data: Option<usize>,
+    pub array_buffer_data: Option<Box<crate::builtins::typedarray::ArrayBufferData>>,
 
     pub typed_array_kind: Option<TypedArrayKind>,
     pub typed_array_tracks_length: bool,
@@ -1252,12 +1252,21 @@ impl JSObject {
     }
 
     #[inline]
-    pub fn get_array_buffer_data(&self) -> Option<usize> {
-        self.extra.as_ref().and_then(|e| e.array_buffer_data)
+    pub fn get_array_buffer_data(&self) -> Option<&crate::builtins::typedarray::ArrayBufferData> {
+        self.extra.as_ref().and_then(|e| e.array_buffer_data.as_deref())
     }
 
-    pub fn set_array_buffer_data(&mut self, ptr: usize) {
-        self.ensure_extra().array_buffer_data = Some(ptr);
+    #[inline]
+    pub fn get_array_buffer_data_mut(
+        &mut self,
+    ) -> Option<&mut crate::builtins::typedarray::ArrayBufferData> {
+        self.extra
+            .as_mut()
+            .and_then(|e| e.array_buffer_data.as_deref_mut())
+    }
+
+    pub fn set_array_buffer_data(&mut self, data: crate::builtins::typedarray::ArrayBufferData) {
+        self.ensure_extra().array_buffer_data = Some(Box::new(data));
     }
 
     #[inline]

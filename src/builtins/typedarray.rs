@@ -37,15 +37,13 @@ fn create_array_buffer_with_max(
         JSValue::new_int(length as i64),
     );
 
-    let data_ptr = Box::into_raw(Box::new(data));
-    obj.set_array_buffer_data(data_ptr as usize);
+    obj.set_array_buffer_data(data);
     let ptr = Box::into_raw(Box::new(obj)) as usize;
     JSValue::new_object(ptr)
 }
 
-fn get_array_buffer_data(obj: &JSObject) -> Option<&mut ArrayBufferData> {
-    obj.get_array_buffer_data()
-        .map(|ptr| unsafe { &mut *(ptr as *mut ArrayBufferData) })
+fn get_array_buffer_data(obj: &mut JSObject) -> Option<&mut ArrayBufferData> {
+    obj.get_array_buffer_data_mut()
 }
 
 fn create_typed_array(
@@ -59,8 +57,8 @@ fn create_typed_array(
         return Err("TypedArray constructor requires ArrayBuffer".to_string());
     }
 
-    let buffer_obj = buffer.as_object();
-    let buffer_data = get_array_buffer_data(&buffer_obj).ok_or("Invalid ArrayBuffer")?;
+    let buffer_obj = buffer.as_object_mut();
+    let buffer_data = get_array_buffer_data(buffer_obj).ok_or("Invalid ArrayBuffer")?;
 
     let bytes_per_element = kind.bytes_per_element();
 
@@ -345,11 +343,11 @@ fn data_view_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     );
 
     if let Some(buffer_obj) = if buffer.is_object() {
-        Some(buffer.as_object())
+        Some(buffer.as_object_mut())
     } else {
         None
     } {
-        if let Some(data) = get_array_buffer_data(&buffer_obj) {
+        if let Some(data) = get_array_buffer_data(buffer_obj) {
             let byte_length = if args.len() > 2 {
                 args[2].get_int() as usize
             } else {
@@ -627,7 +625,7 @@ fn array_buffer_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
     if obj.obj_type() != ObjectType::ArrayBuffer {
         return JSValue::undefined();
     }
-    get_array_buffer_data(obj)
+    obj.get_array_buffer_data()
         .map(|d| JSValue::new_int(d.data.len() as i64))
         .unwrap_or(JSValue::undefined())
 }
@@ -640,7 +638,7 @@ fn array_buffer_get_resizable(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     if obj.obj_type() != ObjectType::ArrayBuffer {
         return JSValue::undefined();
     }
-    get_array_buffer_data(obj)
+    obj.get_array_buffer_data()
         .map(|d| JSValue::bool(d.max_byte_length.is_some()))
         .unwrap_or(JSValue::undefined())
 }
@@ -653,7 +651,7 @@ fn array_buffer_get_max_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JS
     if obj.obj_type() != ObjectType::ArrayBuffer {
         return JSValue::undefined();
     }
-    match get_array_buffer_data(obj) {
+    match obj.get_array_buffer_data() {
         Some(d) => match d.max_byte_length {
             Some(max) => JSValue::new_int(max as i64),
             None => JSValue::new_int(d.data.len() as i64),
@@ -723,7 +721,7 @@ fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         );
         return JSValue::undefined();
     }
-    let length = get_array_buffer_data(this_val.as_object())
+    let length = get_array_buffer_data(this_val.as_object_mut())
         .map(|d| d.data.len())
         .unwrap_or(0);
     let clamp = |n: f64| -> usize {
@@ -766,8 +764,8 @@ fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let end = end.max(start);
     let count = end - start;
     let result = create_array_buffer(ctx, count);
-    if let Some(data) = get_array_buffer_data(result.as_object()) {
-        if let Some(src) = get_array_buffer_data(this_val.as_object()) {
+    if let Some(data) = get_array_buffer_data(result.as_object_mut()) {
+        if let Some(src) = get_array_buffer_data(this_val.as_object_mut()) {
             data.data[..count].copy_from_slice(&src.data[start..end]);
         }
     }
@@ -894,8 +892,8 @@ fn dv_extract_buffer_info(args: &[JSValue], ctx: &mut JSContext) -> Option<(Vec<
         .unwrap_or(0);
     let buffer = view_obj.get(ctx.intern("buffer"))?;
     if !buffer.is_object() { return None; }
-    let buf_obj = buffer.as_object();
-    let data = get_array_buffer_data(&buf_obj)?;
+    let buf_obj = buffer.as_object_mut();
+    let data = get_array_buffer_data(buf_obj)?;
     Some((data.data.clone(), byte_offset))
 }
 
@@ -1006,8 +1004,8 @@ fn dv_write_bytes_checked(args: &[JSValue], ctx: &mut JSContext, bytes: &[u8]) -
         throw_type_error(ctx, "Detached buffer");
         return false;
     }
-    let buf_obj = buffer.as_object();
-    let data = match get_array_buffer_data(&buf_obj) {
+    let buf_obj = buffer.as_object_mut();
+    let data = match get_array_buffer_data(buf_obj) {
         Some(d) => d,
         None => {
             throw_type_error(ctx, "Detached buffer");
@@ -1255,8 +1253,8 @@ pub fn typed_array_view_state(ctx: &mut JSContext, obj: &JSObject) -> Option<Typ
     if !buffer.is_object() {
         return None;
     }
-    let buffer_obj = buffer.as_object();
-    let buffer_byte_length = get_array_buffer_data(&buffer_obj)?.data.len();
+    let buffer_obj = buffer.as_object_mut();
+    let buffer_byte_length = get_array_buffer_data(buffer_obj)?.data.len();
     if obj.typed_array_tracks_length() {
         if byte_offset > buffer_byte_length {
             return Some(TypedArrayViewState {
@@ -1325,8 +1323,8 @@ pub fn ta_get_element(ctx: &mut JSContext, obj: &JSObject, index: usize) -> Opti
         .unwrap_or(0);
     let buffer = obj.get(ctx.intern("buffer"))?;
     if !buffer.is_object() { return None; }
-    let buf_obj = buffer.as_object();
-    let data = get_array_buffer_data(&buf_obj)?;
+    let buf_obj = buffer.as_object_mut();
+    let data = get_array_buffer_data(buf_obj)?;
     let byte_index = byte_offset + index * bpe;
     if byte_index + bpe > data.data.len() { return None; }
     let bytes = &data.data[byte_index..byte_index + bpe];
@@ -1368,8 +1366,8 @@ pub fn ta_set_element(ctx: &mut JSContext, obj: &mut JSObject, index: usize, val
         None => return false,
     };
     if !buffer.is_object() { return false; }
-    let buf_obj = buffer.as_object();
-    let data = match get_array_buffer_data(&buf_obj) {
+    let buf_obj = buffer.as_object_mut();
+    let data = match get_array_buffer_data(buf_obj) {
         Some(d) => d,
         None => return false,
     };
