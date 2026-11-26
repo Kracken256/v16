@@ -34,9 +34,38 @@ pub fn register_builtins(ctx: &mut JSContext) {
     );
 }
 
+fn set_non_enumerable(obj: &mut JSObject, key: crate::runtime::atom::Atom, val: JSValue) {
+    obj.define_property(
+        key,
+        crate::object::object::PropertyDescriptor {
+            value: Some(val),
+            writable: true,
+            enumerable: false,
+            configurable: true,
+            get: None,
+            set: None,
+        },
+    );
+}
+
+fn define_ctor_prototype(obj: &mut JSObject, key: crate::runtime::atom::Atom, val: JSValue) {
+    obj.define_property(
+        key,
+        crate::object::object::PropertyDescriptor {
+            value: Some(val),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
+    );
+}
+
 pub fn init_weakref(ctx: &mut JSContext) {
     let mut weakref_proto = JSObject::new();
-    weakref_proto.set(
+    set_non_enumerable(
+        &mut weakref_proto,
         ctx.intern("deref"),
         create_builtin_function(ctx, "weakref_deref"),
     );
@@ -50,19 +79,34 @@ pub fn init_weakref(ctx: &mut JSContext) {
     ctx.set_weakref_prototype(weakref_proto_ptr);
 
     let weakref_ctor = create_builtin_function(ctx, "weakref_constructor");
+    if weakref_ctor.is_function() {
+        let weakref_func_ref = weakref_ctor.as_function_mut();
+        define_ctor_prototype(
+            &mut weakref_func_ref.base,
+            ctx.common_atoms.prototype,
+            JSValue::new_object(weakref_proto_ptr),
+        );
+        weakref_func_ref.cached_prototype_ptr = weakref_proto_ptr as *mut JSObject;
+    }
     let weakref_atom = ctx.intern("WeakRef");
     let global = ctx.global();
     if global.is_object() {
         let global_obj = global.as_object_mut();
         crate::builtins::global::set_non_enumerable(global_obj, weakref_atom, weakref_ctor);
     }
+    unsafe {
+        let proto_ref = &mut *(weakref_proto_ptr as *mut JSObject);
+        set_non_enumerable(proto_ref, ctx.common_atoms.constructor, weakref_ctor);
+    }
 
     let mut fr_proto = JSObject::new();
-    fr_proto.set(
+    set_non_enumerable(
+        &mut fr_proto,
         ctx.intern("register"),
         create_builtin_function(ctx, "finalization_registry_register"),
     );
-    fr_proto.set(
+    set_non_enumerable(
+        &mut fr_proto,
         ctx.intern("unregister"),
         create_builtin_function(ctx, "finalization_registry_unregister"),
     );
@@ -76,10 +120,23 @@ pub fn init_weakref(ctx: &mut JSContext) {
     ctx.set_finalization_registry_prototype(fr_proto_ptr);
 
     let fr_ctor = create_builtin_function(ctx, "finalization_registry_constructor");
+    if fr_ctor.is_function() {
+        let fr_func_ref = fr_ctor.as_function_mut();
+        define_ctor_prototype(
+            &mut fr_func_ref.base,
+            ctx.common_atoms.prototype,
+            JSValue::new_object(fr_proto_ptr),
+        );
+        fr_func_ref.cached_prototype_ptr = fr_proto_ptr as *mut JSObject;
+    }
     let fr_atom = ctx.intern("FinalizationRegistry");
     if global.is_object() {
         let global_obj = global.as_object_mut();
         crate::builtins::global::set_non_enumerable(global_obj, fr_atom, fr_ctor);
+    }
+    unsafe {
+        let proto_ref = &mut *(fr_proto_ptr as *mut JSObject);
+        set_non_enumerable(proto_ref, ctx.common_atoms.constructor, fr_ctor);
     }
 }
 
