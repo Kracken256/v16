@@ -2169,7 +2169,7 @@ impl Parser {
         let expr = self.parse_logical_or()?;
         if self.at_punct("?") {
             self.advance();
-            let consequent = self.parse_assignment_expression()?;
+            let consequent = self.with_allow_in(Self::parse_assignment_expression)?;
             self.expect(":")?;
             let alternate = self.parse_assignment_expression()?;
             return Ok(Expression::ConditionalExpression(ConditionalExpression {
