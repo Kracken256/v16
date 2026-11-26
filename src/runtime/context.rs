@@ -1211,6 +1211,11 @@ impl JSContext {
         self.microtask_queue.dequeue()
     }
 
+    pub fn collect_queued_gc_roots(&self, roots: &mut Vec<JSValue>) {
+        self.microtask_queue.collect_gc_roots(roots);
+        self.event_loop.collect_gc_roots(roots);
+    }
+
     pub fn set_current_module(&mut self, specifier: Option<String>) {
         self.current_module_specifier = specifier;
     }

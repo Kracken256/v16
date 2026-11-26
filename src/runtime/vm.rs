@@ -4910,6 +4910,7 @@ impl VM {
                 roots.push(v);
             }
         }
+        ctx.collect_queued_gc_roots(roots);
     }
 
     pub fn collect_roots(&self, ctx: &JSContext) -> Vec<JSValue> {
@@ -5003,6 +5004,7 @@ impl VM {
                 roots.push(v);
             }
         }
+        ctx.collect_queued_gc_roots(&mut roots);
         if let Some((this_val, _)) = self.pending_instance_elements {
             if this_val.is_object() || this_val.is_function() {
                 roots.push(this_val);
@@ -18655,6 +18657,90 @@ mod tests {
 
         let result = run_bytecode(code, vec![], 2);
         assert_eq!(result.get_int(), 40);
+    }
+
+    #[test]
+    fn test_fill_gc_roots_covers_host_queues() {
+        let mut rt = JSRuntime::new();
+        let mut ctx = JSContext::new(&mut rt);
+
+        let make = |ctx: &mut JSContext| -> JSValue {
+            let obj = crate::object::object::JSObject::new();
+            let ptr = Box::into_raw(Box::new(obj));
+            ctx.runtime_mut().gc_heap_mut().track(ptr);
+            JSValue::new_object(ptr)
+        };
+
+        let timer_cb = make(&mut ctx);
+        let timer_arg = make(&mut ctx);
+        let interval_cb = make(&mut ctx);
+        let macrotask_cb = make(&mut ctx);
+        let macrotask_arg = make(&mut ctx);
+        let animation_cb = make(&mut ctx);
+        let microtask_cb = make(&mut ctx);
+        let microtask_arg = make(&mut ctx);
+        let reaction_handler = make(&mut ctx);
+        let reaction_target = make(&mut ctx);
+        let reaction_value = make(&mut ctx);
+        let thenable_target = make(&mut ctx);
+        let thenable = make(&mut ctx);
+        let then_fn = make(&mut ctx);
+
+        ctx.event_loop_mut().schedule_timer(
+            timer_cb,
+            vec![timer_arg],
+            60_000,
+            false,
+        );
+        ctx.event_loop_mut()
+            .schedule_timer(interval_cb, vec![], 60_000, true);
+        ctx.event_loop_mut()
+            .schedule_macrotask(macrotask_cb, vec![macrotask_arg]);
+        ctx.event_loop_mut()
+            .schedule_animation_callback(animation_cb);
+        ctx.microtask_enqueue(crate::builtins::promise::Microtask::UserCallback(
+            microtask_cb,
+            vec![microtask_arg],
+        ));
+        ctx.microtask_enqueue(crate::builtins::promise::Microtask::Reaction(
+            crate::builtins::promise::Reaction {
+                handler: reaction_handler,
+                is_reject: false,
+                is_all_settled: false,
+                is_finally: false,
+                target_promise: reaction_target,
+            },
+            reaction_value,
+        ));
+        ctx.microtask_enqueue(crate::builtins::promise::Microtask::ResolveThenable(
+            thenable_target,
+            thenable,
+            then_fn,
+        ));
+
+        let mut vm = VM::new();
+        vm.fill_gc_roots(&ctx);
+        let roots = &vm.gc_roots;
+        let is_rooted =
+            |value: JSValue| roots.iter().any(|root| root.raw_bits() == value.raw_bits());
+        for value in [
+            timer_cb,
+            timer_arg,
+            interval_cb,
+            macrotask_cb,
+            macrotask_arg,
+            animation_cb,
+            microtask_cb,
+            microtask_arg,
+            reaction_handler,
+            reaction_target,
+            reaction_value,
+            thenable_target,
+            thenable,
+            then_fn,
+        ] {
+            assert!(is_rooted(value));
+        }
     }
 
     #[test]

@@ -62,6 +62,35 @@ impl MicrotaskQueue {
     pub fn dequeue(&mut self) -> Option<Microtask> {
         self.queue.pop_front()
     }
+
+    pub fn collect_gc_roots(&self, roots: &mut Vec<JSValue>) {
+        for task in &self.queue {
+            match task {
+                Microtask::Reaction(reaction, value) => {
+                    push_gc_root(roots, reaction.handler);
+                    push_gc_root(roots, reaction.target_promise);
+                    push_gc_root(roots, *value);
+                }
+                Microtask::UserCallback(callback, args) => {
+                    push_gc_root(roots, *callback);
+                    for &arg in args {
+                        push_gc_root(roots, arg);
+                    }
+                }
+                Microtask::ResolveThenable(target, thenable, then_fn) => {
+                    push_gc_root(roots, *target);
+                    push_gc_root(roots, *thenable);
+                    push_gc_root(roots, *then_fn);
+                }
+            }
+        }
+    }
+}
+
+fn push_gc_root(roots: &mut Vec<JSValue>, value: JSValue) {
+    if value.is_object() || value.is_function() {
+        roots.push(value);
+    }
 }
 
 impl Default for MicrotaskQueue {

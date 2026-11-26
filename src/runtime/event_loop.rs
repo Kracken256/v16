@@ -81,6 +81,12 @@ pub struct EventLoopResult {
     pub animation_callbacks_remaining: usize,
 }
 
+fn push_gc_root(roots: &mut Vec<JSValue>, value: JSValue) {
+    if value.is_object() || value.is_function() {
+        roots.push(value);
+    }
+}
+
 pub struct EventLoop {
     macrotask_queue: VecDeque<Macrotask>,
 
@@ -207,6 +213,30 @@ impl EventLoop {
 
     pub fn timer_count(&self) -> usize {
         self.timer_heap.len()
+    }
+
+    pub fn collect_gc_roots(&self, roots: &mut Vec<JSValue>) {
+        for task in &self.macrotask_queue {
+            push_gc_root(roots, task.callback);
+            for &arg in &task.args {
+                push_gc_root(roots, arg);
+            }
+        }
+        for timer in &self.timer_heap {
+            push_gc_root(roots, timer.callback);
+            for &arg in &timer.args {
+                push_gc_root(roots, arg);
+            }
+        }
+        for timer in self.interval_timers.values() {
+            push_gc_root(roots, timer.callback);
+            for &arg in &timer.args {
+                push_gc_root(roots, arg);
+            }
+        }
+        for callback in &self.animation_queue {
+            push_gc_root(roots, callback.callback);
+        }
     }
 
     pub fn animation_callback_count(&self) -> usize {
