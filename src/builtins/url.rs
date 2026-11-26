@@ -28,34 +28,35 @@ fn to_string_vm(ctx: &mut JSContext, value: JSValue) -> Option<String> {
     if value.is_symbol() { return None; }
     if value.is_bigint() { return None; }
     if value.is_object() {
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-            let obj = value.as_object();
-            let to_string_fn = obj.get(ctx.common_atoms.to_string);
-            if let Some(f) = to_string_fn {
-                if f.is_function() {
-                    if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
-                        if r.is_string() { return Some(ctx.get_atom_str(r.get_atom()).to_string()); }
-                        if !r.is_object() {
-                            let s = crate::builtins::global::jsvalue_to_string(&r, ctx);
-                            return Some(s);
+        return ctx
+            .with_vm(|vm, ctx| {
+                let obj = value.as_object();
+                let to_string_fn = obj.get(ctx.common_atoms.to_string);
+                if let Some(f) = to_string_fn {
+                    if f.is_function() {
+                        if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
+                            if r.is_string() { return Some(ctx.get_atom_str(r.get_atom()).to_string()); }
+                            if !r.is_object() {
+                                let s = crate::builtins::global::jsvalue_to_string(&r, ctx);
+                                return Some(s);
+                            }
                         }
                     }
                 }
-            }
-            let value_of_fn = obj.get(ctx.common_atoms.value_of);
-            if let Some(f) = value_of_fn {
-                if f.is_function() {
-                    if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
-                        if !r.is_object() {
-                            let s = crate::builtins::global::jsvalue_to_string(&r, ctx);
-                            return Some(s);
+                let value_of_fn = obj.get(ctx.common_atoms.value_of);
+                if let Some(f) = value_of_fn {
+                    if f.is_function() {
+                        if let Ok(r) = vm.call_function_with_this(ctx, f, value.clone(), &[]) {
+                            if !r.is_object() {
+                                let s = crate::builtins::global::jsvalue_to_string(&r, ctx);
+                                return Some(s);
+                            }
                         }
                     }
                 }
-            }
-        }
-        return None;
+                None
+            })
+            .flatten();
     }
     None
 }
@@ -316,31 +317,25 @@ fn coerce_to_string(ctx: &mut JSContext, value: &JSValue) -> Result<String, ()> 
         return Err(());
     }
     if value.is_object() || value.is_function() {
-        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-            let prim = {
-                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                vm.ordinary_to_primitive(value, "string", ctx)
-            };
-            if ctx.pending_exception.is_some() {
-                return Err(());
-            }
-            let pending = {
-                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                vm.pending_throw.is_some()
-            };
-            if pending {
-                return Err(());
-            }
-            if prim.is_object() || prim.is_function() {
-                crate::builtins::global::throw_type_error(
-                    ctx,
-                    "Cannot convert object to primitive value",
-                );
-                return Err(());
-            }
-            return coerce_to_string(ctx, &prim);
-        }
-        return Err(());
+        return ctx
+            .with_vm(|vm, ctx| {
+                let prim = vm.ordinary_to_primitive(value, "string", ctx);
+                if ctx.pending_exception.is_some() {
+                    return Err(());
+                }
+                if vm.pending_throw.is_some() {
+                    return Err(());
+                }
+                if prim.is_object() || prim.is_function() {
+                    crate::builtins::global::throw_type_error(
+                        ctx,
+                        "Cannot convert object to primitive value",
+                    );
+                    return Err(());
+                }
+                coerce_to_string(ctx, &prim)
+            })
+            .unwrap_or(Err(()));
     }
     Err(())
 }
