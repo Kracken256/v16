@@ -2332,7 +2332,7 @@ impl VM {
                     &args_vec
                 };
                 let prev_call_with_new = ctx.is_call_with_new();
-                ctx.set_call_with_new(is_call_new);
+                ctx.set_call_with_new(is_call_new || is_super_call);
                 let result = if let Some(bf) = js_func.builtin_func {
                     ctx.call_builtin_direct(bf, args)
                 } else if let Some(ba) = js_func.builtin_atom {
@@ -2369,35 +2369,8 @@ impl VM {
                         }
                     }
                 }
-                if is_call_new && !result.is_object_like() {
-                    if this_val.is_object() {
-                        this_val
-                            .as_object_mut()
-                            .set(ctx.common_atoms.__value__, result);
-                        if result.is_string() {
-                            let s = ctx.get_atom_str(result.get_atom()).to_string();
-                            let char_count = s.chars().count();
-                            this_val.as_object_mut().define_property(
-                                ctx.common_atoms.length,
-                                crate::object::object::PropertyDescriptor {
-                                    value: Some(JSValue::new_int(char_count as i64)),
-                                    writable: false,
-                                    enumerable: false,
-                                    configurable: false,
-                                    get: None,
-                                    set: None,
-                                },
-                            );
-                            if char_count > 0 {
-                                let elements = this_val.as_object_mut().ensure_elements();
-                                for c in s.chars() {
-                                    let atom = ctx.intern(&c.to_string());
-                                    elements.push(JSValue::new_string(atom));
-                                }
-                            }
-                        }
-                    }
-                    self.set_reg(dst, this_val);
+                if (is_call_new || is_super_call) && !result.is_object_like() {
+                    self.complete_builtin_construction(ctx, dst, this_val, result);
                 } else {
                     self.set_reg(dst, result);
                 }
@@ -2875,6 +2848,43 @@ impl VM {
             let this_val = self.frames[self.frame_index].this_value;
             self.mark_instance_elements_pending(this_val, fptr);
         }
+    }
+
+    fn complete_builtin_construction(
+        &mut self,
+        ctx: &mut JSContext,
+        dst: u16,
+        this_val: JSValue,
+        result: JSValue,
+    ) {
+        if this_val.is_object() {
+            this_val
+                .as_object_mut()
+                .set(ctx.common_atoms.__value__, result);
+            if result.is_string() {
+                let s = ctx.get_atom_str(result.get_atom()).to_string();
+                let char_count = s.chars().count();
+                this_val.as_object_mut().define_property(
+                    ctx.common_atoms.length,
+                    crate::object::object::PropertyDescriptor {
+                        value: Some(JSValue::new_int(char_count as i64)),
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                        get: None,
+                        set: None,
+                    },
+                );
+                if char_count > 0 {
+                    let elements = this_val.as_object_mut().ensure_elements();
+                    for c in s.chars() {
+                        let atom = ctx.intern(&c.to_string());
+                        elements.push(JSValue::new_string(atom));
+                    }
+                }
+            }
+        }
+        self.set_reg(dst, this_val);
     }
 
     pub fn set_pending_type_error(&mut self, ctx: &mut JSContext, msg: &str) {
@@ -11786,6 +11796,24 @@ impl VM {
                             continue;
                         }
                     }
+                    if is_super_call
+                        && func_val.is_function()
+                        && func_val
+                            .as_function()
+                            .builtin_atom
+                            .map(|ba| ctx.get_atom_str(ba) == "symbol_constructor")
+                            .unwrap_or(false)
+                    {
+                        self.set_pending_type_error(ctx, "Symbol is not a constructor");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
                     let this_val = if is_call_method {
                         self.get_reg(obj_reg)
                     } else if is_call_new {
@@ -12022,6 +12050,24 @@ impl VM {
                             continue;
                         }
                     }
+                    if is_super_call
+                        && func_val.is_function()
+                        && func_val
+                            .as_function()
+                            .builtin_atom
+                            .map(|ba| ctx.get_atom_str(ba) == "symbol_constructor")
+                            .unwrap_or(false)
+                    {
+                        self.set_pending_type_error(ctx, "Symbol is not a constructor");
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                        continue;
+                    }
 
                     let this_val = if is_call_method {
                         self.get_reg(obj_reg)
@@ -12178,6 +12224,24 @@ impl VM {
                             self.eval_direct_active = false;
                             continue;
                         } else if js_func.is_builtin() {
+                            let builtin_name = js_func
+                                .builtin_atom
+                                .map(|ba| ctx.get_atom_str(ba).to_string())
+                                .unwrap_or_default();
+                            if is_call_new
+                                && builtin_name == "symbol_constructor"
+                            {
+                                self.set_pending_type_error(ctx, "Symbol is not a constructor");
+                                if let Some(exc) = self.pending_throw.take() {
+                                    match self.dispatch_throw_value(ctx, exc) {
+                                        ThrowDispatch::Caught => continue,
+                                        ThrowDispatch::Uncaught(e) => return Err(e),
+                                        ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                                    }
+                                }
+                                self.eval_direct_active = false;
+                                continue;
+                            }
                             let mut builtin_args = Vec::with_capacity(args.len() + 1);
                             if is_call_method {
                                 builtin_args.push(self.get_reg(obj_reg));
@@ -12186,6 +12250,8 @@ impl VM {
                             let direct_eval = self.eval_direct_call;
                             self.eval_direct_call = false;
                             self.eval_direct_active = direct_eval;
+                            let prev_call_with_new = ctx.is_call_with_new();
+                            ctx.set_call_with_new(is_call_new || is_super_call);
                             let result = if let Some(bf) = js_func.builtin_func {
                                 ctx.call_builtin_direct(bf, &builtin_args)
                             } else if let Some(ba) = js_func.builtin_atom {
@@ -12194,7 +12260,12 @@ impl VM {
                             } else {
                                 JSValue::undefined()
                             };
-                            self.set_reg(dst, result);
+                            ctx.set_call_with_new(prev_call_with_new);
+                            if (is_call_new || is_super_call) && !result.is_object_like() {
+                                self.complete_builtin_construction(ctx, dst, this_val, result);
+                            } else {
+                                self.set_reg(dst, result);
+                            }
                             self.eval_direct_active = false;
                             if is_super_call {
                                 self.bind_super_call_builtin_result(dst);
