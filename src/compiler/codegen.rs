@@ -2836,49 +2836,64 @@ impl CodeGenerator {
             }
         }
 
-        if !self.is_arrow && !self.is_script_level && self.lookup_var("arguments").is_none() {
-            let mut arguments_parent: FxHashMap<String, ParentVar> = FxHashMap::default();
-            arguments_parent.insert(
-                "arguments".to_string(),
-                ParentVar {
-                    local_idx: 0,
-                    kind: VariableKind::Var,
-                    initialized: true,
-                    is_inherited: false,
-                    closed: false,
-                    is_function_name: false,
-                    is_block_decl: false,
-                    is_global_lexical: false,
-                },
+        if !self.is_arrow && !self.is_script_level {
+            let existing_binding = self
+                .lookup_var("arguments")
+                .map(|entry| (entry.slot, entry.kind, entry.is_function_name));
+            let var_binding_needs_object = matches!(
+                existing_binding,
+                Some((_, VariableKind::Var, false))
             );
-            let mut arguments_locals: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            let mut arguments_mentions: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            for stmt in &body.body {
-                Self::collect_inherited_upvalues_stmt(
-                    stmt,
-                    &mut arguments_locals,
-                    &arguments_parent,
-                    &mut arguments_mentions,
-                );
-            }
-            if arguments_mentions.contains("arguments") {
-                let slot = self.alloc_register();
-                self.reserved_slots.insert(slot);
-                self.all_var_names.push(("arguments".to_string(), slot, 0));
-                self.scope_stack.last_mut().unwrap().insert(
+            if existing_binding.is_none() || var_binding_needs_object {
+                let mut arguments_parent: FxHashMap<String, ParentVar> = FxHashMap::default();
+                arguments_parent.insert(
                     "arguments".to_string(),
-                    VarEntry {
-                        slot,
+                    ParentVar {
+                        local_idx: 0,
                         kind: VariableKind::Var,
                         initialized: true,
+                        is_inherited: false,
+                        closed: false,
                         is_function_name: false,
+                        is_block_decl: false,
+                        is_global_lexical: false,
                     },
                 );
-                self.function_uses_arguments = true;
-                self.emit(Opcode::GetArguments);
-                self.emit_u16(slot);
+                let mut arguments_locals: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut arguments_mentions: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for stmt in &body.body {
+                    Self::collect_inherited_upvalues_stmt(
+                        stmt,
+                        &mut arguments_locals,
+                        &arguments_parent,
+                        &mut arguments_mentions,
+                    );
+                }
+                if var_binding_needs_object || arguments_mentions.contains("arguments") {
+                    let slot = match existing_binding {
+                        Some((slot, _, _)) => slot,
+                        None => {
+                            let slot = self.alloc_register();
+                            self.reserved_slots.insert(slot);
+                            self.all_var_names.push(("arguments".to_string(), slot, 0));
+                            self.scope_stack.last_mut().unwrap().insert(
+                                "arguments".to_string(),
+                                VarEntry {
+                                    slot,
+                                    kind: VariableKind::Var,
+                                    initialized: true,
+                                    is_function_name: false,
+                                },
+                            );
+                            slot
+                        }
+                    };
+                    self.function_uses_arguments = true;
+                    self.emit(Opcode::GetArguments);
+                    self.emit_u16(slot);
+                }
             }
         }
 
