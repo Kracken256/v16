@@ -45,7 +45,7 @@ pub fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    func.realm_context = ctx as *mut JSContext as usize;
+    func.realm_context = ctx as *mut JSContext;
     func.realm_global = ctx.global();
     let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
@@ -846,7 +846,7 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if callee.is_function() {
         let realm_context = callee.as_function().realm_context;
         let realm_global = callee.as_function().realm_global;
-        if realm_context != 0
+        if !realm_context.is_null()
             && realm_global.is_object_like()
             && realm_global.raw_bits() != ctx.global().raw_bits()
         {

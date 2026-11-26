@@ -2252,7 +2252,7 @@ impl VM {
                 let prev_call_with_new = ctx.is_call_with_new();
                 ctx.set_call_with_new(is_call_new || is_super_call);
                 let saved_active_realm = ctx.active_realm();
-                if js_func.realm_context != 0 {
+                if !js_func.realm_context.is_null() {
                     ctx.set_active_realm(js_func.realm_context);
                 }
                 let result = if let Some(bf) = js_func.builtin_func {
@@ -2949,8 +2949,8 @@ impl VM {
         if let Some(fptr) = self.frames[self.frame_index].function_ptr {
             let func = JSValue::new_function(fptr);
             let func = func.as_function();
-            let current = ctx as *mut JSContext as usize;
-            if func.realm_context != 0 && func.realm_context != current {
+            let current = ctx as *mut JSContext;
+            if !func.realm_context.is_null() && func.realm_context != current {
                 if let Some(realm_proto) =
                     func.realm_ctx().and_then(|realm_ctx| realm_ctx.get_type_error_prototype())
                 {
@@ -4448,8 +4448,8 @@ impl VM {
                 return Some(proto_val.get_ptr());
             }
         }
-        let current = ctx as *mut JSContext as usize;
-        if js_func.realm_context != 0 && js_func.realm_context != current {
+        let current = ctx as *mut JSContext;
+        if !js_func.realm_context.is_null() && js_func.realm_context != current {
             if let Some(realm_ctx) = js_func.realm_ctx() {
                 return if js_func.is_async() {
                     realm_ctx.get_async_generator_prototype()
@@ -5224,7 +5224,7 @@ impl VM {
             };
 
             let saved_active_realm = ctx.active_realm();
-            if js_func.realm_context != 0 {
+            if !js_func.realm_context.is_null() {
                 ctx.set_active_realm(js_func.realm_context);
             }
 
@@ -12940,12 +12940,12 @@ impl VM {
                     func.param_env = self.frames[self.frame_index].param_env;
                     func.realm_global = ctx.global();
                     let active_realm = ctx.active_realm();
-                    if active_realm != 0 {
+                    if !active_realm.is_null() {
                         func.realm_context = active_realm;
                     } else if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
                         let parent = JSValue::new_function(parent_ptr);
                         let parent = parent.as_function();
-                        if parent.realm_context != 0 {
+                        if !parent.realm_context.is_null() {
                             func.realm_context = parent.realm_context;
                         }
                         if parent.realm_global.is_object_like() {

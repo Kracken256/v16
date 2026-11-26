@@ -311,7 +311,7 @@ pub struct JSContext {
     promise_prototype: Option<*mut JSObject>,
     promise_constructor: Option<*mut JSObject>,
 
-    active_realm: usize,
+    active_realm: *mut JSContext,
 
     register_vm_ptr: Option<*mut crate::runtime::vm::VM>,
     compiler_opt_level: OptLevel,
@@ -410,7 +410,7 @@ impl JSContext {
             promise_prototype: None,
             promise_constructor: None,
 
-            active_realm: 0,
+            active_realm: std::ptr::null_mut(),
             register_vm_ptr: None,
             compiler_opt_level: OptLevel::default(),
             pending_exception: None,
@@ -546,7 +546,7 @@ impl JSContext {
     }
 
     pub fn refresh_builtin_realm(&mut self) {
-        let context = self as *mut JSContext as usize;
+        let context = self as *mut JSContext;
         let global = self.global();
         if !global.is_object_like() {
             return;
@@ -683,11 +683,11 @@ impl JSContext {
         );
     }
 
-    pub fn active_realm(&self) -> usize {
+    pub fn active_realm(&self) -> *mut JSContext {
         self.active_realm
     }
 
-    pub fn set_active_realm(&mut self, realm: usize) {
+    pub fn set_active_realm(&mut self, realm: *mut JSContext) {
         self.active_realm = realm;
     }
 

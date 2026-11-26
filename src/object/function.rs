@@ -89,7 +89,7 @@ pub struct JSFunction {
     pub has_private_elements: bool,
     pub arrow_enclosing_ctor_ptr: *mut crate::object::function::JSFunction,
     pub instance_fields: Vec<InstanceFieldDefinition>,
-    pub realm_context: usize,
+    pub realm_context: *mut JSContext,
     pub realm_global: JSValue,
     pub param_env: JSValue,
 }
@@ -128,7 +128,7 @@ impl JSFunction {
             has_private_elements: false,
             arrow_enclosing_ctor_ptr: std::ptr::null_mut(),
             instance_fields: Vec::new(),
-            realm_context: 0,
+            realm_context: std::ptr::null_mut(),
             realm_global: JSValue::undefined(),
             param_env: JSValue::undefined(),
         }
@@ -151,19 +151,19 @@ impl JSFunction {
 
     #[inline(always)]
     pub fn realm_ctx(&self) -> Option<&JSContext> {
-        if self.realm_context == 0 {
+        if self.realm_context.is_null() {
             None
         } else {
-            Some(unsafe { &*(self.realm_context as *const JSContext) })
+            Some(unsafe { &*self.realm_context })
         }
     }
 
     #[inline(always)]
     pub fn realm_ctx_mut(&mut self) -> Option<&mut JSContext> {
-        if self.realm_context == 0 {
+        if self.realm_context.is_null() {
             None
         } else {
-            Some(unsafe { &mut *(self.realm_context as *mut JSContext) })
+            Some(unsafe { &mut *self.realm_context })
         }
     }
 
