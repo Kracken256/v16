@@ -9,6 +9,8 @@ pub struct Compiler {
 
     ignore_case: bool,
 
+    unicode: bool,
+
     char_ranges: Vec<super::charclass::CharRange>,
 
     named_groups: Vec<(String, usize)>,
@@ -75,6 +77,7 @@ impl Compiler {
             bytecode: Vec::new(),
             capture_count: 1,
             ignore_case: (flags & FLAG_IGNORE_CASE) != 0,
+            unicode: (flags & FLAG_UNICODE) != 0,
             char_ranges: Vec::new(),
             named_groups: Vec::new(),
             repeat_depth: 0,
@@ -173,7 +176,11 @@ impl Compiler {
         let cp = c as u32;
 
         if self.ignore_case {
-            let folded = unicode_fold_simple(cp);
+            let folded = if self.unicode {
+                super::charclass::simple_case_fold(cp)
+            } else {
+                cp
+            };
             if folded > 0xFFFF {
                 self.emit_match_char32_i(REG_POS, folded);
             } else {
@@ -195,6 +202,9 @@ impl Compiler {
         let mut ranges = class.ranges.clone();
         if class.negated {
             ranges.invert();
+        }
+        if self.ignore_case {
+            ranges.canonicalize(self.unicode);
         }
         self.char_ranges.push(ranges);
 
@@ -564,18 +574,6 @@ impl Compiler {
         self.bytecode.push(OpCode::MovImm as u8);
         self.bytecode.push(reg as u8);
         self.bytecode.extend_from_slice(&(imm as u32).to_le_bytes());
-    }
-}
-
-fn unicode_fold_simple(c: u32) -> u32 {
-    if c < 128 {
-        if c >= b'A' as u32 && c <= b'Z' as u32 {
-            c + 32
-        } else {
-            c
-        }
-    } else {
-        c
     }
 }
 

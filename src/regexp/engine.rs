@@ -959,15 +959,11 @@ impl<'a> ExecContext<'a> {
 }
 
 #[inline(always)]
-fn canonicalize(c: u32, _is_unicode: bool) -> u32 {
-    if c < 128 {
-        if c >= b'A' as u32 && c <= b'Z' as u32 {
-            c + 32
-        } else {
-            c
-        }
+fn canonicalize(c: u32, is_unicode: bool) -> u32 {
+    if is_unicode {
+        super::charclass::simple_case_fold(c)
     } else {
-        c
+        super::charclass::ascii_fold(c)
     }
 }
 

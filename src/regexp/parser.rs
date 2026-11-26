@@ -555,7 +555,7 @@ fn parse_hex_escape_char(state: &mut ParseState, digits: usize) -> Result<Option
         val = val * 16 + digit;
     }
     if (0xD800..=0xDFFF).contains(&val) {
-        return Ok(Some('\u{FFFD}'));
+        return Ok(Some(crate::util::utf16::char_for_code_unit(val)));
     }
     char::from_u32(val)
         .map(Some)
@@ -590,8 +590,38 @@ fn parse_unicode_escape_char(state: &mut ParseState) -> Result<Option<char>, Str
             .map(Some)
             .ok_or_else(|| "Invalid Unicode code point".to_string())
     } else {
-        parse_hex_escape_char(state, 4)
+        let parsed = parse_hex_escape_char(state, 4)?;
+        if state.is_unicode
+            && let Some(high) = parsed
+            && let Some(combined) = try_combine_surrogate_pair(state, high)
+        {
+            return Ok(Some(combined));
+        }
+        Ok(parsed)
     }
+}
+
+fn try_combine_surrogate_pair(state: &mut ParseState, high: char) -> Option<char> {
+    let unit = crate::util::utf16::surrogate_escape_unit(high)?;
+    if !(0xD800..=0xDBFF).contains(&unit) {
+        return None;
+    }
+    if state.peek() != Some('\\') || state.peek_at(1) != Some('u') {
+        return None;
+    }
+    let mut low: u32 = 0;
+    for offset in 0..4 {
+        let digit = state.peek_at(2 + offset)?.to_digit(16)?;
+        low = low * 16 + digit;
+    }
+    if !(0xDC00..=0xDFFF).contains(&low) {
+        return None;
+    }
+    for _ in 0..6 {
+        state.next();
+    }
+    let code_point = 0x10000 + ((unit as u32 - 0xD800) << 10) + (low - 0xDC00);
+    char::from_u32(code_point)
 }
 
 fn parse_octal_escape(state: &mut ParseState) -> Result<Ast, String> {

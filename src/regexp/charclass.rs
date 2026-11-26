@@ -221,19 +221,7 @@ impl CharRange {
     }
 }
 
-fn ascii_fold(c: u32) -> u32 {
-    if c < 128 {
-        if c >= b'a' as u32 && c <= b'z' as u32 {
-            c - 32
-        } else {
-            c
-        }
-    } else {
-        c
-    }
-}
-
-fn unicode_fold(c: u32) -> u32 {
+pub fn ascii_fold(c: u32) -> u32 {
     if c < 128 {
         if c >= b'A' as u32 && c <= b'Z' as u32 {
             c + 32
@@ -243,6 +231,40 @@ fn unicode_fold(c: u32) -> u32 {
     } else {
         c
     }
+}
+
+pub fn simple_case_fold(c: u32) -> u32 {
+    if c < 128 {
+        return ascii_fold(c);
+    }
+    let Some(ch) = char::from_u32(c) else {
+        return c;
+    };
+    let folded = match ch {
+        '\u{00B5}' => '\u{3BC}',
+        '\u{017F}' => '\u{73}',
+        '\u{0345}' | '\u{1FBE}' => '\u{3B9}',
+        '\u{03C2}' => '\u{3C3}',
+        '\u{03D0}' => '\u{3B2}',
+        '\u{03D1}' => '\u{3B8}',
+        '\u{03D5}' => '\u{3C6}',
+        '\u{03D6}' => '\u{3C0}',
+        '\u{03F0}' => '\u{3BA}',
+        '\u{03F1}' => '\u{3C1}',
+        '\u{03F5}' => '\u{3B5}',
+        _ => {
+            let mut lower = ch.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(single), None) => single,
+                _ => ch,
+            }
+        }
+    };
+    folded as u32
+}
+
+fn unicode_fold(c: u32) -> u32 {
+    simple_case_fold(c)
 }
 
 pub fn class_digit() -> CharRange {
