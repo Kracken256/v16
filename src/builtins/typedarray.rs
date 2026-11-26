@@ -1469,12 +1469,8 @@ fn ta_call_callback(
     this_value: JSValue,
     args: &[JSValue],
 ) -> Result<JSValue, String> {
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-        vm.call_function_with_this(ctx, callback, this_value, args)
-    } else {
-        Err("call_callback: VM not available".to_string())
-    }
+    ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, callback, this_value, args))
+        .unwrap_or_else(|| Err("call_callback: VM not available".to_string()))
 }
 
 fn typed_array_for_each(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -2168,16 +2164,14 @@ fn typed_array_sort(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     values.sort_by(|a, b| {
         if compare_is_fn {
             let cb_args = vec![*a, *b];
-            if let Some(ptr) = ctx.get_register_vm_ptr() {
-                let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                if let Ok(result) = vm.call_function_with_this(ctx, compare_fn, JSValue::undefined(), &cb_args) {
-                    let n = result.to_number();
-                    if n < 0.0 { std::cmp::Ordering::Less }
-                    else if n > 0.0 { std::cmp::Ordering::Greater }
-                    else { std::cmp::Ordering::Equal }
-                } else {
-                    std::cmp::Ordering::Equal
-                }
+            let called = ctx.with_vm(|vm, ctx| {
+                vm.call_function_with_this(ctx, compare_fn, JSValue::undefined(), &cb_args)
+            });
+            if let Some(Ok(result)) = called {
+                let n = result.to_number();
+                if n < 0.0 { std::cmp::Ordering::Less }
+                else if n > 0.0 { std::cmp::Ordering::Greater }
+                else { std::cmp::Ordering::Equal }
             } else {
                 std::cmp::Ordering::Equal
             }
