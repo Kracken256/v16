@@ -7902,6 +7902,9 @@ impl CodeGenerator {
             }
             Expression::MemberExpression(member) => {
                 if matches!(&*member.object, Expression::Super) {
+                    if self.in_derived_constructor {
+                        self.emit(Opcode::CheckThisInitialized);
+                    }
                     if let MemberProperty::Computed(expr) = &member.property {
                         self.gen_expression(expr, ctx)?;
                     }
@@ -7966,6 +7969,8 @@ impl CodeGenerator {
                 Ok(dst)
             }
             _ => {
+                let value = self.gen_expression(arg_expr, ctx)?;
+                self.free_register(value);
                 self.free_register(arg_reg);
                 let dst = self.alloc_register();
                 self.emit(Opcode::LoadTrue);
