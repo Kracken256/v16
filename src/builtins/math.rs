@@ -71,11 +71,8 @@ fn call_js_function(
     }
 
     if let Some(ref _rb) = js_func.bytecode {
-        let vm_ptr = ctx
-            .get_register_vm_ptr()
-            .ok_or("No VM associated with context")?;
-        let vm = unsafe { &mut *(vm_ptr as *mut VM) };
-        vm.call_function_with_this(ctx, func, this_value, args)
+        ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, func, this_value, args))
+            .ok_or("No VM associated with context")?
     } else {
         Ok(JSValue::undefined())
     }
@@ -662,6 +659,87 @@ fn throw_type_error_math(ctx: &mut JSContext, msg: &str) -> JSValue {
     JSValue::undefined()
 }
 
+fn collect_iterable_values(
+    ctx: &mut JSContext,
+    vm: &mut VM,
+    iterable: &JSValue,
+    sym_iter_val: JSValue,
+    values: &mut Vec<f64>,
+) -> Option<JSValue> {
+    let iter_fn = {
+        let sym_key = crate::runtime::atom::Atom(0x40000000 | sym_iter_val.get_symbol_id());
+        let obj = iterable.as_object();
+        obj.get(sym_key).unwrap()
+    };
+
+    let iterator = match vm.call_function_with_this(ctx, iter_fn, iterable.clone(), &[]) {
+        Ok(v) => v,
+        Err(_) => return Some(JSValue::undefined()),
+    };
+    if ctx.pending_exception.is_some() {
+        return Some(JSValue::undefined());
+    }
+    if !iterator.is_object() {
+        return Some(throw_type_error_math(ctx, "iterator is not an object"));
+    }
+
+    let next_atom = ctx.intern("next");
+    let next_fn = {
+        let mut next_val = None;
+        let mut current = Some(iterator.as_object());
+        while let Some(obj) = current {
+            if let Some(v) = obj.get(next_atom) {
+                next_val = Some(v);
+                break;
+            }
+            current = obj.prototype_object();
+        }
+        match next_val {
+            Some(v) if v.is_function() => v,
+            _ => return Some(throw_type_error_math(ctx, "iterator has no next method")),
+        }
+    };
+
+    loop {
+        let result = match vm.call_function_with_this(ctx, next_fn, iterator.clone(), &[]) {
+            Ok(v) => v,
+            Err(_) => return Some(JSValue::undefined()),
+        };
+        if ctx.pending_exception.is_some() {
+            return Some(JSValue::undefined());
+        }
+        if !result.is_object() {
+            return Some(throw_type_error_math(ctx, "iterator result is not an object"));
+        }
+        let result_obj = result.as_object();
+        let done_atom = ctx.intern("done");
+        let value_atom = ctx.intern("value");
+        let done = result_obj
+            .get(done_atom)
+            .map_or(false, |v| v.is_bool() && v.get_bool());
+        if done {
+            break;
+        }
+        let value = match result_obj.get(value_atom) {
+            Some(v) => v,
+            None => JSValue::undefined(),
+        };
+
+        if value.is_object() || value.is_bigint() || value.is_symbol() || value.is_function() {
+            let return_atom = ctx.intern("return");
+            let iter_obj = iterator.as_object();
+            if let Some(ret_fn) = iter_obj.get(return_atom) {
+                if ret_fn.is_function() {
+                    let _ = vm.call_function_with_this(ctx, ret_fn, iterator.clone(), &[]);
+                }
+            }
+            return Some(throw_type_error_math(ctx, "element is not a number"));
+        }
+        values.push(value.to_number());
+    }
+    None
+}
+
 fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
         let mut err =
@@ -694,82 +772,12 @@ fn math_sum_precise(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     };
 
     if has_iterator {
-        let vm_ptr = match ctx.get_register_vm_ptr() {
-            Some(p) => p,
+        match ctx.with_vm(|vm, ctx| {
+            collect_iterable_values(ctx, vm, iterable, sym_iter_val, &mut values)
+        }) {
             None => return JSValue::new_float(f64::NAN),
-        };
-        let vm = unsafe { &mut *(vm_ptr as *mut VM) };
-
-        let iter_fn = {
-            let sym_key = crate::runtime::atom::Atom(0x40000000 | sym_iter_val.get_symbol_id());
-            let obj = iterable.as_object();
-            obj.get(sym_key).unwrap()
-        };
-
-        let iterator = match vm.call_function_with_this(ctx, iter_fn, iterable.clone(), &[]) {
-            Ok(v) => v,
-            Err(_) => return JSValue::undefined(),
-        };
-        if ctx.pending_exception.is_some() {
-            return JSValue::undefined();
-        }
-        if !iterator.is_object() {
-            return throw_type_error_math(ctx, "iterator is not an object");
-        }
-
-        let next_atom = ctx.intern("next");
-        let next_fn = {
-            let mut next_val = None;
-            let mut current = Some(iterator.as_object());
-            while let Some(obj) = current {
-                if let Some(v) = obj.get(next_atom) {
-                    next_val = Some(v);
-                    break;
-                }
-                current = obj.prototype_object();
-            }
-            match next_val {
-                Some(v) if v.is_function() => v,
-                _ => return throw_type_error_math(ctx, "iterator has no next method"),
-            }
-        };
-
-        loop {
-            let result = match vm.call_function_with_this(ctx, next_fn, iterator.clone(), &[]) {
-                Ok(v) => v,
-                Err(_) => return JSValue::undefined(),
-            };
-            if ctx.pending_exception.is_some() {
-                return JSValue::undefined();
-            }
-            if !result.is_object() {
-                return throw_type_error_math(ctx, "iterator result is not an object");
-            }
-            let result_obj = result.as_object();
-            let done_atom = ctx.intern("done");
-            let value_atom = ctx.intern("value");
-            let done = result_obj
-                .get(done_atom)
-                .map_or(false, |v| v.is_bool() && v.get_bool());
-            if done {
-                break;
-            }
-            let value = match result_obj.get(value_atom) {
-                Some(v) => v,
-                None => JSValue::undefined(),
-            };
-
-            if value.is_object() || value.is_bigint() || value.is_symbol() || value.is_function() {
-                let return_atom = ctx.intern("return");
-                let iter_obj = iterator.as_object();
-                if let Some(ret_fn) = iter_obj.get(return_atom) {
-                    if ret_fn.is_function() {
-                        let _ = vm.call_function_with_this(ctx, ret_fn, iterator.clone(), &[]);
-                    }
-                }
-                return throw_type_error_math(ctx, "element is not a number");
-            }
-            values.push(value.to_number());
+            Some(None) => {}
+            Some(Some(v)) => return v,
         }
     } else if iterable.is_object() {
         let obj = iterable.as_object();
