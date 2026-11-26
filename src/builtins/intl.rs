@@ -179,12 +179,12 @@ fn value_to_string(ctx: &mut JSContext, v: JSValue) -> String {
         let to_string_atom = ctx.common_atoms.to_string;
         if let Some(to_string_fn) = obj.get(to_string_atom) {
             if to_string_fn.is_function() {
-                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                    if let Ok(ret) = vm.call_function_with_this(ctx, to_string_fn, v, &[]) {
-                        if ret.is_string() {
-                            return ctx.get_atom_str(ret.get_atom()).to_string();
-                        }
+                let ret = ctx
+                    .with_vm(|vm, ctx| vm.call_function_with_this(ctx, to_string_fn, v, &[]).ok())
+                    .flatten();
+                if let Some(ret) = ret {
+                    if ret.is_string() {
+                        return ctx.get_atom_str(ret.get_atom()).to_string();
                     }
                 }
             }
