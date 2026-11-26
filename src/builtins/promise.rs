@@ -518,13 +518,12 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if sym_iter.is_symbol() {
         let sym_atom = crate::runtime::atom::Atom(0x40000000 | sym_iter.get_symbol_id());
         let iter_fn = obj.get(sym_atom).or_else(|| {
-            let mut current = obj.prototype;
-            while let Some(p) = current {
-                let pobj = unsafe { &*p };
+            let mut current = obj.prototype_object();
+            while let Some(pobj) = current {
                 if let Some(v) = pobj.get(sym_atom) {
                     return Some(v);
                 }
-                current = pobj.prototype;
+                current = pobj.prototype_object();
             }
             None
         });
@@ -1177,7 +1176,8 @@ pub(crate) fn fulfill_promise_with_value(
     promise_obj_ptr: usize,
     value: JSValue,
 ) {
-    let promise = unsafe { &mut *(promise_obj_ptr as *mut JSObject) };
+    let promise_val = JSValue::new_object(promise_obj_ptr);
+    let promise = promise_val.as_object_mut();
     fulfill_promise(ctx, promise, value);
 }
 
@@ -1187,7 +1187,8 @@ pub(crate) fn reject_promise_with_value(
     promise_obj_ptr: usize,
     reason: JSValue,
 ) {
-    let promise = unsafe { &mut *(promise_obj_ptr as *mut JSObject) };
+    let promise_val = JSValue::new_object(promise_obj_ptr);
+    let promise = promise_val.as_object_mut();
     reject_promise(ctx, promise, reason);
 }
 
