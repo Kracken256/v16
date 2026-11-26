@@ -358,6 +358,11 @@ impl GcHeap {
         self.nursery_enabled && self.nursery.can_fit::<JSObject>()
     }
 
+    #[inline]
+    pub fn nursery_enabled_and_can_fit_array(&self) -> bool {
+        self.nursery_enabled && self.nursery.can_fit::<JSArrayObject>()
+    }
+
     pub fn alloc_array(&mut self) -> Option<*mut JSArrayObject> {
         if !self.nursery_enabled {
             return None;

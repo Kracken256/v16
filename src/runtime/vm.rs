@@ -8960,28 +8960,18 @@ impl VM {
                 Opcode::NewArray => {
                     let dst = self.read_u16_pc();
                     let count = self.read_u16_pc();
-                    let ptr = if let Some(proto_ptr) = ctx.get_array_prototype() {
-                        if let Some(nursery_ptr) = ctx.runtime_mut().gc_heap_mut().alloc_array() {
-                            unsafe {
-                                (*nursery_ptr).header.set_prototype_raw(proto_ptr);
-                                (*nursery_ptr).elements.reserve(count as usize);
-                                (*nursery_ptr).header.ensure_shape(ctx.shape_cache_mut());
-                            }
-                            nursery_ptr as usize
-                        } else {
-                            let mut arr = crate::object::array_obj::JSArrayObject::with_capacity(
-                                count as usize,
-                            );
-                            arr.header.set_prototype_raw(proto_ptr);
-                            arr.header.ensure_shape(ctx.shape_cache_mut());
-                            let heap_ptr = Box::into_raw(Box::new(arr)) as usize;
-                            ctx.runtime_mut().gc_heap_mut().track_array(heap_ptr);
-                            heap_ptr
-                        }
+                    let mut arr =
+                        crate::object::array_obj::JSArrayObject::with_capacity(count as usize);
+                    if let Some(proto_ptr) = ctx.get_array_prototype() {
+                        arr.header.set_prototype_raw(proto_ptr);
+                    }
+                    arr.header.ensure_shape(ctx.shape_cache_mut());
+                    let ptr = if ctx.runtime().gc_heap().nursery_enabled_and_can_fit_array() {
+                        ctx.runtime_mut()
+                            .gc_heap_mut()
+                            .alloc_array_with_value(arr)
+                            .expect("nursery alloc failed despite can_fit") as usize
                     } else {
-                        let mut arr =
-                            crate::object::array_obj::JSArrayObject::with_capacity(count as usize);
-                        arr.header.ensure_shape(ctx.shape_cache_mut());
                         let heap_ptr = Box::into_raw(Box::new(arr)) as usize;
                         ctx.runtime_mut().gc_heap_mut().track_array(heap_ptr);
                         heap_ptr
