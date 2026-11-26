@@ -3285,14 +3285,13 @@ impl JSObject {
         std::mem::take(&mut self.props)
     }
 
-    pub fn clean_stale_properties(&mut self, heap: &crate::runtime::gc::GcHeap) {
+    pub fn clean_stale_properties(&mut self, dead: &FxHashSet<*mut JSObject>) {
         for slot in &mut self.props {
             if slot.attrs == ATTR_DELETED {
                 continue;
             }
             if slot.value.is_object() || slot.value.is_function() {
-                let ptr = slot.value.get_ptr();
-                if !heap.is_ptr_alive(ptr) {
+                if dead.contains(&slot.value.get_ptr()) {
                     slot.value = JSValue::undefined();
                 }
             }
@@ -3841,5 +3840,27 @@ mod tests {
 
         assert_eq!(shape_before, shape_after);
         assert_eq!(obj.inline_values_len(), 2);
+    }
+
+    #[test]
+    fn test_clean_stale_properties_uses_dead_set_without_dereferencing() {
+        let dead_ptr = std::ptr::NonNull::<JSObject>::dangling().as_ptr();
+        let live_ptr = Box::into_raw(Box::new(JSObject::new()));
+        {
+            let mut obj = JSObject::new();
+            obj.set(Atom(1), JSValue::new_object(dead_ptr));
+            obj.set(Atom(2), JSValue::new_object(live_ptr));
+
+            let mut dead = FxHashSet::default();
+            dead.insert(dead_ptr);
+            obj.clean_stale_properties(&dead);
+
+            assert!(obj.get(Atom(1)).unwrap().is_undefined());
+            assert_eq!(obj.get(Atom(2)).unwrap().get_ptr(), live_ptr);
+        }
+        // SAFETY: `live_ptr` came from `Box::into_raw` above and is reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(live_ptr);
+        }
     }
 }

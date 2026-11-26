@@ -2,6 +2,7 @@ use crate::object::array_obj::JSArrayObject;
 use crate::object::function::JSFunction;
 use crate::object::object::JSObject;
 use crate::object::object::SmallPropVec;
+use crate::util::FxHashSet;
 use crate::value::JSValue;
 use std::env;
 
@@ -984,6 +985,8 @@ impl GcHeap {
         } else {
             Vec::new()
         };
+        let dead_ptrs: FxHashSet<*mut JSObject> =
+            dead.iter().map(|&idx| self.objects[idx]).collect();
 
         for &idx in &dead {
             let ptr = self.objects[idx];
@@ -1014,7 +1017,7 @@ impl GcHeap {
             self.free_list.push(idx);
         }
         self.gray_stack.clear();
-        self.clean_stale_properties_on_nursery_survivors();
+        self.clean_stale_properties_on_nursery_survivors(&dead_ptrs);
 
         self.nursery_indices = new_nursery_indices;
         if self.nursery_indices.is_empty() {
@@ -1218,15 +1221,6 @@ impl GcHeap {
     }
 
     #[inline]
-    pub fn is_ptr_alive(&self, ptr: *mut JSObject) -> bool {
-        let slot = JSValue::new_object(ptr).as_object().gc_slot;
-        if slot == u32::MAX {
-            return true;
-        }
-        self.objects.get(slot as usize) == Some(&ptr)
-    }
-
-    #[inline]
     pub fn weak_handle(&self, object: &JSObject) -> Option<WeakObjectHandle> {
         let slot = object.gc_slot;
         if slot == u32::MAX {
@@ -1255,7 +1249,7 @@ impl GcHeap {
         Some(JSValue::new_object(ptr))
     }
 
-    fn clean_stale_properties_on_nursery_survivors(&mut self) {
+    fn clean_stale_properties_on_nursery_survivors(&mut self, dead: &FxHashSet<*mut JSObject>) {
         for &idx in &self.nursery_indices {
             if self.marks[idx] == COLOR_WHITE {
                 continue;
@@ -1265,7 +1259,7 @@ impl GcHeap {
                 TAG_OBJECT | TAG_FUNCTION | TAG_ARRAY => {
                     JSValue::new_object(self.objects[idx])
                         .as_object_mut()
-                        .clean_stale_properties(self);
+                        .clean_stale_properties(dead);
                 }
                 _ => {}
             }
