@@ -1,7 +1,7 @@
 use crate::runtime::atom::Atom;
 use crate::util::FxHashMap;
-use std::cell::{Cell, UnsafeCell};
-use std::ptr::NonNull;
+use std::cell::{Cell, OnceCell, RefCell};
+use std::rc::{Rc, Weak};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShapeId(pub usize);
@@ -20,13 +20,11 @@ pub struct Transition {
 
 pub struct Shape {
     pub id: ShapeId,
-    pub parent: Option<NonNull<Shape>>,
+    pub parent: Option<Rc<Shape>>,
     pub transition: Option<Transition>,
     pub property_count: u32,
-    property_map: UnsafeCell<FxHashMap<Atom, u32>>,
-    property_map_built: UnsafeCell<bool>,
-
-    children: UnsafeCell<Vec<(Atom, NonNull<Shape>)>>,
+    property_map: OnceCell<FxHashMap<Atom, u32>>,
+    children: RefCell<Vec<(Atom, Weak<Shape>)>>,
 }
 
 impl Shape {
@@ -36,83 +34,71 @@ impl Shape {
             parent: None,
             transition: None,
             property_count: 0,
-            property_map: UnsafeCell::new(FxHashMap::default()),
-            property_map_built: UnsafeCell::new(true),
-            children: UnsafeCell::new(Vec::new()),
+            property_map: OnceCell::new(),
+            children: RefCell::new(Vec::new()),
         }
     }
 
-    pub fn add_property(&self, property: Atom, id: ShapeId) -> Shape {
+    pub fn add_property(self: &Rc<Self>, property: Atom, id: ShapeId) -> Rc<Shape> {
         let offset = self.property_count;
-        let parent_ptr = NonNull::from(self);
-        Shape {
+        Rc::new(Shape {
             id,
-            parent: Some(parent_ptr),
+            parent: Some(Rc::clone(self)),
             transition: Some(Transition { property, offset }),
             property_count: self.property_count + 1,
-            property_map: UnsafeCell::new(FxHashMap::default()),
-            property_map_built: UnsafeCell::new(false),
-            children: UnsafeCell::new(Vec::new()),
-        }
+            property_map: OnceCell::new(),
+            children: RefCell::new(Vec::new()),
+        })
     }
 
     pub fn get_offset(&self, property: Atom) -> Option<u32> {
-        if self.property_count <= 8 {
-            unsafe {
-                let mut current = Some(NonNull::from(self));
-                while let Some(shape_ptr) = current {
-                    let shape = &*shape_ptr.as_ptr();
-                    if let Some(ref t) = shape.transition {
-                        if t.property == property {
-                            return Some(t.offset);
-                        }
-                    }
-                    current = shape.parent;
-                }
-            }
-            return None;
+        if self.property_count > 8 {
+            return self
+                .property_map()
+                .and_then(|map| map.get(&property).copied());
         }
-        self.ensure_property_map();
 
-        unsafe { (*self.property_map.get()).get(&property).copied() }
+        if let Some(transition) = self.transition {
+            if transition.property == property {
+                return Some(transition.offset);
+            }
+        }
+        self.parent
+            .as_ref()
+            .and_then(|parent| parent.get_offset(property))
     }
 
-    fn ensure_property_map(&self) {
-        unsafe {
-            if *self.property_map_built.get() {
-                return;
-            }
-
-            let map = &mut *self.property_map.get();
+    fn property_map(&self) -> Option<&FxHashMap<Atom, u32>> {
+        self.property_map.get_or_init(|| {
+            let mut map = FxHashMap::default();
             map.reserve(self.property_count as usize);
-            let mut current = Some(NonNull::from(self));
-
-            while let Some(shape_ptr) = current {
-                let shape = &*shape_ptr.as_ptr();
-                if let Some(transition) = &shape.transition {
+            if let Some(transition) = self.transition {
+                map.insert(transition.property, transition.offset);
+            }
+            let mut current = self.parent.as_deref();
+            while let Some(shape) = current {
+                if let Some(transition) = shape.transition {
                     map.insert(transition.property, transition.offset);
                 }
-                current = shape.parent;
+                current = shape.parent.as_deref();
             }
-
-            *self.property_map_built.get() = true;
-        }
+            map
+        });
+        self.property_map.get()
     }
 
     pub fn properties(&self) -> Vec<(Atom, u32)> {
         let mut props = Vec::with_capacity(self.property_count as usize);
-        let mut current = Some(NonNull::from(self));
-
-        while let Some(shape_ptr) = current {
-            unsafe {
-                let shape = &*shape_ptr.as_ptr();
-                if let Some(transition) = &shape.transition {
-                    props.push((transition.property, transition.offset));
-                }
-                current = shape.parent;
-            }
+        if let Some(transition) = self.transition {
+            props.push((transition.property, transition.offset));
         }
-
+        let mut current = self.parent.as_deref();
+        while let Some(shape) = current {
+            if let Some(transition) = shape.transition {
+                props.push((transition.property, transition.offset));
+            }
+            current = shape.parent.as_deref();
+        }
         props.reverse();
         props
     }
@@ -137,20 +123,15 @@ impl std::fmt::Debug for Shape {
 }
 
 pub struct ShapeCache {
-    root_shape: NonNull<Shape>,
+    root_shape: Rc<Shape>,
     next_id: Cell<usize>,
-    shapes: Vec<Box<Shape>>,
 }
 
 impl ShapeCache {
     pub fn new() -> Self {
-        let root = Box::new(Shape::root());
-        let root_ptr = NonNull::from(&*root);
-
         ShapeCache {
-            root_shape: root_ptr,
+            root_shape: Rc::new(Shape::root()),
             next_id: Cell::new(1),
-            shapes: vec![root],
         }
     }
 
@@ -160,35 +141,34 @@ impl ShapeCache {
         ShapeId(id)
     }
 
-    pub fn root_shape(&self) -> NonNull<Shape> {
-        self.root_shape
+    pub fn root_shape(&self) -> Rc<Shape> {
+        Rc::clone(&self.root_shape)
     }
 
-    pub fn transition(&mut self, parent: NonNull<Shape>, property: Atom) -> NonNull<Shape> {
-        unsafe {
-            let parent_ref = &*parent.as_ptr();
-
-            let children = &mut *parent_ref.children.get();
-            for &(atom, child_ptr) in children.iter() {
-                if atom == property {
-                    return child_ptr;
-                }
+    pub fn transition(&mut self, parent: &Rc<Shape>, property: Atom) -> Rc<Shape> {
+        let mut children = parent.children.borrow_mut();
+        children.retain(|(_, child)| child.strong_count() > 0);
+        if let Some(child) = children.iter().find_map(|(atom, child)| {
+            if *atom == property {
+                child.upgrade()
+            } else {
+                None
             }
-
-            let child_id = self.alloc_id();
-            let child = Box::new(parent_ref.add_property(property, child_id));
-            let child_ptr = NonNull::from(&*child);
-            children.push((property, child_ptr));
-            self.shapes.push(child);
-            child_ptr
+        }) {
+            return child;
         }
+
+        let child_id = self.alloc_id();
+        let child = parent.add_property(property, child_id);
+        children.push((property, Rc::downgrade(&child)));
+        child
     }
 
-    pub fn create_shape_for_properties(&mut self, properties: &[Atom]) -> NonNull<Shape> {
-        let mut current = self.root_shape;
+    pub fn create_shape_for_properties(&mut self, properties: &[Atom]) -> Rc<Shape> {
+        let mut current = self.root_shape();
 
         for property in properties {
-            current = self.transition(current, *property);
+            current = self.transition(&current, *property);
         }
 
         current
@@ -199,10 +179,6 @@ impl Default for ShapeCache {
     fn default() -> Self {
         Self::new()
     }
-}
-
-impl Drop for ShapeCache {
-    fn drop(&mut self) {}
 }
 
 #[cfg(test)]
@@ -226,21 +202,17 @@ mod tests {
         let mut cache = ShapeCache::new();
         let root = cache.root_shape();
 
-        let shape1 = cache.transition(root, foo);
-        unsafe {
-            let s1 = &*shape1.as_ptr();
-            assert_eq!(s1.property_count, 1);
-            assert_eq!(s1.get_offset(foo), Some(0));
-            assert_eq!(s1.get_offset(bar), None);
-        }
+        let shape1 = cache.transition(&root, foo);
+        let s1 = &*shape1;
+        assert_eq!(s1.property_count, 1);
+        assert_eq!(s1.get_offset(foo), Some(0));
+        assert_eq!(s1.get_offset(bar), None);
 
-        let shape2 = cache.transition(shape1, bar);
-        unsafe {
-            let s2 = &*shape2.as_ptr();
-            assert_eq!(s2.property_count, 2);
-            assert_eq!(s2.get_offset(foo), Some(0));
-            assert_eq!(s2.get_offset(bar), Some(1));
-        }
+        let shape2 = cache.transition(&shape1, bar);
+        let s2 = &*shape2;
+        assert_eq!(s2.property_count, 2);
+        assert_eq!(s2.get_offset(foo), Some(0));
+        assert_eq!(s2.get_offset(bar), Some(1));
     }
 
     #[test]
@@ -251,10 +223,10 @@ mod tests {
         let mut cache = ShapeCache::new();
         let root = cache.root_shape();
 
-        let shape1 = cache.transition(root, foo);
-        let shape2 = cache.transition(root, foo);
+        let shape1 = cache.transition(&root, foo);
+        let shape2 = cache.transition(&root, foo);
 
-        assert_eq!(shape1, shape2);
+        assert!(Rc::ptr_eq(&shape1, &shape2));
     }
 
     #[test]
@@ -267,17 +239,33 @@ mod tests {
         let mut cache = ShapeCache::new();
         let root = cache.root_shape();
 
-        let shape1 = cache.transition(root, foo);
-        let shape2 = cache.transition(shape1, bar);
-        let shape3 = cache.transition(shape2, baz);
+        let shape1 = cache.transition(&root, foo);
+        let shape2 = cache.transition(&shape1, bar);
+        let shape3 = cache.transition(&shape2, baz);
 
-        unsafe {
-            let s3 = &*shape3.as_ptr();
-            let props = s3.properties();
-            assert_eq!(props.len(), 3);
-            assert_eq!(props[0], (foo, 0));
-            assert_eq!(props[1], (bar, 1));
-            assert_eq!(props[2], (baz, 2));
+        let props = shape3.properties();
+        assert_eq!(props.len(), 3);
+        assert_eq!(props[0], (foo, 0));
+        assert_eq!(props[1], (bar, 1));
+        assert_eq!(props[2], (baz, 2));
+    }
+
+    #[test]
+    fn test_large_shape_property_map() {
+        let mut atoms = AtomTable::new();
+        let mut cache = ShapeCache::new();
+        let mut shape = cache.root_shape();
+        let mut names = Vec::new();
+
+        for i in 0..12 {
+            let atom = atoms.intern(&format!("property_{i}"));
+            names.push(atom);
+            shape = cache.transition(&shape, atom);
         }
+
+        for (offset, atom) in names.iter().enumerate() {
+            assert_eq!(shape.get_offset(*atom), Some(offset as u32));
+        }
+        assert_eq!(shape.properties().len(), 12);
     }
 }

@@ -338,7 +338,7 @@ pub struct JSContext {
 
     cached_int_atoms: [Atom; 100],
 
-    args_length_shape: Option<std::ptr::NonNull<crate::object::shape::Shape>>,
+    args_length_shape: Option<std::rc::Rc<crate::object::shape::Shape>>,
 }
 
 #[derive(Clone)]
@@ -535,13 +535,13 @@ impl JSContext {
     #[inline]
     pub fn get_or_create_args_length_shape(
         &mut self,
-    ) -> std::ptr::NonNull<crate::object::shape::Shape> {
-        if let Some(s) = self.args_length_shape {
-            return s;
+    ) -> std::rc::Rc<crate::object::shape::Shape> {
+        if let Some(s) = self.args_length_shape.as_ref() {
+            return std::rc::Rc::clone(s);
         }
         let root = self.shape_cache.root_shape();
-        let s = self.shape_cache.transition(root, self.common_atoms.length);
-        self.args_length_shape = Some(s);
+        let s = self.shape_cache.transition(&root, self.common_atoms.length);
+        self.args_length_shape = Some(std::rc::Rc::clone(&s));
         s
     }
 

@@ -96,7 +96,7 @@ pub struct AsyncGeneratorState {
 
     pub pending_return_action: u8,
 }
-use std::ptr::NonNull;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypedArrayKind {
@@ -779,7 +779,7 @@ pub struct JSObject {
     pub gc_slot: u32,
     flags: u8,
     pub is_function_object: bool,
-    shape: Option<NonNull<Shape>>,
+    shape: Option<Rc<Shape>>,
 
     pub shape_id_cache: usize,
 
@@ -969,18 +969,18 @@ impl JSObject {
     }
 
     #[inline(always)]
-    fn shape_id_of(shape: NonNull<Shape>) -> usize {
-        unsafe { (*shape.as_ptr()).id.0 }
+    fn shape_id_of(shape: &Shape) -> usize {
+        shape.id.0
     }
 
     #[inline(always)]
-    fn shape_offset_of(shape: NonNull<Shape>, property: Atom) -> Option<u32> {
-        unsafe { (*shape.as_ptr()).get_offset(property) }
+    fn shape_offset_of(shape: &Shape, property: Atom) -> Option<u32> {
+        shape.get_offset(property)
     }
 
     #[inline(always)]
-    fn shape_property_count_of(shape: NonNull<Shape>) -> u32 {
-        unsafe { (*shape.as_ptr()).property_count }
+    fn shape_property_count_of(shape: &Shape) -> u32 {
+        shape.property_count
     }
 
     #[inline(always)]
@@ -1525,16 +1525,18 @@ impl JSObject {
     #[inline(always)]
     fn shape_offset(&self, prop: Atom) -> Option<u32> {
         self.shape
-            .and_then(|ptr| Self::shape_offset_of(ptr, prop))
+            .as_deref()
+            .and_then(|shape| Self::shape_offset_of(shape, prop))
     }
 
-    pub fn ensure_shape(&mut self, cache: &mut ShapeCache) -> NonNull<Shape> {
-        self.shape.unwrap_or_else(|| {
-            let r = cache.root_shape();
-            self.shape = Some(r);
-            self.shape_id_cache = Self::shape_id_of(r);
-            r
-        })
+    pub fn ensure_shape(&mut self, cache: &mut ShapeCache) -> Rc<Shape> {
+        if let Some(shape) = self.shape.as_ref() {
+            return Rc::clone(shape);
+        }
+        let root = cache.root_shape();
+        self.shape = Some(Rc::clone(&root));
+        self.shape_id_cache = Self::shape_id_of(&root);
+        root
     }
 
     #[inline]
@@ -1677,11 +1679,6 @@ impl JSObject {
     }
 
     #[inline(always)]
-    pub fn shape_ptr(&self) -> Option<std::ptr::NonNull<super::shape::Shape>> {
-        self.shape
-    }
-
-    #[inline(always)]
     pub fn set_by_offset(&mut self, offset: usize, value: JSValue) -> bool {
         if offset < self.props.len as usize {
             let slot = self.props.inline_mut(offset);
@@ -1717,14 +1714,27 @@ impl JSObject {
         offset: usize,
         atom: Atom,
         value: JSValue,
-        new_shape: std::ptr::NonNull<super::shape::Shape>,
+        new_shape: Rc<Shape>,
     ) {
         debug_assert_eq!(offset, self.props.len());
         self.props.push(PropSlot::new(atom, value, ATTR_DEFAULT));
+        self.shape_id_cache = Self::shape_id_of(&new_shape);
         self.shape = Some(new_shape);
-        self.shape_id_cache = Self::shape_id_of(new_shape);
         self.update_property_map(atom);
         self.track_property_order(atom);
+    }
+
+    #[inline(always)]
+    pub fn push_prop_transition(
+        &mut self,
+        offset: usize,
+        atom: Atom,
+        value: JSValue,
+        cache: &mut ShapeCache,
+    ) {
+        let current = self.ensure_shape(cache);
+        let new_shape = cache.transition(&current, atom);
+        self.push_prop_with_shape(offset, atom, value, new_shape);
     }
 
     #[inline(always)]
@@ -1732,28 +1742,28 @@ impl JSObject {
     pub fn fast_init_from_simple_constructor<I>(
         &mut self,
         props: I,
-        final_shape: std::ptr::NonNull<super::shape::Shape>,
+        final_shape: Rc<Shape>,
     ) where
         I: Iterator<Item = (Atom, crate::value::JSValue)>,
     {
         for (atom, value) in props {
             self.props.push(PropSlot::new(atom, value, ATTR_DEFAULT));
         }
+        self.shape_id_cache = Self::shape_id_of(&final_shape);
         self.shape = Some(final_shape);
-        self.shape_id_cache = Self::shape_id_of(final_shape);
     }
 
     pub fn batch_push_props(
         &mut self,
         atoms: &[Atom],
         values: &[JSValue],
-        new_shape: std::ptr::NonNull<super::shape::Shape>,
+        new_shape: Rc<Shape>,
     ) {
         for (&atom, &value) in atoms.iter().zip(values.iter()) {
             self.props.push(PropSlot::new(atom, value, ATTR_DEFAULT));
         }
+        self.shape_id_cache = Self::shape_id_of(&new_shape);
         self.shape = Some(new_shape);
-        self.shape_id_cache = Self::shape_id_of(new_shape);
         if !atoms.is_empty() {
             self.maybe_build_property_map();
             if let Some(ref mut extra) = self.extra {
@@ -2010,7 +2020,7 @@ impl JSObject {
         value: JSValue,
         cache: &mut crate::object::shape::ShapeCache,
     ) {
-        if let Some(shape) = self.shape {
+        if let Some(shape) = self.shape.as_ref() {
             if let Some(offset) = Self::shape_offset_of(shape, prop) {
                 let off = offset as usize;
                 if off < self.props.len() {
@@ -2020,8 +2030,8 @@ impl JSObject {
             }
 
             let new_shape = cache.transition(shape, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
             self.props.push(PropSlot::new(prop, value, ATTR_WRITABLE));
             self.update_property_map(prop);
         } else {
@@ -2074,16 +2084,15 @@ impl JSObject {
             return;
         }
 
-        if self.shape.is_some() {
-            let current = self.shape.unwrap();
+        if let Some(current) = self.shape.as_ref() {
             let new_shape = cache.transition(current, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         } else if self.props.is_empty() {
             let current = self.ensure_shape(cache);
-            let new_shape = cache.transition(current, prop);
+            let new_shape = cache.transition(&current, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         }
         self.props.push(PropSlot::new(prop, value, ATTR_DEFAULT));
         self.update_property_map(prop);
@@ -2174,19 +2183,18 @@ impl JSObject {
         }
 
         if self.shape.is_none() && !self.props.is_empty() {
-        } else if self.shape.is_some() {
-            let current = self.shape.unwrap();
+        } else if let Some(current) = self.shape.as_ref() {
             let shape_count = Self::shape_property_count_of(current) as usize;
             if shape_count == self.props.len() {
                 let new_shape = cache.transition(current, prop);
+                self.shape_id_cache = Self::shape_id_of(&new_shape);
                 self.shape = Some(new_shape);
-                self.shape_id_cache = Self::shape_id_of(new_shape);
             }
         } else {
             let current = self.ensure_shape(cache);
-            let new_shape = cache.transition(current, prop);
+            let new_shape = cache.transition(&current, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         }
         self.props.push(PropSlot::new(prop, value, ATTR_DEFAULT));
         self.track_property_order(prop);
@@ -2231,16 +2239,15 @@ impl JSObject {
         }
 
         if self.shape.is_none() && !self.props.is_empty() {
-        } else if self.shape.is_some() {
-            let current = self.shape.unwrap();
+        } else if let Some(current) = self.shape.as_ref() {
             let new_shape = cache.transition(current, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         } else {
             let current = self.ensure_shape(cache);
-            let new_shape = cache.transition(current, prop);
+            let new_shape = cache.transition(&current, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         }
         self.props.push(PropSlot::new(
             prop,
@@ -2290,16 +2297,15 @@ impl JSObject {
         }
 
         if self.shape.is_none() && !self.props.is_empty() {
-        } else if self.shape.is_some() {
-            let current = self.shape.unwrap();
+        } else if let Some(current) = self.shape.as_ref() {
             let new_shape = cache.transition(current, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         } else {
             let current = self.ensure_shape(cache);
-            let new_shape = cache.transition(current, prop);
+            let new_shape = cache.transition(&current, prop);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         }
         self.props.push(PropSlot::new(prop, value, ATTR_DEFAULT));
         self.update_property_map(prop);
@@ -2872,12 +2878,12 @@ impl JSObject {
         atom: Atom,
         value: JSValue,
         offset: usize,
-        new_shape: NonNull<crate::object::shape::Shape>,
+        new_shape: Rc<crate::object::shape::Shape>,
     ) {
         debug_assert!(offset == self.props.len());
         self.props.push(PropSlot::new(atom, value, ATTR_DEFAULT));
+        self.shape_id_cache = Self::shape_id_of(&new_shape);
         self.shape = Some(new_shape);
-        self.shape_id_cache = Self::shape_id_of(new_shape);
 
         self.update_property_map(atom);
     }
@@ -2908,8 +2914,8 @@ impl JSObject {
 
         if !property_atoms.is_empty() {
             let new_shape = cache.create_shape_for_properties(&property_atoms);
+            self.shape_id_cache = Self::shape_id_of(&new_shape);
             self.shape = Some(new_shape);
-            self.shape_id_cache = Self::shape_id_of(new_shape);
         } else {
             self.shape = None;
             self.shape_id_cache = usize::MAX;
@@ -3187,15 +3193,15 @@ impl JSObject {
         atom: Atom,
         value: JSValue,
         attrs: u8,
-        shape: std::ptr::NonNull<crate::object::shape::Shape>,
+        shape: Rc<crate::object::shape::Shape>,
     ) {
         debug_assert!(
             self.props.is_empty(),
             "set_first_prop_with_shape: object must be empty"
         );
         self.props.push(PropSlot::new(atom, value, attrs));
+        self.shape_id_cache = Self::shape_id_of(&shape);
         self.shape = Some(shape);
-        self.shape_id_cache = Self::shape_id_of(shape);
     }
 
     #[inline]
@@ -3263,11 +3269,6 @@ impl JSObject {
     }
 
     #[inline(always)]
-    pub fn get_shape_ptr(&self) -> Option<std::ptr::NonNull<super::shape::Shape>> {
-        self.shape
-    }
-
-    #[inline(always)]
     pub fn props_len(&self) -> usize {
         self.props.len()
     }
@@ -3301,8 +3302,8 @@ impl JSObject {
     }
 
     #[inline(always)]
-    pub fn get_shape(&self) -> Option<NonNull<Shape>> {
-        self.shape
+    pub fn get_shape(&self) -> Option<Rc<Shape>> {
+        self.shape.as_ref().map(Rc::clone)
     }
 
     pub fn assign_shape_from_existing_props(&mut self, cache: &mut ShapeCache) {
@@ -3315,19 +3316,19 @@ impl JSObject {
         for i in 0..inline_len {
             let slot = self.props.inline_ref(i);
             if slot.attrs != ATTR_DELETED {
-                current = cache.transition(current, slot.atom);
+                current = cache.transition(&current, slot.atom);
             }
         }
 
         if let Some(ref heap) = self.props.heap {
             for slot in heap.iter() {
                 if slot.attrs != ATTR_DELETED {
-                    current = cache.transition(current, slot.atom);
+                    current = cache.transition(&current, slot.atom);
                 }
             }
         }
+        self.shape_id_cache = Self::shape_id_of(&current);
         self.shape = Some(current);
-        self.shape_id_cache = Self::shape_id_of(current);
     }
 
     #[inline(always)]
@@ -3800,11 +3801,9 @@ mod tests {
         assert_ne!(old_shape, new_shape);
 
         let shape = obj.get_shape().unwrap();
-        unsafe {
-            assert_eq!((*shape.as_ptr()).get_offset(Atom(1)), Some(0));
-            assert_eq!((*shape.as_ptr()).get_offset(Atom(3)), Some(1));
-            assert_eq!((*shape.as_ptr()).get_offset(Atom(2)), None);
-        }
+        assert_eq!(shape.get_offset(Atom(1)), Some(0));
+        assert_eq!(shape.get_offset(Atom(3)), Some(1));
+        assert_eq!(shape.get_offset(Atom(2)), None);
     }
 
     #[test]

@@ -1,5 +1,4 @@
-use crate::object::shape::{Shape, ShapeId};
-use std::ptr::NonNull;
+use crate::object::shape::ShapeId;
 
 #[derive(Clone, Copy)]
 struct InlineCacheRead {
@@ -23,7 +22,7 @@ impl InlineCacheRead {
 struct InlineCacheWrite {
     shape_id: u32,
     offset: u32,
-    new_shape: usize,
+    is_transition: bool,
     no_accessor: u8,
 }
 
@@ -33,7 +32,7 @@ impl InlineCacheWrite {
         Self {
             shape_id: u32::MAX,
             offset: 0,
-            new_shape: 0,
+            is_transition: false,
             no_accessor: 0,
         }
     }
@@ -62,8 +61,8 @@ impl std::fmt::Debug for InlineCacheWrite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ICWrite(shape={}, off={}, new_shape={})",
-            self.shape_id as usize, self.offset, self.new_shape
+            "ICWrite(shape={}, off={}, transition={})",
+            self.shape_id as usize, self.offset, self.is_transition
         )
     }
 }
@@ -105,10 +104,10 @@ impl InlineCache {
     }
 
     #[inline(always)]
-    pub fn get_transition(&self, shape_id: ShapeId) -> Option<(u32, *const Shape)> {
+    pub fn get_transition(&self, shape_id: ShapeId) -> Option<(u32, bool)> {
         let w = &self.write;
         if w.shape_id == shape_id.0 as u32 {
-            Some((w.offset, w.new_shape as *const Shape))
+            Some((w.offset, w.is_transition))
         } else {
             None
         }
@@ -127,22 +126,17 @@ impl InlineCache {
         self.write = InlineCacheWrite {
             shape_id: shape_id.0 as u32,
             offset,
-            new_shape: 0,
-            no_accessor: 0,
+            is_transition: false,
+            no_accessor: self.write.no_accessor,
         };
     }
 
-    pub fn insert_transition(
-        &mut self,
-        pre_shape_id: ShapeId,
-        offset: u32,
-        new_shape: NonNull<Shape>,
-    ) {
+    pub fn insert_transition(&mut self, pre_shape_id: ShapeId, offset: u32) {
         self.write = InlineCacheWrite {
             shape_id: pre_shape_id.0 as u32,
             offset,
-            new_shape: new_shape.as_ptr() as usize,
-            no_accessor: 0,
+            is_transition: true,
+            no_accessor: self.write.no_accessor,
         };
     }
 }
@@ -236,7 +230,7 @@ impl InlineCacheTable {
     pub fn set_own_fast(&self, pc: usize, shape_id: usize) -> Option<u32> {
         if let Some(ic) = self.caches.get(pc) {
             let w = &ic.write;
-            if w.shape_id == shape_id as u32 && w.new_shape == 0 {
+            if w.shape_id == shape_id as u32 && !w.is_transition {
                 return Some(w.offset);
             }
         }

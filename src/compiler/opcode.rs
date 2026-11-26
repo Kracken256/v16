@@ -637,7 +637,7 @@ pub struct Bytecode {
     pub is_simple_constructor: bool,
     pub simple_constructor_props: Vec<(crate::runtime::atom::Atom, u16, u16)>,
     pub cached_constructor_atoms: Vec<crate::runtime::atom::Atom>,
-    pub cached_constructor_final_shape: Option<std::ptr::NonNull<crate::object::shape::Shape>>,
+    pub cached_constructor_final_shape: Option<std::rc::Rc<crate::object::shape::Shape>>,
 }
 
 pub struct NestedBytecode {

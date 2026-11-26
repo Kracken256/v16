@@ -2081,7 +2081,7 @@ impl VM {
                 }
 
                 if is_call_new && rb.is_simple_constructor {
-                    if let Some(cached_shape) = rb.cached_constructor_final_shape {
+                    if let Some(ref cached_shape) = rb.cached_constructor_final_shape {
                         if this_val.is_object() {
                             let obj = this_val.as_object_mut();
                             obj.fast_init_from_simple_constructor(
@@ -2095,7 +2095,7 @@ impl VM {
                                         };
                                         (atom, value)
                                     }),
-                                cached_shape,
+                                std::rc::Rc::clone(cached_shape),
                             );
                         }
                         self.set_reg(dst, this_val);
@@ -6261,9 +6261,8 @@ impl VM {
                                     && bc.cached_constructor_final_shape.is_none()
                                 {
                                     if ret.is_object() {
-                                        let obj =
-                                            ret.as_object();
-                                        if let Some(shape) = obj.shape_ptr() {
+                                        let obj = ret.as_object();
+                                        if let Some(shape) = obj.get_shape() {
                                             let func_mut_val = JSValue::new_function(fptr);
                                             let func_mut = func_mut_val.as_function_mut();
                                             if let Some(ref mut bc_mut) = func_mut.bytecode {
@@ -16889,8 +16888,15 @@ impl VM {
             if let Some(shape_id) = effective_shape_id {
                 if let Some(ic_table) = self.ic_table() {
                     if let Some(ic) = ic_table.get(ic_pc) {
-                        if let Some((offset, new_shape_ptr)) = ic.get_transition(shape_id) {
-                            if new_shape_ptr.is_null() {
+                        if let Some((offset, is_transition)) = ic.get_transition(shape_id) {
+                            if is_transition {
+                                js_obj.push_prop_transition(
+                                    offset as usize,
+                                    atom,
+                                    value,
+                                    ctx.shape_cache_mut(),
+                                );
+                            } else {
                                 let off = offset as usize;
                                 if off < crate::object::object::INLINE_PROPS
                                     && js_obj.has_no_deleted_props()
@@ -16899,15 +16905,6 @@ impl VM {
                                 } else {
                                     js_obj.set_by_offset(off, value);
                                 }
-                            } else if let Some(new_shape) = std::ptr::NonNull::new(
-                                new_shape_ptr as *mut crate::object::shape::Shape,
-                            ) {
-                                js_obj.push_prop_with_shape(
-                                    offset as usize,
-                                    atom,
-                                    value,
-                                    new_shape,
-                                );
                             }
                             return true;
                         }
@@ -17050,19 +17047,12 @@ impl VM {
                             let was_transition = offset == pre_props_len;
                             if was_transition {
                                 if let Some(pre_id) = pre_shape_id {
-                                    if let Some(new_shape_ptr) = js_obj.get_shape_ptr() {
-                                        ic.insert_transition(pre_id, offset as u32, new_shape_ptr);
-                                    } else {
-                                        ic.insert(shape_id, offset as u32, None);
-                                    }
+                                    ic.insert_transition(pre_id, offset as u32);
                                 } else if pre_props_len == 0 {
-                                    if let Some(new_shape_ptr) = js_obj.get_shape_ptr() {
-                                        ic.insert_transition(
-                                            crate::object::shape::ShapeId::root(),
-                                            offset as u32,
-                                            new_shape_ptr,
-                                        );
-                                    }
+                                    ic.insert_transition(
+                                        crate::object::shape::ShapeId::root(),
+                                        offset as u32,
+                                    );
                                 } else {
                                     ic.insert(shape_id, offset as u32, None);
                                 }
