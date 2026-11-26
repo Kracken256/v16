@@ -2356,7 +2356,7 @@ impl Parser {
         if self.cur_type() == Some(TokenType::PrivateIdentifier) {
             let name = self.cur_value().to_string();
             self.advance();
-            if self.at_keyword("in") {
+            if self.allow_in && self.at_keyword("in") {
                 self.advance();
                 let right = self.parse_shift()?;
                 return Ok(Expression::BinaryExpression(BinaryExpression {
