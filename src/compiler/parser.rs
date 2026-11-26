@@ -2038,7 +2038,13 @@ impl Parser {
 
     fn parse_assignment_expression(&mut self) -> Result<Expression, String> {
         if self.at_keyword("async") {
-            if self.peek_at("(") || (self.peek_value().map_or(false, |v| v != "function")) {
+            let line_terminator_after_async = self
+                .peek_token
+                .as_ref()
+                .map_or(false, |t| t.line_terminator_before);
+            if !line_terminator_after_async
+                && (self.peek_at("(") || (self.peek_value().map_or(false, |v| v != "function")))
+            {
                 let saved_pos = self.lexer.pos();
                 let saved_kind = self.lexer.last_token_kind();
                 let saved_cur = self.current.clone();
