@@ -16,6 +16,7 @@ use crate::util::iomux::Poller;
 
 use super::context::JSContext;
 use super::extension::MacroTaskExtension;
+use crate::value::JSValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PollEvent {
@@ -28,6 +29,12 @@ pub enum ReactorTask {
     Fetch(FetchTask),
     Ws(WsTask),
     Sse(SseTask),
+}
+
+fn push_gc_root(roots: &mut Vec<JSValue>, ptr: *mut crate::object::object::JSObject) {
+    if !ptr.is_null() {
+        roots.push(JSValue::new_object(ptr));
+    }
 }
 
 pub struct FetchTask {
@@ -1062,6 +1069,22 @@ impl MacroTaskExtension for IoReactor {
         !self.is_empty()
     }
 
+    fn collect_gc_roots(&self, roots: &mut Vec<JSValue>) {
+        for task in self.tasks.values() {
+            match task {
+                ReactorTask::Fetch(task) => push_gc_root(roots, task.promise_ptr),
+                ReactorTask::Ws(task) => {
+                    push_gc_root(roots, task.ws_obj_ptr);
+                    push_gc_root(roots, task.promise_ptr);
+                }
+                ReactorTask::Sse(task) => {
+                    push_gc_root(roots, task.es_obj_ptr);
+                    push_gc_root(roots, task.promise_ptr);
+                }
+            }
+        }
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
@@ -1235,4 +1258,35 @@ fn calculate_consumed(frames: &[WsFrame]) -> usize {
         total += frame_size;
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reactor_collects_task_gc_roots() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        let promise = crate::builtins::promise::create_pending_promise(&mut ctx);
+        let promise_ptr = promise.get_ptr();
+        let ws_obj = JSValue::new_object(Box::into_raw(Box::new(
+            crate::object::object::JSObject::new(),
+        )));
+        let url = Url::parse("ws://127.0.0.1:1/").unwrap();
+        let task = WsTask::new(url, ws_obj.get_ptr(), promise_ptr).unwrap();
+        IoReactor::get_from_ctx(&mut ctx)
+            .unwrap()
+            .register(ReactorTask::Ws(task))
+            .unwrap();
+
+        let mut roots = Vec::new();
+        ctx.collect_queued_gc_roots(&mut roots);
+        assert!(roots
+            .iter()
+            .any(|root| root.raw_bits() == promise.raw_bits()));
+        assert!(roots
+            .iter()
+            .any(|root| root.raw_bits() == ws_obj.raw_bits()));
+    }
 }

@@ -116,6 +116,7 @@ fn process_exec(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     promise_obj.set(ctx.intern("__promise_result__"), JSValue::undefined());
     promise_obj.set(ctx.intern("__promise_reactions__"), JSValue::null());
     let promise_ptr = Box::into_raw(Box::new(promise_obj));
+    ctx.runtime_mut().gc_heap_mut().track(promise_ptr);
     let promise_val = JSValue::new_object(promise_ptr);
 
     if let Some(e) = result.error {
@@ -141,6 +142,7 @@ fn process_exec(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             },
         );
         let result_ptr = Box::into_raw(Box::new(result_obj));
+        ctx.runtime_mut().gc_heap_mut().track(result_ptr);
         super::promise::fulfill_promise_with_value(
             ctx,
             promise_ptr,

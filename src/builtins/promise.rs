@@ -355,6 +355,7 @@ fn promise_reject(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let mut promise = create_promise(ctx);
     reject_promise(ctx, &mut promise, reason);
     let ptr = Box::into_raw(Box::new(promise));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -380,6 +381,7 @@ fn promise_then(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let on_rejected = args.get(2).copied().unwrap_or(JSValue::undefined());
     let new_promise = create_promise(ctx);
     let ptr_new = Box::into_raw(Box::new(new_promise));
+    ctx.runtime_mut().gc_heap_mut().track(ptr_new);
     let target = JSValue::new_object(ptr_new);
     let state = get_promise_state(ctx, promise);
     let reactions_atom = intern_str(ctx, PROMISE_REACTIONS_SLOT);
@@ -700,6 +702,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let result_promise = create_promise(ctx);
     let result_promise_ptr = Box::into_raw(Box::new(result_promise));
     let result_promise_val = JSValue::new_object(result_promise_ptr);
+    ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
     if !iterable.is_object() {
         let rp = result_promise_val.as_object_mut();
@@ -794,6 +797,7 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let result_promise = create_promise(ctx);
     let result_promise_ptr = Box::into_raw(Box::new(result_promise));
     let result_promise_val = JSValue::new_object(result_promise_ptr);
+    ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
     if !iterable.is_object() {
         let msg = JSValue::new_string(ctx.intern("TypeError: object is not iterable (cannot read property Symbol.iterator)"));
@@ -1176,6 +1180,7 @@ pub fn create_resolved_promise(ctx: &mut JSContext, value: JSValue) -> JSValue {
     let mut promise = create_promise(ctx);
     fulfill_promise(ctx, &mut promise, value);
     let ptr = Box::into_raw(Box::new(promise));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     let result = JSValue::new_object(ptr);
     result
 }
@@ -1184,6 +1189,7 @@ pub fn create_rejected_promise(ctx: &mut JSContext, reason: JSValue) -> JSValue 
     let mut promise = create_promise(ctx);
     reject_promise(ctx, &mut promise, reason);
     let ptr = Box::into_raw(Box::new(promise));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -1213,6 +1219,7 @@ pub(crate) fn reject_promise_with_value(
 pub fn create_pending_promise(ctx: &mut JSContext) -> JSValue {
     let promise = create_promise(ctx);
     let ptr = Box::into_raw(Box::new(promise));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -1605,4 +1612,50 @@ pub fn register_builtins(ctx: &mut JSContext) {
         "promise_with_resolvers",
         HostFunction::new("withResolvers", 0, promise_with_resolvers),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_tracked_after_gc(ctx: &mut JSContext, value: JSValue) {
+        assert!(value.is_object());
+        let ptr = value.get_ptr();
+        let slot = value.as_object().gc_slot as usize;
+        ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
+        let mut vm = crate::runtime::vm::VM::new();
+        vm.run_gc(ctx);
+        assert_eq!(ctx.runtime().gc_heap().tracked_ptr_at(slot), Some(ptr));
+    }
+
+    #[test]
+    fn test_promise_builtin_allocations_are_tracked() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        for source in [
+            "Promise.reject(1)",
+            "Promise.resolve(1).then(function () {})",
+            "Promise.allSettled([1])",
+            "Promise.any([1])",
+            "Array.fromAsync([1])",
+        ] {
+            let value = crate::eval(&mut ctx, source).unwrap();
+            assert_tracked_after_gc(&mut ctx, value);
+        }
+    }
+
+    #[test]
+    fn test_promise_helpers_are_tracked() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        let resolved = create_resolved_promise(&mut ctx, JSValue::new_int(1));
+        assert_tracked_after_gc(&mut ctx, resolved);
+        let rejected = create_rejected_promise(&mut ctx, JSValue::new_int(1));
+        assert_tracked_after_gc(&mut ctx, rejected);
+        #[cfg(feature = "fetch")]
+        {
+            let pending = create_pending_promise(&mut ctx);
+            assert_tracked_after_gc(&mut ctx, pending);
+        }
+    }
 }

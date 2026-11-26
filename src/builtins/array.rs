@@ -2895,5 +2895,6 @@ fn create_thenable_result(ctx: &mut JSContext, elements: Vec<JSValue>) -> JSValu
     promise.set(reactions_atom, JSValue::null());
 
     let promise_ptr = Box::into_raw(Box::new(promise));
+    ctx.runtime_mut().gc_heap_mut().track(promise_ptr);
     JSValue::new_object(promise_ptr)
 }

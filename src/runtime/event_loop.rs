@@ -237,6 +237,9 @@ impl EventLoop {
         for callback in &self.animation_queue {
             push_gc_root(roots, callback.callback);
         }
+        for extension in &self.extensions {
+            extension.collect_gc_roots(roots);
+        }
     }
 
     pub fn animation_callback_count(&self) -> usize {
