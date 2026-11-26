@@ -525,6 +525,20 @@ fn typed_array_get_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         .unwrap_or(JSValue::undefined())
 }
 
+fn typed_array_to_string_tag(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if args.is_empty() || !args[0].is_object() {
+        return JSValue::undefined();
+    }
+    let obj = args[0].as_object();
+    if obj.obj_type() != ObjectType::TypedArray {
+        return JSValue::undefined();
+    }
+    match obj.get_typed_array_kind() {
+        Some(kind) => JSValue::new_string(ctx.intern(kind.name())),
+        None => JSValue::undefined(),
+    }
+}
+
 fn array_buffer_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !args[0].is_object() {
         return JSValue::undefined();
@@ -1156,11 +1170,41 @@ pub fn ta_set_element(ctx: &mut JSContext, obj: &mut JSObject, index: usize, val
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
         TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => {
-            let v = num as i64;
+            let v = to_int_modulo(num, 64);
             data.data[byte_index..byte_index + bpe].copy_from_slice(&v.to_le_bytes());
         }
     }
     true
+}
+
+fn to_int_modulo(num: f64, bits: u32) -> u64 {
+    if !num.is_finite() {
+        return 0;
+    }
+    let n = num.trunc();
+    let modulo = 2f64.powi(bits as i32);
+    let r = n % modulo;
+    (if r < 0.0 { r + modulo } else { r }) as u64
+}
+
+fn to_uint8_clamp(num: f64) -> u8 {
+    if num.is_nan() || num <= 0.0 {
+        return 0;
+    }
+    if num >= 255.0 {
+        return 255;
+    }
+    let floor = num.floor();
+    let fraction = num - floor;
+    if fraction < 0.5 {
+        floor as u8
+    } else if fraction > 0.5 {
+        (floor + 1.0) as u8
+    } else if (floor as u64) % 2 == 0 {
+        floor as u8
+    } else {
+        (floor + 1.0) as u8
+    }
 }
 
 fn ta_call_callback(
