@@ -16881,12 +16881,9 @@ impl VM {
                                 } else {
                                     js_obj.set_by_offset(off, value);
                                 }
-                            } else {
-                                let new_shape = unsafe {
-                                    std::ptr::NonNull::new_unchecked(
-                                        new_shape_ptr as *mut crate::object::shape::Shape,
-                                    )
-                                };
+                            } else if let Some(new_shape) = std::ptr::NonNull::new(
+                                new_shape_ptr as *mut crate::object::shape::Shape,
+                            ) {
                                 js_obj.push_prop_with_shape(
                                     offset as usize,
                                     atom,
