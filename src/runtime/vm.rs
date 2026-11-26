@@ -6307,7 +6307,7 @@ impl VM {
                                 {
                                     if ret.is_object() {
                                         let obj =
-                                            unsafe { JSValue::object_from_ptr(ret.get_ptr()) };
+                                            ret.as_object();
                                         if let Some(shape) = obj.shape_ptr() {
                                             let func_mut = unsafe {
                                                 &mut *(fptr
@@ -9126,7 +9126,7 @@ impl VM {
                             JSValue::undefined()
                         }
                     } else if obj_val.is_object_like() && key_val.is_string() {
-                        let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
+                        let js_obj = obj_val.as_object();
                         let atom = key_val.get_atom();
 
                         if let Some(getter) = js_obj.get_own_accessor_value(atom) {
@@ -9505,7 +9505,7 @@ impl VM {
                             || key_val.is_float()
                             || key_val.is_symbol())
                     {
-                        let js_obj = unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
+                        let js_obj = obj_val.as_object_mut();
                         let atom = if key_val.is_string() {
                             key_val.get_atom()
                         } else if key_val.is_symbol() {
@@ -9635,7 +9635,7 @@ impl VM {
                         }
                     } else if key_val.is_symbol() {
                         if obj_val.is_object_like() {
-                            let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
+                            let js_obj = obj_val.as_object();
                             let sym_key =
                                 crate::runtime::atom::Atom(0x40000000 | key_val.get_symbol_id());
                             js_obj.get(sym_key).unwrap_or(JSValue::undefined())
@@ -9646,7 +9646,7 @@ impl VM {
                         if obj_val.is_object() {
                             let idx = key_val.get_int();
                             let js_obj_check =
-                                unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
+                                obj_val.as_object();
 
                             if idx >= 0 {
                                 if let Some(val) = js_obj_check.get_indexed(idx as usize) {
@@ -10767,7 +10767,7 @@ impl VM {
                                 failed = true;
                             } else {
                                 let js_obj =
-                                    unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
+                                    obj_val.as_object_mut();
                                 let desc = crate::object::object::PropertyDescriptor {
                                     value: Some(value),
                                     writable: true,
@@ -11563,9 +11563,9 @@ impl VM {
                             ctor_val.as_function_mut().home_object = proto_val;
                         }
                         let ctor_obj =
-                            unsafe { JSValue::object_from_ptr_mut(ctor_val.get_ptr()) };
+                            ctor_val.as_object_mut();
                         let proto_obj =
-                            unsafe { JSValue::object_from_ptr_mut(proto_val.get_ptr()) };
+                            proto_val.as_object_mut();
                         let proto_desc = crate::object::object::PropertyDescriptor {
                             value: Some(proto_val),
                             writable: false,
@@ -11608,7 +11608,7 @@ impl VM {
                         {
                             key_val = self.to_property_key_value(ctx, key_val);
                         }
-                        let js_obj = unsafe { JSValue::object_from_ptr_mut(obj_val.get_ptr()) };
+                        let js_obj = obj_val.as_object_mut();
                         let atom = if key_val.is_string() {
                             key_val.get_atom()
                         } else if key_val.is_symbol() {
@@ -11706,7 +11706,7 @@ impl VM {
                     if let Some(env_val) = current {
                         let parent_atom = ctx.intern("\u{1}with_parent");
                         let env_obj =
-                            unsafe { JSValue::object_from_ptr(env_val.get_ptr()) };
+                            env_val.as_object();
                         let parent = env_obj.get_own(parent_atom);
                         self.frames[self.frame_index].with_env =
                             parent.filter(|p| p.is_object_like());
@@ -11812,7 +11812,7 @@ impl VM {
                     let mut result = true;
                     if let Some(object) = self.with_find_object(ctx, atom, instr_pc, u16::MAX) {
                         if self.pending_throw.is_none() {
-                            result = unsafe { JSValue::object_from_ptr_mut(object.get_ptr()) }
+                            result = object.as_object_mut()
                                 .delete(atom);
                         }
                     }
@@ -11903,7 +11903,7 @@ impl VM {
                                         );
                                     }
                                 } else {
-                                    unsafe { JSValue::object_from_ptr_mut(object.get_ptr()) }
+                                    object.as_object_mut()
                                         .set(atom, value);
                                 }
                             }
@@ -13897,7 +13897,7 @@ impl VM {
         this_val: JSValue,
         args: &[JSValue],
     ) -> Result<Option<JSValue>, String> {
-        let js_func = unsafe { JSValue::function_from_ptr(func_val.get_ptr()) };
+        let js_func = func_val.as_function();
 
         let snapshot_this = if !js_func.is_strict() {
             boxed_sloppy_this(ctx, this_val)
@@ -14209,7 +14209,7 @@ impl VM {
             return Vec::new();
         }
 
-        let js_obj = unsafe { JSValue::object_from_ptr(src_val.get_ptr()) };
+        let js_obj = src_val.as_object();
         if let Some(array) = js_obj.as_dense_array() {
             for index in 0..array.elements.len() {
                 integer_keys.push((index as u64, ctx.int_atom_mut(index)));
@@ -15611,7 +15611,7 @@ impl VM {
             return None;
         }
         let atom = ctx.intern("\u{1}with_object");
-        unsafe { JSValue::object_from_ptr(env.get_ptr()) }.get_own(atom)
+        env.as_object().get_own(atom)
     }
 
     fn with_env_parent(
@@ -15623,7 +15623,7 @@ impl VM {
             return None;
         }
         let atom = ctx.intern("\u{1}with_parent");
-        unsafe { JSValue::object_from_ptr(env.get_ptr()) }.get_own(atom)
+        env.as_object().get_own(atom)
     }
 
     fn object_has_property_checked(
@@ -15642,7 +15642,7 @@ impl VM {
                 }
             }
         } else if object_val.is_object_like() {
-            Some(unsafe { JSValue::object_from_ptr(object_val.get_ptr()) }.has_property(atom))
+            Some(object_val.as_object().has_property(atom))
         } else {
             Some(false)
         }
@@ -15695,7 +15695,7 @@ impl VM {
             if !env_val.is_object_like() {
                 break;
             }
-            let env_obj = unsafe { JSValue::object_from_ptr(env_val.get_ptr()) };
+            let env_obj = env_val.as_object();
             let object = env_obj.get_own(object_atom);
             let parent = env_obj.get_own(parent_atom);
             if let Some(object_val) = object {
@@ -15789,7 +15789,7 @@ impl VM {
             let global = ctx.global();
             let mut found = false;
             if global.is_object_like() {
-                let global_obj = unsafe { JSValue::object_from_ptr(global.get_ptr()) };
+                let global_obj = global.as_object();
                 if global_obj.has_property(atom) {
                     self.get_named_prop_result(ctx, dst, global, atom, instr_pc);
                     found = true;
@@ -15854,7 +15854,7 @@ impl VM {
         if kind == 0 {
             let global = ctx.global();
             if global.is_object_like() {
-                let global_obj = unsafe { JSValue::object_from_ptr(global.get_ptr()) };
+                let global_obj = global.as_object();
                 if self.frames[self.frame_index].is_strict_frame && !global_obj.has_property(atom)
                 {
                     self.set_pending_reference_error(
@@ -16430,7 +16430,7 @@ impl VM {
         let obj_val = self.get_reg(obj_reg);
 
         if obj_val.is_object_like() {
-            let js_obj = unsafe { crate::value::JSValue::object_from_ptr(obj_val.get_ptr()) };
+            let js_obj = obj_val.as_object();
 
             if js_obj.is_dense_array() && atom == ctx.common_atoms.length {
                 if js_obj.props_len() > 0 {
@@ -16515,7 +16515,7 @@ impl VM {
             let (ic_hit, r_offset, r_proto) =
                 unsafe { (*ic_table_ptr).get_reads123_values(instr_pc, shape_id) };
             if ic_hit {
-                let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
+                let js_obj = obj_val.as_object();
                 if r_proto == 0 {
                     let val = if r_offset == u32::MAX {
                         JSValue::undefined()
@@ -16571,7 +16571,7 @@ impl VM {
         offset: u32,
         proto_ptr: usize,
     ) -> bool {
-        let js_obj = unsafe { crate::value::JSValue::object_from_ptr(obj_val.get_ptr()) };
+        let js_obj = obj_val.as_object();
         let mut cur = js_obj.prototype;
         let mut depth = 0u32;
         while let Some(p) = cur {
@@ -16708,7 +16708,7 @@ impl VM {
         atom: crate::runtime::atom::Atom,
     ) -> (bool, Option<JSValue>) {
         if obj_val.is_object_like() {
-            let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
+            let js_obj = obj_val.as_object();
             if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
                 return (true, entry.set);
             }
@@ -16762,7 +16762,7 @@ impl VM {
         obj_val: JSValue,
         atom: crate::runtime::atom::Atom,
     ) -> bool {
-        let js_obj = unsafe { JSValue::object_from_ptr(obj_val.get_ptr()) };
+        let js_obj = obj_val.as_object();
         let mut current = js_obj.prototype;
         while let Some(proto_ptr) = current {
             if proto_ptr.is_null() {
