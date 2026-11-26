@@ -83,7 +83,7 @@ fn patch_function_values_recursive(
 
     for value in values {
         if value.is_function() {
-            let func = unsafe { JSValue::function_from_ptr_mut(value.get_ptr()) };
+            let func = value.as_function_mut();
             if func.base.prototype.is_none() {
                 func.base.set_prototype_raw(fn_proto_ptr);
             }
@@ -182,7 +182,8 @@ pub fn init_function(ctx: &mut JSContext) {
 
     ctx.set_function_prototype(proto_ptr);
 
-    let proto_obj_mut = unsafe { &mut *(proto_ptr as *mut JSObject) };
+    let proto_binding = JSValue::new_object(proto_ptr);
+    let proto_obj_mut = proto_binding.as_object_mut();
     for atom in [
         ctx.common_atoms.bind,
         ctx.common_atoms.call,
@@ -191,7 +192,7 @@ pub fn init_function(ctx: &mut JSContext) {
     ] {
         if let Some(v) = proto_obj_mut.get(atom) {
             if v.is_function() {
-                let f = unsafe { JSValue::function_from_ptr_mut(v.get_ptr()) };
+                let f = v.as_function_mut();
                 f.base.set_prototype_raw(proto_ptr as *mut JSObject);
             }
         }
@@ -214,14 +215,11 @@ pub fn init_function(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(function_ptr);
     let function_value = JSValue::new_function(function_ptr);
 
-    unsafe {
-        let proto_obj_ptr = proto_ptr as *mut crate::object::object::JSObject;
-        crate::builtins::global::set_non_enumerable(
-            &mut *proto_obj_ptr,
-            ctx.common_atoms.constructor,
-            function_value,
-        );
-    }
+    crate::builtins::global::set_non_enumerable(
+        proto_value.as_object_mut(),
+        ctx.common_atoms.constructor,
+        function_value,
+    );
 
     let global = ctx.global();
     if global.is_object() {
