@@ -285,8 +285,17 @@ impl JSFunction {
         if let Some(display_name) = ctx.get_builtin_name(builtin_name) {
             self.name = ctx.intern(display_name);
         }
-        self.base
-            .set(ctx.intern(BUILTIN_MARKER), JSValue::new_string(atom));
+        self.base.define_property(
+            ctx.intern(BUILTIN_MARKER),
+            PropertyDescriptor {
+                value: Some(JSValue::new_string(atom)),
+                writable: true,
+                enumerable: false,
+                configurable: true,
+                get: None,
+                set: None,
+            },
+        );
 
         let length_desc = PropertyDescriptor {
             value: Some(JSValue::new_int(self.arity as i64)),

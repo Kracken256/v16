@@ -100,19 +100,23 @@ pub fn init_function(ctx: &mut JSContext) {
     if let Some(object_proto_ptr) = ctx.get_object_prototype() {
         proto_obj.prototype = Some(object_proto_ptr);
     }
-    proto_obj.set(
+    crate::builtins::global::set_non_enumerable(
+        &mut proto_obj,
         ctx.common_atoms.bind,
         create_builtin_method(ctx, "function_bind", 1, "bind"),
     );
-    proto_obj.set(
+    crate::builtins::global::set_non_enumerable(
+        &mut proto_obj,
         ctx.common_atoms.call,
         create_builtin_method(ctx, "function_call", 1, "call"),
     );
-    proto_obj.set(
+    crate::builtins::global::set_non_enumerable(
+        &mut proto_obj,
         ctx.common_atoms.apply,
         create_builtin_method(ctx, "function_apply", 2, "apply"),
     );
-    proto_obj.set(
+    crate::builtins::global::set_non_enumerable(
+        &mut proto_obj,
         ctx.common_atoms.to_string,
         create_builtin_method(ctx, "function_toString", 0, "toString"),
     );
@@ -212,7 +216,11 @@ pub fn init_function(ctx: &mut JSContext) {
 
     unsafe {
         let proto_obj_ptr = proto_ptr as *mut crate::object::object::JSObject;
-        (*proto_obj_ptr).set(ctx.common_atoms.constructor, function_value);
+        crate::builtins::global::set_non_enumerable(
+            &mut *proto_obj_ptr,
+            ctx.common_atoms.constructor,
+            function_value,
+        );
     }
 
     let global = ctx.global();
