@@ -46,7 +46,8 @@ fn ws_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         create_builtin_function(ctx, "ws_close"),
     );
 
-    let ws_obj_ptr = Box::into_raw(Box::new(ws_obj)) as usize;
+    let ws_obj = Box::new(ws_obj);
+    let ws_obj_ptr = &*ws_obj as *const crate::object::object::JSObject as usize;
 
     let promise_val = crate::builtins::promise::create_pending_promise(ctx);
     let promise_ptr = promise_val.get_ptr();
@@ -54,11 +55,6 @@ fn ws_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let task = match WsTask::new(url, ws_obj_ptr, promise_ptr) {
         Ok(t) => t,
         Err(_) => {
-            unsafe {
-                drop(Box::from_raw(
-                    ws_obj_ptr as *mut crate::object::object::JSObject,
-                ));
-            }
             return JSValue::undefined();
         }
     };
@@ -74,7 +70,7 @@ fn ws_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    JSValue::new_object(ws_obj_ptr)
+    JSValue::new_object(Box::into_raw(ws_obj) as usize)
 }
 
 fn get_ws_obj_ptr(args: &[JSValue]) -> usize {

@@ -43,7 +43,8 @@ fn es_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let close_fn = create_builtin_function(ctx, "es_close");
     es_obj.set(ctx.intern("close"), close_fn);
 
-    let es_obj_ptr = Box::into_raw(Box::new(es_obj)) as usize;
+    let es_obj = Box::new(es_obj);
+    let es_obj_ptr = &*es_obj as *const crate::object::object::JSObject as usize;
 
     let promise_val = crate::builtins::promise::create_pending_promise(ctx);
     let promise_ptr = promise_val.get_ptr();
@@ -51,11 +52,6 @@ fn es_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let task = match SseTask::new(url, es_obj_ptr, promise_ptr) {
         Ok(t) => t,
         Err(_) => {
-            unsafe {
-                drop(Box::from_raw(
-                    es_obj_ptr as *mut crate::object::object::JSObject,
-                ));
-            }
             return JSValue::undefined();
         }
     };
@@ -71,7 +67,7 @@ fn es_ctor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    JSValue::new_object(es_obj_ptr)
+    JSValue::new_object(Box::into_raw(es_obj) as usize)
 }
 
 fn es_close(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
