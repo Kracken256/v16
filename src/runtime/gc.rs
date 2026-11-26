@@ -282,7 +282,7 @@ impl GcHeap {
         };
         self.total_allocated += size;
         self.live_count += 1;
-        self.debug_alloc(idx, ptr as usize, tag, false);
+        unsafe { self.debug_alloc(idx, ptr as usize, tag, false) };
         idx
     }
 
@@ -304,7 +304,7 @@ impl GcHeap {
 
         JSValue::new_object(ptr).try_as_object_mut().expect("object value").gc_slot = idx as u32;
         self.nursery_indices.push(idx);
-        self.debug_alloc(idx, ptr as usize, tag, true);
+        unsafe { self.debug_alloc(idx, ptr as usize, tag, true) };
         idx
     }
 
@@ -741,7 +741,7 @@ impl GcHeap {
         }
     }
 
-    fn debug_alloc(&mut self, handle: usize, ptr: usize, tag: u8, in_nursery: bool) {
+    unsafe fn debug_alloc(&mut self, handle: usize, ptr: usize, tag: u8, in_nursery: bool) {
         self.debug_stats.alloc_events += 1;
         if self.debug.enabled && self.debug.dump_alloc {
             eprintln!(

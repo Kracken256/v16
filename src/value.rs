@@ -127,12 +127,20 @@ impl JSValue {
 
     #[inline(always)]
     pub fn new_object(ptr: *mut crate::object::object::JSObject) -> Self {
-        JSValue(Self::pack(TAG_OBJECT, Self::compress_ptr(ptr as usize)))
+        // SAFETY: the object constructor only compresses the caller-provided live object pointer.
+        JSValue(Self::pack(
+            TAG_OBJECT,
+            unsafe { Self::compress_ptr(ptr as usize) },
+        ))
     }
 
     #[inline(always)]
     pub fn new_function(ptr: *mut crate::object::function::JSFunction) -> Self {
-        JSValue(Self::pack(TAG_FUNC, Self::compress_ptr(ptr as usize)))
+        // SAFETY: the function constructor only compresses the caller-provided live function pointer.
+        JSValue(Self::pack(
+            TAG_FUNC,
+            unsafe { Self::compress_ptr(ptr as usize) },
+        ))
     }
 
     pub fn new_symbol(atom: Atom) -> Self {
@@ -149,11 +157,15 @@ impl JSValue {
     }
 
     pub fn new_bigint(ptr: *mut crate::object::object::JSObject) -> Self {
-        JSValue(Self::pack(TAG_BIGINT, Self::compress_ptr(ptr as usize)))
+        // SAFETY: the BigInt constructor only compresses the caller-provided live object pointer.
+        JSValue(Self::pack(
+            TAG_BIGINT,
+            unsafe { Self::compress_ptr(ptr as usize) },
+        ))
     }
 
     #[inline(always)]
-    fn compress_ptr(ptr: usize) -> u64 {
+    unsafe fn compress_ptr(ptr: usize) -> u64 {
         let compressed = (ptr >> 3) as u64;
         compressed & PAYLOAD_MASK
     }
