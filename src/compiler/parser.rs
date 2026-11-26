@@ -827,6 +827,10 @@ impl Parser {
 
             if self.cur_value() == "accessor"
                 && matches!(self.cur_type(), Some(TokenType::Identifier))
+                && !self
+                    .peek_token
+                    .as_ref()
+                    .map_or(false, |t| t.line_terminator_before)
                 && self.peek_starts_class_element_name()
             {
                 self.advance();
