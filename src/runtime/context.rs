@@ -560,8 +560,8 @@ impl JSContext {
             }
         });
         for ptr in function_ptrs {
-            let func_val = JSValue::new_function(ptr);
-            let func = func_val.as_function_mut();
+            let mut func_val = JSValue::new_function(ptr);
+            let func = func_val.try_as_function_mut().expect("function value");
             func.realm_context = context;
             func.realm_global = global;
         }
@@ -785,7 +785,7 @@ impl JSContext {
         let ptr = Box::into_raw(Box::new(f));
         self.runtime_mut().gc_heap_mut().track_function(ptr);
         self.global()
-            .as_object_mut()
+            .try_as_object_mut().expect("object value")
             .set(self.intern(name), crate::value::JSValue::new_function(ptr));
     }
 

@@ -187,9 +187,9 @@ pub fn init_bigint(ctx: &mut JSContext) {
     func.set_builtin_marker(ctx, "bigint_constructor");
     let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
-    let bigint_value = JSValue::new_function(ptr);
+    let mut bigint_value = JSValue::new_function(ptr);
 
-    let bigint_func_obj = bigint_value.as_object_mut();
+    let bigint_func_obj = bigint_value.try_as_object_mut().expect("object value");
     set_ne(bigint_func_obj, ctx.intern("asIntN"), create_builtin_function(ctx, "bigint_as_int_n"));
     set_ne(bigint_func_obj, ctx.intern("asUintN"), create_builtin_function(ctx, "bigint_as_uint_n"));
 
@@ -199,9 +199,9 @@ pub fn init_bigint(ctx: &mut JSContext) {
     let to_string_fn = create_builtin_function(ctx, "bigint_to_string");
     let to_locale_fn = create_builtin_function(ctx, "bigint_to_locale_string");
     let value_of_fn = create_builtin_function(ctx, "bigint_value_of");
-    for f in [&to_string_fn, &to_locale_fn, &value_of_fn] {
+    for mut f in [to_string_fn, to_locale_fn, value_of_fn] {
         if f.is_function() {
-            f.as_function_mut().base.define_property(
+            f.try_as_function_mut().expect("function value").base.define_property(
                 ctx.common_atoms.length,
                 PropertyDescriptor {
                     value: Some(JSValue::new_int(0)),
@@ -241,7 +241,7 @@ pub fn init_bigint(ctx: &mut JSContext) {
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_bigint_prototype(proto_ptr);
 
-    let bigint_func = bigint_value.as_object_mut();
+    let bigint_func = bigint_value.try_as_object_mut().expect("object value");
     bigint_func.define_property(
         ctx.intern("prototype"),
         PropertyDescriptor {
@@ -254,9 +254,9 @@ pub fn init_bigint(ctx: &mut JSContext) {
         },
     );
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, bigint_atom, bigint_value);
         crate::builtins::global::set_non_enumerable(global_obj, proto_atom, proto_value);
     }

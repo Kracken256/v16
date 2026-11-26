@@ -71,9 +71,9 @@ pub fn init_generator(ctx: &mut JSContext) {
         "async_generator_function_constructor",
         HostFunction::ctor("AsyncGeneratorFunction", 1, async_generator_function_constructor),
     );
-    let generator_function =
+    let mut generator_function =
         create_generator_constructor(ctx, "GeneratorFunction", "generator_function_constructor");
-    let async_generator_function = create_generator_constructor(
+    let mut async_generator_function = create_generator_constructor(
         ctx,
         "AsyncGeneratorFunction",
         "async_generator_function_constructor",
@@ -158,7 +158,7 @@ pub fn init_generator(ctx: &mut JSContext) {
         .gc_heap_mut()
         .track(generator_function_proto_ptr);
     {
-        let func = generator_function.as_function_mut();
+        let func = generator_function.try_as_function_mut().expect("function value");
         define_data_property(
             &mut func.base,
             ctx.common_atoms.prototype,
@@ -167,9 +167,9 @@ pub fn init_generator(ctx: &mut JSContext) {
             false,
         );
     }
-    let generator_proto_val = JSValue::new_object(proto_ptr);
+    let mut generator_proto_val = JSValue::new_object(proto_ptr);
     define_data_property(
-        generator_proto_val.as_object_mut(),
+        generator_proto_val.try_as_object_mut().expect("object value"),
         ctx.common_atoms.constructor,
         JSValue::new_object(generator_function_proto_ptr),
         false,
@@ -255,7 +255,7 @@ pub fn init_generator(ctx: &mut JSContext) {
         .gc_heap_mut()
         .track(async_generator_function_proto_ptr);
     {
-        let func = async_generator_function.as_function_mut();
+        let func = async_generator_function.try_as_function_mut().expect("function value");
         define_data_property(
             &mut func.base,
             ctx.common_atoms.prototype,
@@ -264,9 +264,9 @@ pub fn init_generator(ctx: &mut JSContext) {
             false,
         );
     }
-    let async_generator_proto_val = JSValue::new_object(async_proto_ptr);
+    let mut async_generator_proto_val = JSValue::new_object(async_proto_ptr);
     define_data_property(
-        async_generator_proto_val.as_object_mut(),
+        async_generator_proto_val.try_as_object_mut().expect("object value"),
         ctx.common_atoms.constructor,
         JSValue::new_object(async_generator_function_proto_ptr),
         false,
@@ -306,8 +306,8 @@ fn create_generator_constructor(
     }
     let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
-    let value = JSValue::new_function(ptr);
-    let func_ref = value.as_function_mut();
+    let mut value = JSValue::new_function(ptr);
+    let func_ref = value.try_as_function_mut().expect("function value");
     define_data_property(
         &mut func_ref.base,
         ctx.common_atoms.name,
@@ -363,11 +363,11 @@ fn dynamic_generator_function_constructor(
     let params_str = params.join(",");
     let source = format!("({} anonymous({}){{{}}})", prefix, params_str, body_str);
     match crate::eval(ctx, &source) {
-        Ok(val) => {
+        Ok(mut val) => {
             if val.is_function() {
-                val.as_function_mut().name = ctx.intern("anonymous");
+                val.try_as_function_mut().expect("function value").name = ctx.intern("anonymous");
                 let name_atom = ctx.intern("name");
-                let obj = val.as_object_mut();
+                let obj = val.try_as_object_mut().expect("object value");
                 let mut desc = crate::object::object::PropertyDescriptor::new_data(
                     JSValue::new_string(ctx.intern("anonymous")),
                 );
@@ -504,13 +504,13 @@ fn run_generator_step(
 }
 
 fn generator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let mut this = args.get(0).copied().unwrap_or(JSValue::undefined());
 
     if !this.is_object() {
         return create_iterator_result(ctx, JSValue::undefined(), true);
     }
 
-    let gen_obj = this.as_object_mut();
+    let gen_obj = this.try_as_object_mut().expect("object value");
 
     if !gen_obj.is_generator() {
         return create_iterator_result(ctx, JSValue::undefined(), true);
@@ -563,13 +563,13 @@ fn finish_generator_step(
 }
 
 fn generator_return(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let mut this = args.get(0).copied().unwrap_or(JSValue::undefined());
 
     if !this.is_object() {
         return create_iterator_result(ctx, JSValue::undefined(), true);
     }
 
-    let gen_obj = this.as_object_mut();
+    let gen_obj = this.try_as_object_mut().expect("object value");
 
     if !gen_obj.is_generator() {
         return create_iterator_result(ctx, JSValue::undefined(), true);
@@ -590,13 +590,13 @@ fn generator_return(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn generator_throw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let mut this = args.get(0).copied().unwrap_or(JSValue::undefined());
 
     if !this.is_object() {
         return create_iterator_result(ctx, JSValue::undefined(), true);
     }
 
-    let gen_obj = this.as_object_mut();
+    let gen_obj = this.try_as_object_mut().expect("object value");
 
     if !gen_obj.is_generator() {
         return create_iterator_result(ctx, JSValue::undefined(), true);
@@ -670,12 +670,12 @@ fn async_generator_is_started(this: JSValue) -> bool {
 
 fn async_generator_enqueue(
     ctx: &mut JSContext,
-    this: JSValue,
+    mut this: JSValue,
     kind: u8,
     value: JSValue,
 ) -> JSValue {
     let promise = crate::builtins::promise::new_pending_promise(ctx);
-    if let Some(state) = this.as_object_mut().get_async_generator_state_mut() {
+    if let Some(state) = this.try_as_object_mut().expect("object value").get_async_generator_state_mut() {
         state
             .queue
             .push(crate::object::object::AsyncGeneratorRequest {
@@ -718,13 +718,13 @@ fn async_generator_return(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn async_generator_throw(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.first().copied().unwrap_or_else(JSValue::undefined);
+    let mut this = args.first().copied().unwrap_or_else(JSValue::undefined);
     let value = args.get(1).copied().unwrap_or_else(JSValue::undefined);
     if let Some(err) = async_generator_validate(ctx, this) {
         return ctx.call_builtin("promise_reject", &[err]);
     }
     if !async_generator_is_started(this) {
-        if let Some(state) = this.as_object_mut().get_async_state_mut() {
+        if let Some(state) = this.try_as_object_mut().expect("object value").get_async_state_mut() {
             state.done = true;
         }
         return ctx.call_builtin("promise_reject", &[value]);

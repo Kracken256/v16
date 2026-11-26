@@ -431,11 +431,11 @@ pub fn create_iterator_from_iterable(ctx: &mut JSContext, iterable: JSValue) -> 
     call_callback_with_this(ctx, fn_val, iterable, &[]).ok()
 }
 
-pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue, bool)> {
+pub fn iterator_next(ctx: &mut JSContext, mut iterator: JSValue) -> Option<(JSValue, bool)> {
     if !iterator.is_object() {
         return None;
     }
-    let iter_obj = iterator.as_object_mut();
+    let iter_obj = iterator.try_as_object_mut().expect("object value");
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
 
@@ -555,7 +555,7 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let this_ptr = Box::into_raw(Box::new(obj));
     ctx.runtime_mut().gc_heap_mut().track(this_ptr);
-    let this_val = JSValue::new_object(this_ptr);
+    let mut this_val = JSValue::new_object(this_ptr);
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -655,16 +655,16 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                         }
                                     };
 
-                                    let cur_size = map_size(ctx, this_val.as_object_mut());
-                                    if let Some(idx) = map_find(ctx, this_val.as_object_mut(), &k) {
+                                    let cur_size = map_size(ctx, this_val.try_as_object_mut().expect("object value"));
+                                    if let Some(idx) = map_find(ctx, this_val.try_as_object_mut().expect("object value"), &k) {
                                         let mv_atom = map_val_atom(ctx, idx);
-                                        this_val.as_object_mut().set(mv_atom, v);
+                                        this_val.try_as_object_mut().expect("object value").set(mv_atom, v);
                                     } else {
                                         let mk_atom = map_key_atom(ctx, cur_size);
                                         let mv_atom = map_val_atom(ctx, cur_size);
-                                        this_val.as_object_mut().set(mk_atom, k);
-                                        this_val.as_object_mut().set(mv_atom, v);
-                                        this_val.as_object_mut().set(size_atom, JSValue::new_int((cur_size + 1) as i64));
+                                        this_val.try_as_object_mut().expect("object value").set(mk_atom, k);
+                                        this_val.try_as_object_mut().expect("object value").set(mv_atom, v);
+                                        this_val.try_as_object_mut().expect("object value").set(size_atom, JSValue::new_int((cur_size + 1) as i64));
                                     }
                                 }
                             }
@@ -676,9 +676,9 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let size_val = this_val.as_object_mut().get(size_atom).unwrap_or(JSValue::new_int(0));
+    let size_val = this_val.try_as_object_mut().expect("object value").get(size_atom).unwrap_or(JSValue::new_int(0));
     let size_prop_atom = ctx.intern("size");
-    this_val.as_object_mut().set(size_prop_atom, size_val);
+    this_val.try_as_object_mut().expect("object value").set(size_prop_atom, size_val);
 
     this_val
 }
@@ -698,7 +698,7 @@ fn map_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             args[0]
         };
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Map.prototype.set called on incompatible receiver");
         return JSValue::undefined();
@@ -711,7 +711,7 @@ fn map_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let key = args[1];
     let value = args[2];
 
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     let size_atom = ctx.intern("__map_size__");
 
@@ -789,7 +789,7 @@ fn map_get_or_insert(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 3 {
         return JSValue::undefined();
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Map.prototype.getOrInsert called on incompatible receiver");
         return JSValue::undefined();
@@ -806,7 +806,7 @@ fn map_get_or_insert(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let mv_atom = map_val_atom(ctx, idx);
         return obj.get(mv_atom).unwrap_or_else(JSValue::undefined);
     }
-    let obj_mut = this.as_object_mut();
+    let obj_mut = this.try_as_object_mut().expect("object value");
     let cur_size = map_size(ctx, obj_mut);
     let mk_atom = map_key_atom(ctx, cur_size);
     let mv_atom = map_val_atom(ctx, cur_size);
@@ -822,7 +822,7 @@ fn map_get_or_insert_computed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     if args.len() < 3 {
         return JSValue::undefined();
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Map.prototype.getOrInsertComputed called on incompatible receiver");
         return JSValue::undefined();
@@ -854,7 +854,7 @@ fn map_get_or_insert_computed(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
             return JSValue::undefined();
         }
     };
-    let obj_mut = this.as_object_mut();
+    let obj_mut = this.try_as_object_mut().expect("object value");
     if let Some(idx) = map_find(ctx, obj_mut, &key) {
         let mv_atom = map_val_atom(ctx, idx);
         obj_mut.set(mv_atom, value);
@@ -917,7 +917,7 @@ fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     result_map.set(size_atom, JSValue::new_int(0));
     let result_ptr = Box::into_raw(Box::new(result_map));
     ctx.runtime_mut().gc_heap_mut().track(result_ptr);
-    let result_val = JSValue::new_object(result_ptr);
+    let mut result_val = JSValue::new_object(result_ptr);
 
     let iter_values = iterate_values(ctx, items);
     for (i, item) in iter_values.into_iter().enumerate() {
@@ -927,17 +927,17 @@ fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         };
         let key = normalize_key(&key_val);
 
-        let result_obj = result_val.as_object_mut();
+        let result_obj = result_val.try_as_object_mut().expect("object value");
         if let Some(idx) = map_find(ctx, result_obj, &key) {
             let mv_atom = map_val_atom(ctx, idx);
-            let group_arr_val = result_obj.get(mv_atom).unwrap_or_else(JSValue::undefined);
+            let mut group_arr_val = result_obj.get(mv_atom).unwrap_or_else(JSValue::undefined);
             if group_arr_val.is_object() {
                 let len = group_arr_val
                     .try_as_object().expect("object value")
                     .get(ctx.common_atoms.length)
                     .map(|v| v.get_int() as usize)
                     .unwrap_or(0);
-                let group_obj_mut = group_arr_val.as_object_mut();
+                let group_obj_mut = group_arr_val.try_as_object_mut().expect("object value");
                 let key_atom = ctx.intern(&len.to_string());
                 group_obj_mut.set(key_atom, item);
                 group_obj_mut.set(ctx.common_atoms.length, JSValue::new_int((len + 1) as i64));
@@ -953,7 +953,7 @@ fn map_group_by(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let result_obj = result_val.as_object_mut();
+    let result_obj = result_val.try_as_object_mut().expect("object value");
     sync_map_size(ctx, result_obj);
     result_val
 }
@@ -980,7 +980,7 @@ fn map_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 2 {
         return JSValue::bool(false);
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Map.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
@@ -991,7 +991,7 @@ fn map_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let key = args[1];
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     let size = map_size(ctx, obj);
     let idx = match map_find(ctx, obj, &key) {
@@ -1025,7 +1025,7 @@ fn map_clear(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
         return JSValue::undefined();
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Map.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
@@ -1035,7 +1035,7 @@ fn map_clear(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Map.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     let size = map_size(ctx, obj);
     for i in 0..size {
@@ -1180,12 +1180,12 @@ fn create_live_iter(
 }
 
 fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this = args.first().copied().unwrap_or(JSValue::undefined());
+    let mut this = args.first().copied().unwrap_or(JSValue::undefined());
     if !this.is_object_like() {
         throw_type_error(ctx, "Iterator.prototype.next called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
     let map_atom = ctx.intern("__iter_map__");
@@ -1331,7 +1331,7 @@ fn weakmap_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 3 {
         return JSValue::undefined();
     }
-    let this = &args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method WeakMap.prototype.set called on incompatible receiver");
         return JSValue::undefined();
@@ -1349,7 +1349,7 @@ fn weakmap_set(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     if let Some(idx) = weakmap_find(ctx, obj, key) {
         let v_atom = weakmap_val_atom(ctx, idx);
@@ -1415,7 +1415,7 @@ fn weakmap_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 2 {
         return JSValue::bool(false);
     }
-    let this = &args[0];
+    let mut this = args[0];
     let key = &args[1];
 
     if !this.is_object() {
@@ -1427,7 +1427,7 @@ fn weakmap_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakMap.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     if let Some(idx) = weakmap_find(ctx, obj, key) {
         let k_atom = weakmap_key_atom(ctx, idx);
@@ -1480,7 +1480,7 @@ fn weakset_add(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 2 {
         return JSValue::undefined();
     }
-    let this = &args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method WeakSet.prototype.add called on incompatible receiver");
         return JSValue::undefined();
@@ -1497,7 +1497,7 @@ fn weakset_add(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     if weakset_find(ctx, obj, value).is_none() {
         let size_atom = ctx.intern("__weakset_size__");
@@ -1533,7 +1533,7 @@ fn weakset_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 2 {
         return JSValue::bool(false);
     }
-    let this = &args[0];
+    let mut this = args[0];
     let value = &args[1];
 
     if !this.is_object() {
@@ -1545,7 +1545,7 @@ fn weakset_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method WeakSet.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     if let Some(idx) = weakset_find(ctx, obj, value) {
         let v_atom = weakset_val_atom(ctx, idx);
@@ -1568,7 +1568,7 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let this_ptr = Box::into_raw(Box::new(obj));
     ctx.runtime_mut().gc_heap_mut().track(this_ptr);
-    let this_val = JSValue::new_object(this_ptr);
+    let mut this_val = JSValue::new_object(this_ptr);
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -1605,11 +1605,11 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                         match iterator_next(ctx, iterator) {
                             Some((_value, true)) => break,
                             Some((value, false)) => {
-                                let cur_size = set_size(ctx, this_val.as_object_mut());
-                                if set_find(ctx, this_val.as_object_mut(), &value).is_none() {
+                                let cur_size = set_size(ctx, this_val.try_as_object_mut().expect("object value"));
+                                if set_find(ctx, this_val.try_as_object_mut().expect("object value"), &value).is_none() {
                                     let sv_atom = set_val_atom(ctx, cur_size);
-                                    this_val.as_object_mut().set(sv_atom, value);
-                                    this_val.as_object_mut().set(size_atom, JSValue::new_int((cur_size + 1) as i64));
+                                    this_val.try_as_object_mut().expect("object value").set(sv_atom, value);
+                                    this_val.try_as_object_mut().expect("object value").set(size_atom, JSValue::new_int((cur_size + 1) as i64));
                                 }
                             }
                             None => break,
@@ -1620,9 +1620,9 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let size_val = this_val.as_object_mut().get(size_atom).unwrap_or(JSValue::new_int(0));
+    let size_val = this_val.try_as_object_mut().expect("object value").get(size_atom).unwrap_or(JSValue::new_int(0));
     let size_prop_atom = ctx.intern("size");
-    this_val.as_object_mut().set(size_prop_atom, size_val);
+    this_val.try_as_object_mut().expect("object value").set(size_prop_atom, size_val);
 
     this_val
 }
@@ -1642,7 +1642,7 @@ fn set_add(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             args[0]
         };
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Set.prototype.add called on incompatible receiver");
         return JSValue::undefined();
@@ -1654,7 +1654,7 @@ fn set_add(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let value = args[1];
 
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     if set_find(ctx, obj, &value).is_none() {
         let size_atom = ctx.intern("__set_size__");
@@ -1690,7 +1690,7 @@ fn set_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 2 {
         return JSValue::bool(false);
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Set.prototype.delete called on incompatible receiver");
         return JSValue::undefined();
@@ -1701,7 +1701,7 @@ fn set_delete(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let value = args[1];
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     let size = set_size(ctx, obj);
     let idx = match set_find(ctx, obj, &value) {
@@ -1729,7 +1729,7 @@ fn set_clear(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
         return JSValue::undefined();
     }
-    let this = args[0];
+    let mut this = args[0];
     if !this.is_object() {
         throw_type_error(ctx, "Method Set.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
@@ -1739,7 +1739,7 @@ fn set_clear(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Method Set.prototype.clear called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj = this.as_object_mut();
+    let obj = this.try_as_object_mut().expect("object value");
 
     let size = set_size(ctx, obj);
     for i in 0..size {
@@ -1859,8 +1859,8 @@ fn set_elements(ctx: &mut JSContext, obj: &JSObject) -> Vec<JSValue> {
     out
 }
 
-fn set_add_value(ctx: &mut JSContext, obj_val: JSValue, value: JSValue) {
-    let obj = obj_val.as_object_mut();
+fn set_add_value(ctx: &mut JSContext, mut obj_val: JSValue, value: JSValue) {
+    let obj = obj_val.try_as_object_mut().expect("object value");
     if set_find(ctx, obj, &value).is_none() {
         let cur = set_size(ctx, obj);
         obj.set(set_val_atom(ctx, cur), value);
@@ -1868,8 +1868,8 @@ fn set_add_value(ctx: &mut JSContext, obj_val: JSValue, value: JSValue) {
     }
 }
 
-fn set_remove_value(ctx: &mut JSContext, obj_val: JSValue, value: JSValue) {
-    let obj = obj_val.as_object_mut();
+fn set_remove_value(ctx: &mut JSContext, mut obj_val: JSValue, value: JSValue) {
+    let obj = obj_val.try_as_object_mut().expect("object value");
     let size = set_size(ctx, obj);
     let elems = set_elements(ctx, obj);
     let filtered: Vec<JSValue> = elems
@@ -2255,23 +2255,23 @@ pub fn init_map_set(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(map_proto_ptr);
     ctx.set_map_prototype(map_proto_ptr);
 
-    let map_proto_value = JSValue::new_object(map_proto_ptr);
+    let mut map_proto_value = JSValue::new_object(map_proto_ptr);
 
-    let map_ctor = create_builtin_fn(ctx, "map_constructor", 0);
+    let mut map_ctor = create_builtin_fn(ctx, "map_constructor", 0);
     if map_ctor.is_function() {
-        let map_func_ref = map_ctor.as_function_mut();
+        let map_func_ref = map_ctor.try_as_function_mut().expect("function value");
         define_ctor_prototype(&mut map_func_ref.base, ctx.common_atoms.prototype, map_proto_value);
         let group_by_fn = create_builtin_fn(ctx, "map_group_by", 2);
         map_func_ref.base.set(ctx.intern("groupBy"), group_by_fn);
     }
     crate::builtins::symbol::install_species_accessor(ctx, &map_ctor);
-    let proto_ref = map_proto_value.as_object_mut();
+    let proto_ref = map_proto_value.try_as_object_mut().expect("object value");
     set_ne(proto_ref, ctx.common_atoms.constructor, map_ctor);
 
     let map_atom = ctx.intern("Map");
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, map_atom, map_ctor);
     }
 
@@ -2374,21 +2374,21 @@ pub fn init_map_set(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(set_proto_ptr);
     ctx.set_set_prototype(set_proto_ptr);
 
-    let set_proto_value = JSValue::new_object(set_proto_ptr);
+    let mut set_proto_value = JSValue::new_object(set_proto_ptr);
 
-    let set_ctor = create_builtin_fn(ctx, "set_constructor", 0);
+    let mut set_ctor = create_builtin_fn(ctx, "set_constructor", 0);
     if set_ctor.is_function() {
-        let set_func_ref = set_ctor.as_function_mut();
+        let set_func_ref = set_ctor.try_as_function_mut().expect("function value");
         define_ctor_prototype(&mut set_func_ref.base, ctx.common_atoms.prototype, set_proto_value);
     }
     crate::builtins::symbol::install_species_accessor(ctx, &set_ctor);
-    let proto_ref = set_proto_value.as_object_mut();
+    let proto_ref = set_proto_value.try_as_object_mut().expect("object value");
     set_ne(proto_ref, ctx.common_atoms.constructor, set_ctor);
 
     let set_atom = ctx.intern("Set");
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, set_atom, set_ctor);
     }
 
@@ -2441,19 +2441,19 @@ pub fn init_map_set(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(weakmap_proto_ptr);
     ctx.set_weakmap_prototype(weakmap_proto_ptr);
 
-    let weakmap_proto_value = JSValue::new_object(weakmap_proto_ptr);
+    let mut weakmap_proto_value = JSValue::new_object(weakmap_proto_ptr);
 
-    let weakmap_ctor = create_builtin_fn(ctx, "weakmap_constructor", 0);
+    let mut weakmap_ctor = create_builtin_fn(ctx, "weakmap_constructor", 0);
     if weakmap_ctor.is_function() {
-        let wm_func_ref = weakmap_ctor.as_function_mut();
+        let wm_func_ref = weakmap_ctor.try_as_function_mut().expect("function value");
         define_ctor_prototype(&mut wm_func_ref.base, ctx.common_atoms.prototype, weakmap_proto_value);
     }
-    let proto_ref = weakmap_proto_value.as_object_mut();
+    let proto_ref = weakmap_proto_value.try_as_object_mut().expect("object value");
     set_ne(proto_ref, ctx.common_atoms.constructor, weakmap_ctor);
 
     let weakmap_atom = ctx.intern("WeakMap");
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, weakmap_atom, weakmap_ctor);
     }
 
@@ -2486,19 +2486,19 @@ pub fn init_map_set(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(weakset_proto_ptr);
     ctx.set_weakset_prototype(weakset_proto_ptr);
 
-    let weakset_proto_value = JSValue::new_object(weakset_proto_ptr);
+    let mut weakset_proto_value = JSValue::new_object(weakset_proto_ptr);
 
-    let weakset_ctor = create_builtin_fn(ctx, "weakset_constructor", 0);
+    let mut weakset_ctor = create_builtin_fn(ctx, "weakset_constructor", 0);
     if weakset_ctor.is_function() {
-        let ws_func_ref = weakset_ctor.as_function_mut();
+        let ws_func_ref = weakset_ctor.try_as_function_mut().expect("function value");
         define_ctor_prototype(&mut ws_func_ref.base, ctx.common_atoms.prototype, weakset_proto_value);
     }
-    let proto_ref = weakset_proto_value.as_object_mut();
+    let proto_ref = weakset_proto_value.try_as_object_mut().expect("object value");
     set_ne(proto_ref, ctx.common_atoms.constructor, weakset_ctor);
 
     let weakset_atom = ctx.intern("WeakSet");
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, weakset_atom, weakset_ctor);
     }
 }

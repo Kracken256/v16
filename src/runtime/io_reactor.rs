@@ -614,8 +614,8 @@ impl IoReactor {
                                         return Ok(());
                                     }
 
-                                    let ws_obj = crate::value::JSValue::new_object(ws_task.ws_obj_ptr);
-                                    let ws_obj = ws_obj.as_object_mut();
+                                    let mut ws_obj = crate::value::JSValue::new_object(ws_task.ws_obj_ptr);
+                                    let ws_obj = ws_obj.try_as_object_mut().expect("object value");
                                     ws_obj.set(
                                         ctx.intern("readyState"),
                                         crate::value::JSValue::new_int(1),
@@ -701,8 +701,8 @@ impl IoReactor {
                     }
 
                     if closing && pending_out.is_empty() {
-                        let ws_obj = crate::value::JSValue::new_object(ws_task.ws_obj_ptr);
-                        let ws_obj = ws_obj.as_object_mut();
+                        let mut ws_obj = crate::value::JSValue::new_object(ws_task.ws_obj_ptr);
+                        let ws_obj = ws_obj.try_as_object_mut().expect("object value");
                         ws_obj.set(ctx.intern("readyState"), crate::value::JSValue::new_int(3));
                         dispatch_ws_close(ctx, ws_task.ws_obj_ptr, close_code, close_reason);
                         return Ok(());
@@ -710,8 +710,8 @@ impl IoReactor {
 
                     match conn.read(&mut read_buf) {
                         Ok(0) => {
-                            let ws_obj = crate::value::JSValue::new_object(ws_task.ws_obj_ptr);
-                            let ws_obj = ws_obj.as_object_mut();
+                            let mut ws_obj = crate::value::JSValue::new_object(ws_task.ws_obj_ptr);
+                            let ws_obj = ws_obj.try_as_object_mut().expect("object value");
                             ws_obj.set(ctx.intern("readyState"), crate::value::JSValue::new_int(3));
                             dispatch_ws_close(
                                 ctx,
@@ -928,8 +928,8 @@ impl IoReactor {
                                     val,
                                 );
 
-                                let es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
-                                let es_obj = es_obj.as_object_mut();
+                                let mut es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
+                                let es_obj = es_obj.try_as_object_mut().expect("object value");
                                 es_obj.set(
                                     ctx.intern("readyState"),
                                     crate::value::JSValue::new_int(1),
@@ -981,8 +981,8 @@ impl IoReactor {
                 } => {
                     match conn.read(&mut read_buf) {
                         Ok(0) => {
-                            let es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
-                            let es_obj = es_obj.as_object_mut();
+                            let mut es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
+                            let es_obj = es_obj.try_as_object_mut().expect("object value");
                             es_obj.set(ctx.intern("readyState"), crate::value::JSValue::new_int(2));
                             let onclose = es_obj
                                 .get(ctx.intern("onclose"))
@@ -998,8 +998,8 @@ impl IoReactor {
                                 crate::builtins::eventsource::parse_sse_event(&mut sse_buf)
                             {
                                 if event.is_closed {
-                                    let es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
-                                    let es_obj = es_obj.as_object_mut();
+                                    let mut es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
+                                    let es_obj = es_obj.try_as_object_mut().expect("object value");
                                     es_obj.set(
                                         ctx.intern("readyState"),
                                         crate::value::JSValue::new_int(2),
@@ -1017,8 +1017,8 @@ impl IoReactor {
                         }
                         Err(e) if e.kind() == ErrorKind::WouldBlock => {}
                         Err(e) => {
-                            let es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
-                            let es_obj = es_obj.as_object_mut();
+                            let mut es_obj = crate::value::JSValue::new_object(sse_task.es_obj_ptr);
+                            let es_obj = es_obj.try_as_object_mut().expect("object value");
                             let onerror = es_obj
                                 .get(ctx.intern("onerror"))
                                 .unwrap_or(crate::value::JSValue::undefined());

@@ -312,10 +312,10 @@ pub fn init_string(ctx: &mut JSContext) {
 
     let string_ptr = Box::into_raw(Box::new(string_func));
     ctx.runtime_mut().gc_heap_mut().track_function(string_ptr);
-    let string_value = JSValue::new_function(string_ptr);
-    let global = ctx.global();
+    let mut string_value = JSValue::new_function(string_ptr);
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         global_obj.define_property(
             string_atom,
             crate::object::object::PropertyDescriptor {
@@ -604,7 +604,7 @@ pub fn init_string(ctx: &mut JSContext) {
     ctx.set_string_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
 
-    let string_func_ref = string_value.as_function_mut();
+    let string_func_ref = string_value.try_as_function_mut().expect("function value");
     string_func_ref.base.define_property(
         ctx.common_atoms.prototype,
         crate::object::object::PropertyDescriptor {
@@ -618,7 +618,7 @@ pub fn init_string(ctx: &mut JSContext) {
     );
 
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         global_obj.set(proto_atom, proto_value);
     }
 }

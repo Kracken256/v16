@@ -272,7 +272,7 @@ impl GcHeap {
             idx
         };
 
-        JSValue::new_object(ptr).as_object_mut().gc_slot = idx as u32;
+        JSValue::new_object(ptr).try_as_object_mut().expect("object value").gc_slot = idx as u32;
         let size = if tag == TAG_ARRAY {
             std::mem::size_of::<JSArrayObject>()
         } else if tag == TAG_FUNCTION {
@@ -302,7 +302,7 @@ impl GcHeap {
             idx
         };
 
-        JSValue::new_object(ptr).as_object_mut().gc_slot = idx as u32;
+        JSValue::new_object(ptr).try_as_object_mut().expect("object value").gc_slot = idx as u32;
         self.nursery_indices.push(idx);
         self.debug_alloc(idx, ptr as usize, tag, true);
         idx
@@ -1029,8 +1029,8 @@ impl GcHeap {
             let tag = self.tags[idx];
             let mut pooled_props = None;
             if tag == TAG_OBJECT {
-                let object_value = JSValue::new_object(ptr);
-                let mut props = object_value.as_object_mut().take_props();
+                let mut object_value = JSValue::new_object(ptr);
+                let mut props = object_value.try_as_object_mut().expect("object value").take_props();
                 props.clear();
                 pooled_props = Some(props);
             }
@@ -1112,8 +1112,8 @@ impl GcHeap {
             };
             let mut pooled_props = None;
             if tag == TAG_OBJECT {
-                let object_value = JSValue::new_object(ptr);
-                let mut props = object_value.as_object_mut().take_props();
+                let mut object_value = JSValue::new_object(ptr);
+                let mut props = object_value.try_as_object_mut().expect("object value").take_props();
                 props.clear();
                 pooled_props = Some(props);
             }
@@ -1294,7 +1294,7 @@ impl GcHeap {
             match tag {
                 TAG_OBJECT | TAG_FUNCTION | TAG_ARRAY => {
                     JSValue::new_object(self.objects[idx])
-                        .as_object_mut()
+                        .try_as_object_mut().expect("object value")
                         .clean_stale_properties(dead);
                 }
                 _ => {}

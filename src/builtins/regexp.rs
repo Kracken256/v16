@@ -33,7 +33,7 @@ pub fn init_regexp(ctx: &mut JSContext) {
         HostFunction::method("get flags", 0, regexp_get_flags),
     );
 
-    let regexp_func = create_builtin_function(ctx, "regexp_constructor");
+    let mut regexp_func = create_builtin_function(ctx, "regexp_constructor");
     crate::builtins::symbol::install_species_accessor(ctx, &regexp_func);
 
     let proto_atom = ctx.intern("RegExpPrototype");
@@ -124,7 +124,7 @@ pub fn init_regexp(ctx: &mut JSContext) {
     let proto_value = JSValue::new_object(proto_ptr);
 
     if regexp_func.is_function() {
-        regexp_func.as_function_mut().base.define_property(
+        regexp_func.try_as_function_mut().expect("function value").base.define_property(
             ctx.common_atoms.prototype,
             crate::object::object::PropertyDescriptor {
                 value: Some(proto_value),
@@ -137,9 +137,9 @@ pub fn init_regexp(ctx: &mut JSContext) {
         );
     }
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         global_obj.set(proto_atom, proto_value);
         crate::builtins::global::set_non_enumerable(
             global_obj,
@@ -355,7 +355,7 @@ pub fn regexp_test(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::bool(false);
     }
 
-    let this = &args[0];
+    let mut this = args[0];
     let test_str = if args.len() > 1 && args[1].is_string() {
         ctx.get_atom_str(args[1].get_atom()).to_string()
     } else {
@@ -366,7 +366,7 @@ pub fn regexp_test(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::bool(false);
     }
 
-    let regexp_obj = this.as_object_mut();
+    let regexp_obj = this.try_as_object_mut().expect("object value");
 
     let pattern_atom = ctx.common_atoms.__pattern__;
     let flags_atom = ctx.common_atoms.__flags__;
@@ -429,7 +429,7 @@ pub fn regexp_exec(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::null();
     }
 
-    let this = &args[0];
+    let mut this = args[0];
     let test_str = if args.len() > 1 && args[1].is_string() {
         ctx.get_atom_str(args[1].get_atom()).to_string()
     } else {
@@ -440,7 +440,7 @@ pub fn regexp_exec(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::null();
     }
 
-    let regexp_obj = this.as_object_mut();
+    let regexp_obj = this.try_as_object_mut().expect("object value");
 
     let pattern_atom = ctx.common_atoms.__pattern__;
     let flags_atom = ctx.common_atoms.__flags__;

@@ -389,7 +389,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
         } else {
             None
         };
-        let Some(val) = val else { return JSValue::undefined() };
+        let Some(mut val) = val else { return JSValue::undefined() };
 
         if val.is_object() {
             if val.try_as_object().expect("object value").is_array() {
@@ -399,7 +399,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
                     let i_atom = ctx.int_atom_mut(i);
                     let new_val = json_walk(ctx, reviver, val, i_atom);
                     if ctx.pending_exception.is_some() { return JSValue::undefined(); }
-                    let obj_mut = val.as_object_mut();
+                    let obj_mut = val.try_as_object_mut().expect("object value");
                     if new_val.is_undefined() {
                         obj_mut.delete(i_atom);
                     } else {
@@ -424,7 +424,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
                 for (prop_atom, _) in props {
                     let new_val = json_walk(ctx, reviver, val, prop_atom);
                     if ctx.pending_exception.is_some() { return JSValue::undefined(); }
-                    let obj_mut = val.as_object_mut();
+                    let obj_mut = val.try_as_object_mut().expect("object value");
                     if new_val.is_undefined() {
                         obj_mut.delete(prop_atom);
                     } else {

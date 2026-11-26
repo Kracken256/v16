@@ -124,8 +124,9 @@ fn ws_close(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     reactor.ws_close(ws_obj_ptr, code, &reason);
 
     if args[0].is_object() {
-        args[0]
-            .as_object_mut()
+        let mut this = args[0];
+        this.try_as_object_mut()
+            .expect("object value")
             .set(ctx.intern("readyState"), JSValue::new_int(2));
     }
 

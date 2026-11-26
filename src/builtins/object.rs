@@ -329,14 +329,14 @@ pub fn init_object(ctx: &mut JSContext) {
     let object_value = JSValue::new_function(object_ptr);
 
     if let Some(op) = ctx.get_object_prototype() {
-        let op_val = JSValue::new_object(op);
+        let mut op_val = JSValue::new_object(op);
         op_val
-            .as_object_mut()
+            .try_as_object_mut().expect("object value")
             .set(ctx.common_atoms.constructor, object_value);
     }
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, object_atom, object_value);
         crate::builtins::global::set_non_enumerable(global_obj, proto_atom, proto_value);
     }
@@ -698,7 +698,7 @@ fn object_assign(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let target = &args[0];
-    let to = if target.is_object() || target.is_function() {
+    let mut to = if target.is_object() || target.is_function() {
         target.clone()
     } else if target.is_undefined() || target.is_null() {
         throw_type_error_obj(
@@ -731,7 +731,7 @@ fn object_assign(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             if ctx.pending_exception.is_some() {
                 return JSValue::undefined();
             }
-            to.as_object_mut().set(key, val);
+            to.try_as_object_mut().expect("object value").set(key, val);
         }
     }
 
@@ -1013,7 +1013,8 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let obj = args[0].as_object_mut();
+    let mut target = args[0];
+    let obj = target.try_as_object_mut().expect("object value");
     if args[1].is_object_like() {
         let new_proto = args[1].get_ptr();
         // Object.prototype is immutable
@@ -1328,7 +1329,8 @@ fn define_legacy_accessor(
         get: if getter { Some(func) } else { None },
         set: if getter { None } else { Some(func) },
     };
-    let obj = args[0].as_object_mut();
+    let mut target = args[0];
+    let obj = target.try_as_object_mut().expect("object value");
     let ok = obj.define_property_ext(atom, pd, false, true, true);
     if !ok {
         let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
@@ -1506,7 +1508,8 @@ fn object_prevent_extensions(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
     if args.is_empty() || !is_object_like(&args[0]) {
         return args.get(0).cloned().unwrap_or(JSValue::undefined());
     }
-    let obj = args[0].as_object_mut();
+    let mut target = args[0];
+    let obj = target.try_as_object_mut().expect("object value");
     obj.set_extensible(false);
     args[0].clone()
 }
@@ -1523,7 +1526,8 @@ fn object_seal(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !is_object_like(&args[0]) {
         return args.get(0).cloned().unwrap_or(JSValue::undefined());
     }
-    let obj = args[0].as_object_mut();
+    let mut target = args[0];
+    let obj = target.try_as_object_mut().expect("object value");
     obj.set_extensible(false);
     obj.set_sealed(true);
     obj.seal_accessors();
@@ -1556,7 +1560,8 @@ fn object_freeze(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() || !is_object_like(&args[0]) {
         return args.get(0).cloned().unwrap_or(JSValue::undefined());
     }
-    let obj = args[0].as_object_mut();
+    let mut target = args[0];
+    let obj = target.try_as_object_mut().expect("object value");
     obj.set_extensible(false);
     obj.set_sealed(true);
     obj.set_frozen(true);
@@ -1590,7 +1595,7 @@ fn object_is_frozen(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let obj_val = args.first().cloned().unwrap_or(JSValue::undefined());
+    let mut obj_val = args.first().cloned().unwrap_or(JSValue::undefined());
     if !is_object_like(&obj_val) {
         let mut err = crate::object::object::JSObject::new_typed(
             crate::object::object::ObjectType::Error,
@@ -1606,7 +1611,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 3 {
         return obj_val;
     }
-    let obj = &obj_val;
+    let obj = &mut obj_val;
     let prop = &args[1];
     let descriptor = &args[2];
 
@@ -1670,7 +1675,7 @@ fn object_define_property(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return obj.clone();
     }
 
-    let obj_ref = obj.as_object_mut();
+    let obj_ref = obj.try_as_object_mut().expect("object value");
 
     // Array exotic object: length is always non-configurable
     if obj_ref.is_array() {
@@ -1790,7 +1795,7 @@ fn object_define_properties(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.len() < 2 {
         return args.get(0).cloned().unwrap_or(JSValue::undefined());
     }
-    let obj = &args[0];
+    let mut obj = args[0];
     let props = &args[1];
 
     if !obj.is_object_like() || !props.is_object_like() {
@@ -1811,7 +1816,7 @@ fn object_define_properties(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             continue;
         };
 
-        let obj_ref = obj.as_object_mut();
+        let obj_ref = obj.try_as_object_mut().expect("object value");
         let ok = obj_ref.define_property(key_atom, pd);
         if !ok {
             let mut err = crate::object::object::JSObject::new_typed(

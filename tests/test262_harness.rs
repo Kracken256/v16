@@ -37,11 +37,12 @@ fn test262_detach_array_buffer(_ctx: &mut v16::JSContext, _args: &[JSValue]) -> 
 }
 
 fn inject_test262_globals(ctx: &mut v16::JSContext) {
-    let global = ctx.global();
-    if !global.is_object() {
+    let global_value = ctx.global();
+    if !global_value.is_object() {
         return;
     }
-    let global_obj = global.as_object_mut();
+    let mut global = global_value;
+    let global_obj = global.try_as_object_mut().expect("global object");
 
     let print_func = {
         let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("print"), 1);
@@ -66,7 +67,7 @@ fn inject_test262_globals(ctx: &mut v16::JSContext) {
     );
 
     let mut dollar_262 = JSObject::new();
-    dollar_262.set(ctx.intern("global"), global);
+    dollar_262.set(ctx.intern("global"), global_value);
 
     let create_realm_func = {
         let mut f = v16::object::function::JSFunction::new_builtin(ctx.intern("createRealm"), 0);

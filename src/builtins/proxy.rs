@@ -132,12 +132,12 @@ fn proxy_revoke(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let proxy_atom = ctx.intern("__v16_revoked_proxy__");
-    let proxy = match callee.try_as_object().expect("object value").get_own(proxy_atom) {
+    let mut proxy = match callee.try_as_object().expect("object value").get_own(proxy_atom) {
         Some(proxy) => proxy,
         None => return JSValue::undefined(),
     };
     if proxy.is_object() && proxy.try_as_object().expect("object value").is_proxy() {
-        proxy.as_object_mut().revoke_proxy();
+        proxy.try_as_object_mut().expect("object value").revoke_proxy();
     }
     JSValue::undefined()
 }
@@ -170,9 +170,9 @@ pub fn init_proxy(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(proxy_ptr);
     let proxy_value = JSValue::new_function(proxy_ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, proxy_atom, proxy_value);
     }
 }

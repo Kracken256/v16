@@ -80,15 +80,15 @@ fn patch_function_values_recursive(
         values.push(value);
     });
 
-    for value in values {
+    for mut value in values {
         if value.is_function() {
-            let func = value.as_function_mut();
+            let func = value.try_as_function_mut().expect("function value");
             if func.base.prototype.is_none() {
                 func.base.set_prototype_raw(fn_proto_ptr);
             }
             patch_function_values_recursive(&mut func.base, fn_proto_ptr, visited);
         } else if value.is_object() {
-            let nested = value.as_object_mut();
+            let nested = value.try_as_object_mut().expect("object value");
             patch_function_values_recursive(nested, fn_proto_ptr, visited);
         }
     }
@@ -177,29 +177,29 @@ pub fn init_function(ctx: &mut JSContext) {
 
     let proto_ptr = Box::into_raw(Box::new(proto_obj));
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
-    let proto_value = JSValue::new_object(proto_ptr);
+    let mut proto_value = JSValue::new_object(proto_ptr);
 
     ctx.set_function_prototype(proto_ptr);
 
-    let proto_binding = JSValue::new_object(proto_ptr);
-    let proto_obj_mut = proto_binding.as_object_mut();
+    let mut proto_binding = JSValue::new_object(proto_ptr);
+    let proto_obj_mut = proto_binding.try_as_object_mut().expect("object value");
     for atom in [
         ctx.common_atoms.bind,
         ctx.common_atoms.call,
         ctx.common_atoms.apply,
         ctx.common_atoms.to_string,
     ] {
-        if let Some(v) = proto_obj_mut.get(atom) {
+        if let Some(mut v) = proto_obj_mut.get(atom) {
             if v.is_function() {
-                let f = v.as_function_mut();
+                let f = v.try_as_function_mut().expect("function value");
                 f.base.set_prototype_raw(proto_ptr);
             }
         }
     }
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         patch_function_values_with_function_prototype(global_obj, proto_ptr);
     }
 
@@ -215,14 +215,14 @@ pub fn init_function(ctx: &mut JSContext) {
     let function_value = JSValue::new_function(function_ptr);
 
     crate::builtins::global::set_non_enumerable(
-        proto_value.as_object_mut(),
+        proto_value.try_as_object_mut().expect("object value"),
         ctx.common_atoms.constructor,
         function_value,
     );
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(
             global_obj,
             ctx.common_atoms.function,
@@ -327,11 +327,11 @@ fn function_has_instance(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 fn function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if args.is_empty() {
         return match crate::eval(ctx, "(function anonymous() {})") {
-            Ok(val) => {
+            Ok(mut val) => {
                 if val.is_function() {
-                    val.as_function_mut().name = ctx.intern("anonymous");
+                    val.try_as_function_mut().expect("function value").name = ctx.intern("anonymous");
                     let name_atom = ctx.intern("name");
-                    let obj = val.as_object_mut();
+                    let obj = val.try_as_object_mut().expect("object value");
                     let mut desc = crate::object::object::PropertyDescriptor::new_data(
                         JSValue::new_string(ctx.intern("anonymous")),
                     );
@@ -376,11 +376,11 @@ fn function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let params_str = params.join(",");
     let source = format!("(function anonymous({}){{{}}})", params_str, body_str);
     match crate::eval(ctx, &source) {
-        Ok(val) => {
+        Ok(mut val) => {
             if val.is_function() {
-                val.as_function_mut().name = ctx.intern("anonymous");
+                val.try_as_function_mut().expect("function value").name = ctx.intern("anonymous");
                 let name_atom = ctx.intern("name");
-                let obj = val.as_object_mut();
+                let obj = val.try_as_object_mut().expect("object value");
                 let mut desc = crate::object::object::PropertyDescriptor::new_data(
                     JSValue::new_string(ctx.intern("anonymous")),
                 );

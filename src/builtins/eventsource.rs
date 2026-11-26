@@ -84,8 +84,9 @@ fn es_close(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     reactor.sse_close(es_obj_ptr);
 
     if args[0].is_object() {
-        args[0]
-            .as_object_mut()
+        let mut this = args[0];
+        this.try_as_object_mut()
+            .expect("object value")
             .set(ctx.intern("readyState"), JSValue::new_int(2));
     }
 

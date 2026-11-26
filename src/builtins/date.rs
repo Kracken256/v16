@@ -283,11 +283,11 @@ pub fn init_date(ctx: &mut JSContext) {
 
     let date_ptr = Box::into_raw(Box::new(date_func));
     ctx.runtime_mut().gc_heap_mut().track_function(date_ptr);
-    let date_value = JSValue::new_function(date_ptr);
+    let mut date_value = JSValue::new_function(date_ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, date_atom, date_value);
     }
 
@@ -530,11 +530,11 @@ pub fn init_date(ctx: &mut JSContext) {
     let proto_value = JSValue::new_object(proto_ptr);
 
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, proto_atom, proto_value);
     }
 
-    let date_func_ref = date_value.as_function_mut();
+    let date_func_ref = date_value.try_as_function_mut().expect("function value");
     date_func_ref.base.define_property(
         ctx.intern("prototype"),
         crate::object::object::PropertyDescriptor {
@@ -560,8 +560,8 @@ fn create_builtin_function(
     let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     if let Some(dname) = display_name {
-        let func_binding = JSValue::new_function(ptr);
-        let func_obj = func_binding.as_function_mut();
+        let mut func_binding = JSValue::new_function(ptr);
+        let func_obj = func_binding.try_as_function_mut().expect("function value");
         func_obj.base.define_property(
             ctx.intern("name"),
             crate::object::object::PropertyDescriptor {
@@ -1251,7 +1251,8 @@ pub fn date_get_utc_milliseconds(ctx: &mut JSContext, args: &[JSValue]) -> JSVal
 
 fn set_date_timestamp(ctx: &mut JSContext, this: &JSValue, ts: f64) -> JSValue {
     if this.is_object() {
-        let obj = this.as_object_mut();
+        let mut this_value = *this;
+        let obj = this_value.try_as_object_mut().expect("object value");
         obj.set(ctx.common_atoms.__value__, JSValue::new_float(ts));
     }
     JSValue::new_float(ts)
@@ -1941,11 +1942,11 @@ pub fn init_date_to_primitive(ctx: &mut JSContext) {
     };
     let proto_key = ctx.intern("prototype");
     let proto_val = date_ctor.try_as_object().expect("object value").get(proto_key);
-    if let Some(pv) = proto_val {
+    if let Some(mut pv) = proto_val {
         if pv.is_object() {
             let fn_val =
                 create_builtin_function(ctx, "date_toPrimitive", 1, Some("[Symbol.toPrimitive]"));
-            pv.as_object_mut().define_property(
+            pv.try_as_object_mut().expect("object value").define_property(
                 sym_atom,
                 crate::object::object::PropertyDescriptor {
                     value: Some(fn_val),

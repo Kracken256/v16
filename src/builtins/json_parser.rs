@@ -422,7 +422,7 @@ impl<'a> JsonParser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     #[test]
     fn test_json_parse_result_survives_gc() {

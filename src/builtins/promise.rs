@@ -331,14 +331,14 @@ fn promise_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
     let promise = create_promise(ctx);
-    let promise_val = {
+    let mut promise_val = {
         let ptr = Box::into_raw(Box::new(promise));
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     };
     let resolved = ctx.with_vm(|vm, ctx| resolve_promise_value(ctx, vm, promise_val, value));
     if resolved.is_none() {
-        let p = promise_val.as_object_mut();
+        let p = promise_val.try_as_object_mut().expect("object value");
         fulfill_promise(ctx, p, value);
     }
     promise_val
@@ -360,7 +360,7 @@ fn promise_reject(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn promise_then(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let this_val = args.get(0).copied().unwrap_or(JSValue::undefined());
+    let mut this_val = args.get(0).copied().unwrap_or(JSValue::undefined());
     if !this_val.is_object() {
         let mut err = JSObject::new();
         err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
@@ -373,7 +373,7 @@ fn promise_then(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    let promise = this_val.as_object_mut();
+    let promise = this_val.try_as_object_mut().expect("object value");
     if !promise.is_promise() {
         return JSValue::undefined();
     }
@@ -526,10 +526,10 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let result_promise = create_promise(ctx);
     let result_promise_ptr = Box::into_raw(Box::new(result_promise));
-    let result_promise_val = JSValue::new_object(result_promise_ptr);
+    let mut result_promise_val = JSValue::new_object(result_promise_ptr);
     ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
-    let rp = result_promise_val.as_object_mut();
+    let rp = result_promise_val.try_as_object_mut().expect("object value");
 
     if !iterable.is_object() {
         let msg = JSValue::new_string(ctx.intern("TypeError: object is not iterable (cannot read property Symbol.iterator)"));
@@ -570,7 +570,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         empty_arr.set(length_atom, JSValue::new_int(0));
         let arr_ptr = Box::into_raw(Box::new(empty_arr));
         ctx.runtime_mut().gc_heap_mut().track(arr_ptr);
-        let rp = result_promise_val.as_object_mut();
+        let rp = result_promise_val.try_as_object_mut().expect("object value");
         fulfill_promise(ctx, rp, JSValue::new_object(arr_ptr));
         return result_promise_val;
     }
@@ -584,15 +584,15 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let remaining_atom = ctx.intern("__all_remaining__");
     let results_slot_atom = ctx.intern("__all_results__");
-    let rp = result_promise_val.as_object_mut();
+    let rp = result_promise_val.try_as_object_mut().expect("object value");
     rp.set(remaining_atom, JSValue::new_int(len as i64));
     rp.set(results_slot_atom, results_val);
 
     for i in 0..len {
         let item = get_array_element(&obj, i, ctx);
 
-        let resolved = resolve_value_as_promise(ctx, item);
-        let promise = resolved.as_object_mut();
+        let mut resolved = resolve_value_as_promise(ctx, item);
+        let promise = resolved.try_as_object_mut().expect("object value");
         let state = get_promise_state(ctx, promise);
         match state {
             PromiseState::Fulfilled => {
@@ -607,7 +607,7 @@ fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             }
             PromiseState::Rejected => {
                 let reason = get_promise_result(ctx, promise);
-                let rp = result_promise_val.as_object_mut();
+                let rp = result_promise_val.try_as_object_mut().expect("object value");
                 reject_promise(ctx, rp, reason);
                 return result_promise_val;
             }
@@ -640,11 +640,11 @@ fn promise_race(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let result_promise = create_promise(ctx);
     let result_promise_ptr = Box::into_raw(Box::new(result_promise));
-    let result_promise_val = JSValue::new_object(result_promise_ptr);
+    let mut result_promise_val = JSValue::new_object(result_promise_ptr);
     ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
     if !iterable.is_object() {
-        let rp = result_promise_val.as_object_mut();
+        let rp = result_promise_val.try_as_object_mut().expect("object value");
         let msg = JSValue::new_string(ctx.intern("TypeError: object is not iterable (cannot read property Symbol.iterator)"));
         reject_promise(ctx, rp, msg);
         return result_promise_val;
@@ -655,20 +655,20 @@ fn promise_race(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     for i in 0..len {
         let item = get_array_element(&obj, i, ctx);
-        let resolved = resolve_value_as_promise(ctx, item);
-        let promise = resolved.as_object_mut();
+        let mut resolved = resolve_value_as_promise(ctx, item);
+        let promise = resolved.try_as_object_mut().expect("object value");
         let state = get_promise_state(ctx, promise);
 
         match state {
             PromiseState::Fulfilled => {
                 let value = get_promise_result(ctx, promise);
-                let rp = result_promise_val.as_object_mut();
+                let rp = result_promise_val.try_as_object_mut().expect("object value");
                 fulfill_promise(ctx, rp, value);
                 return result_promise_val;
             }
             PromiseState::Rejected => {
                 let reason = get_promise_result(ctx, promise);
-                let rp = result_promise_val.as_object_mut();
+                let rp = result_promise_val.try_as_object_mut().expect("object value");
                 reject_promise(ctx, rp, reason);
                 return result_promise_val;
             }
@@ -701,11 +701,11 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let result_promise = create_promise(ctx);
     let result_promise_ptr = Box::into_raw(Box::new(result_promise));
-    let result_promise_val = JSValue::new_object(result_promise_ptr);
+    let mut result_promise_val = JSValue::new_object(result_promise_ptr);
     ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
     if !iterable.is_object() {
-        let rp = result_promise_val.as_object_mut();
+        let rp = result_promise_val.try_as_object_mut().expect("object value");
         let msg = JSValue::new_string(ctx.intern("TypeError: object is not iterable (cannot read property Symbol.iterator)"));
         reject_promise(ctx, rp, msg);
         return result_promise_val;
@@ -720,7 +720,7 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let length_atom = intern_str(ctx, "length");
         empty_arr.set(length_atom, JSValue::new_int(0));
         let arr_ptr = Box::into_raw(Box::new(empty_arr));
-        let rp = result_promise_val.as_object_mut();
+        let rp = result_promise_val.try_as_object_mut().expect("object value");
         fulfill_promise(ctx, rp, JSValue::new_object(arr_ptr));
         ctx.runtime_mut().gc_heap_mut().track(arr_ptr);
         return result_promise_val;
@@ -735,16 +735,16 @@ fn promise_all_settled(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let remaining_atom = ctx.intern("__allSettled_remaining__");
     let results_slot_atom = ctx.intern("__allSettled_results__");
-    let rp = result_promise_val.as_object_mut();
+    let rp = result_promise_val.try_as_object_mut().expect("object value");
     rp.set(remaining_atom, JSValue::new_int(len as i64));
     rp.set(results_slot_atom, results_val);
 
     for i in 0..len {
         let item = get_array_element(&obj, i, ctx);
 
-        let resolved = resolve_value_as_promise(ctx, item);
+        let mut resolved = resolve_value_as_promise(ctx, item);
 
-        let promise = resolved.as_object_mut();
+        let promise = resolved.try_as_object_mut().expect("object value");
         let state = get_promise_state(ctx, promise);
         match state {
             PromiseState::Fulfilled => {
@@ -796,12 +796,12 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     let result_promise = create_promise(ctx);
     let result_promise_ptr = Box::into_raw(Box::new(result_promise));
-    let result_promise_val = JSValue::new_object(result_promise_ptr);
+    let mut result_promise_val = JSValue::new_object(result_promise_ptr);
     ctx.runtime_mut().gc_heap_mut().track(result_promise_ptr);
 
     if !iterable.is_object() {
         let msg = JSValue::new_string(ctx.intern("TypeError: object is not iterable (cannot read property Symbol.iterator)"));
-        let rp = result_promise_val.as_object_mut();
+        let rp = result_promise_val.try_as_object_mut().expect("object value");
         reject_promise(ctx, rp, msg);
         return result_promise_val;
     }
@@ -811,7 +811,7 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = get_array_length(&obj, ctx);
 
     if len == 0 {
-        let rp = result_promise_val.as_object_mut();
+        let rp = result_promise_val.try_as_object_mut().expect("object value");
         let mut err = JSObject::new();
         err.set(intern_str(ctx, "name"), JSValue::new_string(ctx.intern("AggregateError")));
         err.set(intern_str(ctx, "message"), JSValue::new_string(ctx.intern("All promises were rejected")));
@@ -825,20 +825,20 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let remaining_atom = ctx.intern("__any_remaining__");
-    let rp = result_promise_val.as_object_mut();
+    let rp = result_promise_val.try_as_object_mut().expect("object value");
     rp.set(remaining_atom, JSValue::new_int(len as i64));
 
     for i in 0..len {
         let item = get_array_element(&obj, i, ctx);
 
-        let resolved = resolve_value_as_promise(ctx, item);
-        let promise = resolved.as_object_mut();
+        let mut resolved = resolve_value_as_promise(ctx, item);
+        let promise = resolved.try_as_object_mut().expect("object value");
         let state = get_promise_state(ctx, promise);
 
         match state {
             PromiseState::Fulfilled => {
                 let value = get_promise_result(ctx, promise);
-                let rp = result_promise_val.as_object_mut();
+                let rp = result_promise_val.try_as_object_mut().expect("object value");
                 fulfill_promise(ctx, rp, value);
                 return result_promise_val;
             }
@@ -878,7 +878,7 @@ fn promise_any(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn promise_with_resolvers(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
-    let mut promise = create_promise(ctx);
+    let promise = create_promise(ctx);
     let ptr = Box::into_raw(Box::new(promise));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
     let promise_val = JSValue::new_object(ptr);
@@ -898,7 +898,7 @@ fn promise_with_resolvers(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
 }
 
 /// Create a TypeError object and reject `target` with it.
-fn reject_promise_with_type_error(ctx: &mut JSContext, target: JSValue, message: &str) {
+fn reject_promise_with_type_error(ctx: &mut JSContext, mut target: JSValue, message: &str) {
     let mut err = JSObject::new();
     err.set(ctx.common_atoms.name, JSValue::new_string(ctx.intern("TypeError")));
     err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern(message)));
@@ -907,7 +907,7 @@ fn reject_promise_with_type_error(ctx: &mut JSContext, target: JSValue, message:
     }
     let ptr = Box::into_raw(Box::new(err));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
-    let t = target.as_object_mut();
+    let t = target.try_as_object_mut().expect("object value");
     if t.is_promise() && get_promise_state(ctx, t).is_pending() {
         reject_promise(ctx, t, JSValue::new_object(ptr));
     }
@@ -919,7 +919,7 @@ fn reject_promise_with_type_error(ctx: &mut JSContext, target: JSValue, message:
 pub(crate) fn resolve_promise_value(
     ctx: &mut JSContext,
     vm: &mut crate::runtime::vm::VM,
-    target: JSValue,
+    mut target: JSValue,
     value: JSValue,
 ) {
     if !target.is_object() {
@@ -952,7 +952,7 @@ pub(crate) fn resolve_promise_value(
                     .take()
                     .or_else(|| ctx.pending_exception.take())
                     .unwrap_or_else(JSValue::undefined);
-                let t = target.as_object_mut();
+                let t = target.try_as_object_mut().expect("object value");
                 if t.is_promise() && get_promise_state(ctx, t).is_pending() {
                     reject_promise(ctx, t, exc);
                 }
@@ -964,7 +964,7 @@ pub(crate) fn resolve_promise_value(
             return;
         }
     }
-    let t = target.as_object_mut();
+    let t = target.try_as_object_mut().expect("object value");
     if t.is_promise() && get_promise_state(ctx, t).is_pending() {
         fulfill_promise(ctx, t, value);
     }
@@ -992,7 +992,7 @@ fn promise_internal_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let target_atom = ctx.intern("__target_promise__");
     let func_obj = callee_fn.try_as_function().expect("function value");
-    let promise_val = func_obj.base.get(target_atom).unwrap_or(JSValue::undefined());
+    let mut promise_val = func_obj.base.get(target_atom).unwrap_or(JSValue::undefined());
     if !promise_val.is_object() {
         return JSValue::undefined();
     }
@@ -1004,7 +1004,7 @@ fn promise_internal_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let resolved = ctx.with_vm(|vm, ctx| resolve_promise_value(ctx, vm, promise_val, value));
     if resolved.is_none() {
-        let promise = promise_val.as_object_mut();
+        let promise = promise_val.try_as_object_mut().expect("object value");
         if promise.is_promise() && get_promise_state(ctx, promise).is_pending() {
             fulfill_promise(ctx, promise, value);
         }
@@ -1020,11 +1020,11 @@ fn promise_internal_reject(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
     let target_atom = ctx.intern("__target_promise__");
     let func_obj = callee_fn.try_as_function().expect("function value");
-    let promise_val = func_obj.base.get(target_atom).unwrap_or(JSValue::undefined());
+    let mut promise_val = func_obj.base.get(target_atom).unwrap_or(JSValue::undefined());
     if !promise_val.is_object() {
         return JSValue::undefined();
     }
-    let promise = promise_val.as_object_mut();
+    let promise = promise_val.try_as_object_mut().expect("object value");
     if promise.is_promise() && get_promise_state(ctx, promise).is_pending() {
         reject_promise(ctx, promise, reason);
     }
@@ -1090,15 +1090,15 @@ fn promise_executor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
 
-    let mut promise = create_promise(ctx);
+    let promise = create_promise(ctx);
     let ptr = Box::into_raw(Box::new(promise));
     ctx.runtime_mut().gc_heap_mut().track(ptr);
-    let promise_val = JSValue::new_object(ptr);
+    let mut promise_val = JSValue::new_object(ptr);
 
     let (resolve_val, reject_val) = create_resolve_reject_fns(ctx, promise_val);
 
     if let Err(e) = call_callback(ctx, executor_fn, &[resolve_val, reject_val]) {
-        let rp = promise_val.as_object_mut();
+        let rp = promise_val.try_as_object_mut().expect("object value");
         let msg = JSValue::new_string(ctx.intern(&e));
         reject_promise(ctx, rp, msg);
     }
@@ -1146,7 +1146,7 @@ pub fn init_promise(ctx: &mut JSContext) {
     let promise_atom = ctx.intern("Promise");
     let mut promise_func = crate::object::function::JSFunction::new_builtin(promise_atom, 1);
     promise_func.set_builtin_marker(ctx, "promise_executor");
-    let proto_value = create_promise_prototype(ctx);
+    let mut proto_value = create_promise_prototype(ctx);
 
     let proto_ptr = proto_value.get_ptr();
     ctx.set_promise_prototype(proto_ptr);
@@ -1166,12 +1166,12 @@ pub fn init_promise(ctx: &mut JSContext) {
 
     crate::builtins::symbol::install_species_accessor(ctx, &promise_value);
 
-    let proto_mut = proto_value.as_object_mut();
+    let proto_mut = proto_value.try_as_object_mut().expect("object value");
     proto_mut.set(ctx.intern("constructor"), promise_value);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, promise_atom, promise_value);
     }
 }
@@ -1199,8 +1199,8 @@ pub(crate) fn fulfill_promise_with_value(
     promise_obj_ptr: *mut crate::object::object::JSObject,
     value: JSValue,
 ) {
-    let promise_val = JSValue::new_object(promise_obj_ptr);
-    let promise = promise_val.as_object_mut();
+    let mut promise_val = JSValue::new_object(promise_obj_ptr);
+    let promise = promise_val.try_as_object_mut().expect("object value");
     fulfill_promise(ctx, promise, value);
 }
 
@@ -1210,8 +1210,8 @@ pub(crate) fn reject_promise_with_value(
     promise_obj_ptr: *mut crate::object::object::JSObject,
     reason: JSValue,
 ) {
-    let promise_val = JSValue::new_object(promise_obj_ptr);
-    let promise = promise_val.as_object_mut();
+    let mut promise_val = JSValue::new_object(promise_obj_ptr);
+    let promise = promise_val.try_as_object_mut().expect("object value");
     reject_promise(ctx, promise, reason);
 }
 
@@ -1231,7 +1231,7 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
             return;
         }
         match task {
-            Microtask::Reaction(reaction, argument) => {
+            Microtask::Reaction(mut reaction, argument) => {
                 if reaction.is_all_settled {
                     handle_all_settled_reaction(ctx, vm, &reaction, argument);
                     continue;
@@ -1250,7 +1250,7 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                     continue;
                 }
                 if handler.is_int() && reaction.target_promise.is_object() {
-                    let target = reaction.target_promise.as_object_mut();
+                    let target = reaction.target_promise.try_as_object_mut().expect("object value");
                     if target.is_promise() && get_promise_state(ctx, target) == PromiseState::Pending {
                         let all_remaining_atom = ctx.intern("__all_remaining__");
                         let any_remaining_atom = ctx.intern("__any_remaining__");
@@ -1260,9 +1260,9 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                             } else {
                                 let idx = handler.get_int() as usize;
                                 let results_slot = ctx.intern("__all_results__");
-                                if let Some(results_val) = target.get(results_slot) {
+                                if let Some(mut results_val) = target.get(results_slot) {
                                     if results_val.is_object() {
-                                        let results_arr = results_val.as_object_mut();
+                                        let results_arr = results_val.try_as_object_mut().expect("object value");
                                         let idx_atom = ctx.intern(&idx.to_string());
                                         results_arr.set(idx_atom, argument);
                                     }
@@ -1304,7 +1304,7 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                 }
                 if handler.is_function() {
                     let result = vm.call_function(ctx, handler, &[argument]);
-                    let target_val = reaction.target_promise;
+                    let mut target_val = reaction.target_promise;
                     let target_ok = target_val.is_object()
                         && {
                             let t = target_val.try_as_object().expect("object value");
@@ -1312,7 +1312,7 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                         };
                     if target_ok {
                         if reaction.is_finally {
-                            let target = target_val.as_object_mut();
+                            let target = target_val.try_as_object_mut().expect("object value");
                             match result {
                                 Ok(_) => {
                                     if reaction.is_reject {
@@ -1336,21 +1336,21 @@ pub fn run_microtasks_with_vm(ctx: &mut JSContext, vm: &mut crate::runtime::vm::
                                         .or_else(|| ctx.pending_exception.take())
                                         .unwrap_or_else(JSValue::undefined);
                                     ctx.pending_exception = None;
-                                    let target = target_val.as_object_mut();
+                                    let target = target_val.try_as_object_mut().expect("object value");
                                     reject_promise(ctx, target, exc);
                                 }
                             }
                         }
                     }
                 } else if reaction.target_promise.is_object() {
-                    let target_val = reaction.target_promise;
+                    let mut target_val = reaction.target_promise;
                     let pending = {
                         let t = target_val.try_as_object().expect("object value");
                         t.is_promise() && get_promise_state(ctx, t).is_pending()
                     };
                     if pending {
                         if reaction.is_reject {
-                            reject_promise(ctx, target_val.as_object_mut(), argument);
+                            reject_promise(ctx, target_val.try_as_object_mut().expect("object value"), argument);
                         } else {
                             resolve_promise_value(ctx, vm, target_val, argument);
                         }
@@ -1419,11 +1419,11 @@ pub(crate) fn promise_resolve_internal(
     Ok(promise)
 }
 
-pub(crate) fn reject_pending_promise(ctx: &mut JSContext, promise: JSValue, reason: JSValue) {
+pub(crate) fn reject_pending_promise(ctx: &mut JSContext, mut promise: JSValue, reason: JSValue) {
     if !promise.is_object() {
         return;
     }
-    let target = promise.as_object_mut();
+    let target = promise.try_as_object_mut().expect("object value");
     if target.is_promise() && get_promise_state(ctx, target).is_pending() {
         reject_promise(ctx, target, reason);
     }
@@ -1431,14 +1431,14 @@ pub(crate) fn reject_pending_promise(ctx: &mut JSContext, promise: JSValue, reas
 
 pub fn schedule_async_resume(
     ctx: &mut JSContext,
-    promise: JSValue,
+    mut promise: JSValue,
     holder: JSValue,
     is_reject: bool,
 ) {
     if !promise.is_object() {
         return;
     }
-    let promise = promise.as_object_mut();
+    let promise = promise.try_as_object_mut().expect("object value");
     if !promise.is_promise() {
         return;
     }
@@ -1473,11 +1473,11 @@ pub fn schedule_async_resume(
     }
 }
 
-pub fn schedule_settlement_reaction(ctx: &mut JSContext, source: JSValue, target: JSValue) {
+pub fn schedule_settlement_reaction(ctx: &mut JSContext, mut source: JSValue, target: JSValue) {
     if !source.is_object() {
         return;
     }
-    let source_obj = source.as_object_mut();
+    let source_obj = source.try_as_object_mut().expect("object value");
     if !source_obj.is_promise() {
         return;
     }
@@ -1512,12 +1512,12 @@ pub fn schedule_settlement_reaction(ctx: &mut JSContext, source: JSValue, target
     }
 }
 
-pub fn settle_async_result(ctx: &mut JSContext, promise: JSValue, value: JSValue, is_reject: bool) {
+pub fn settle_async_result(ctx: &mut JSContext, mut promise: JSValue, value: JSValue, is_reject: bool) {
     if !promise.is_object() {
         return;
     }
     if is_reject {
-        let promise_obj = promise.as_object_mut();
+        let promise_obj = promise.try_as_object_mut().expect("object value");
         if promise_obj.is_promise() && get_promise_state(ctx, promise_obj).is_pending() {
             reject_promise(ctx, promise_obj, value);
         }
@@ -1527,9 +1527,9 @@ pub fn settle_async_result(ctx: &mut JSContext, promise: JSValue, value: JSValue
     }
 }
 
-fn handle_all_settled_reaction(ctx: &mut JSContext, vm: &mut crate::runtime::vm::VM, reaction: &Reaction, argument: JSValue) {
+fn handle_all_settled_reaction(ctx: &mut JSContext, _vm: &mut crate::runtime::vm::VM, reaction: &Reaction, argument: JSValue) {
     let idx = reaction.handler.get_int() as usize;
-    let target = reaction.target_promise;
+    let mut target = reaction.target_promise;
     if !target.is_object() {
         return;
     }
@@ -1547,11 +1547,11 @@ fn handle_all_settled_reaction(ctx: &mut JSContext, vm: &mut crate::runtime::vm:
     ctx.runtime_mut().gc_heap_mut().track(r_ptr);
     let result_val = JSValue::new_object(r_ptr);
 
-    let target_obj = target.as_object_mut();
+    let target_obj = target.try_as_object_mut().expect("object value");
     let results_slot = ctx.intern("__allSettled_results__");
-    if let Some(results_val) = target_obj.get(results_slot) {
+    if let Some(mut results_val) = target_obj.get(results_slot) {
         if results_val.is_object() {
-            let results_arr = results_val.as_object_mut();
+            let results_arr = results_val.try_as_object_mut().expect("object value");
             let idx_atom = ctx.intern(&idx.to_string());
             results_arr.set(idx_atom, result_val);
         }

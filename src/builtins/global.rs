@@ -185,7 +185,7 @@ pub fn init_globals(ctx: &mut JSContext) {
     object::init_object(ctx);
 
     if let Some(obj_proto) = ctx.get_object_prototype() {
-        ctx.global().as_object_mut().prototype = Some(obj_proto);
+        ctx.global().try_as_object_mut().expect("object value").prototype = Some(obj_proto);
     }
 
     init_reflect(ctx);
@@ -221,9 +221,9 @@ pub fn init_globals(ctx: &mut JSContext) {
             global_obj.for_each_property(|_atom, value, _attrs| {
                 values.push(value);
             });
-            for value in values {
+            for mut value in values {
                 if value.is_function() {
-                    let func = value.as_function_mut();
+                    let func = value.try_as_function_mut().expect("function value");
                     if func.base.prototype.is_none() {
                         func.base.set_prototype_raw(fn_proto_ptr);
                     }
@@ -252,8 +252,8 @@ pub fn init_globals(ctx: &mut JSContext) {
     }
 
     if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
-        let fn_proto_val = JSValue::new_object(fn_proto_ptr);
-        let fn_proto = fn_proto_val.as_object_mut();
+        let mut fn_proto_val = JSValue::new_object(fn_proto_ptr);
+        let fn_proto = fn_proto_val.try_as_object_mut().expect("object value");
         let has_instance_sym = crate::builtins::symbol::get_symbol_has_instance(ctx);
         let hi_func =
             crate::object::function::JSFunction::new_builtin(ctx.intern("[Symbol.hasInstance]"), 1);
@@ -544,8 +544,8 @@ fn js_disassemble(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     JSValue::new_string(ctx.intern(&output))
 }
 
-fn freeze_template_object(ctx: &mut JSContext, value: JSValue) {
-    let obj = value.as_object_mut();
+fn freeze_template_object(ctx: &mut JSContext, mut value: JSValue) {
+    let obj = value.try_as_object_mut().expect("object value");
     obj.set_extensible(false);
     obj.set_sealed(true);
     obj.set_frozen(true);
@@ -561,7 +561,7 @@ fn template_object(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     if let Some(cached) = ctx.tagged_template_cache.get(&site) {
         return cached.clone();
     }
-    let cooked = args.get(1).cloned().unwrap_or(JSValue::undefined());
+    let mut cooked = args.get(1).cloned().unwrap_or(JSValue::undefined());
     let raw = args.get(2).cloned().unwrap_or(JSValue::undefined());
     if !cooked.is_object() || !raw.is_object() {
         return JSValue::undefined();
@@ -572,7 +572,7 @@ fn template_object(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     desc.enumerable = false;
     desc.configurable = false;
     cooked
-        .as_object_mut()
+        .try_as_object_mut().expect("object value")
         .define_property_ext(raw_atom, desc, true, true, true);
     freeze_template_object(ctx, cooked.clone());
     freeze_template_object(ctx, raw.clone());
@@ -832,7 +832,7 @@ fn global_isfinite(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 }
 
 fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
-    let callee = args.first().copied().unwrap_or(JSValue::undefined());
+    let mut callee = args.first().copied().unwrap_or(JSValue::undefined());
     let source_arg = args.get(1).copied().unwrap_or(JSValue::undefined());
 
     let source = if source_arg.is_string() {
@@ -850,7 +850,7 @@ fn global_eval(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             && realm_global.is_object_like()
             && realm_global.raw_bits() != ctx.global().raw_bits()
         {
-            if let Some(realm_ctx) = callee.as_function_mut().realm_ctx_mut() {
+            if let Some(realm_ctx) = callee.try_as_function_mut().expect("function value").realm_ctx_mut() {
                 ctx.swap_global_environment(realm_ctx);
                 let saved_active_realm = ctx.active_realm();
                 ctx.set_active_realm(realm_context);
@@ -1077,7 +1077,8 @@ fn reflect_delete_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if ctx.pending_exception.is_some() { return JSValue::undefined(); }
         ctx.intern(&s)
     };
-    let result = args[0].as_object_mut().delete(key);
+    let mut target = args[0];
+    let result = target.try_as_object_mut().expect("object value").delete(key);
     JSValue::bool(result)
 }
 
@@ -1144,7 +1145,8 @@ fn reflect_define_property(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     ) {
         return JSValue::bool(allowed);
     }
-    let result = args[0].as_object_mut().define_property(key, desc);
+    let mut target = args[0];
+    let result = target.try_as_object_mut().expect("object value").define_property(key, desc);
     JSValue::bool(result)
 }
 
@@ -1255,7 +1257,8 @@ fn reflect_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 return JSValue::bool(false);
             }
         }
-        let obj_mut = args[0].as_object_mut();
+        let mut target = args[0];
+        let obj_mut = target.try_as_object_mut().expect("object value");
         obj_mut.set_prototype_raw(std::ptr::null_mut());
         return JSValue::bool(true);
     }
@@ -1288,7 +1291,8 @@ fn reflect_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             current = proto.prototype_object();
             depth += 1;
         }
-        let obj_mut = args[0].as_object_mut();
+        let mut target = args[0];
+        let obj_mut = target.try_as_object_mut().expect("object value");
         obj_mut.set_prototype_raw(proto_val.get_ptr());
     }
     JSValue::bool(true)
@@ -1319,7 +1323,8 @@ fn reflect_prevent_extensions(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
         ctx.pending_exception = Some(JSValue::new_object(ptr));
         return JSValue::undefined();
     }
-    args[0].as_object_mut().set_extensible(false);
+    let mut target = args[0];
+    target.try_as_object_mut().expect("object value").set_extensible(false);
     JSValue::bool(true)
 }
 
@@ -1491,9 +1496,9 @@ fn init_reflect(ctx: &mut JSContext) {
     );
     let reflect_ptr = Box::into_raw(Box::new(reflect_obj));
     ctx.runtime_mut().gc_heap_mut().track(reflect_ptr);
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         set_non_enumerable(global_obj, reflect_atom, JSValue::new_object(reflect_ptr));
     }
 }
@@ -1687,9 +1692,9 @@ fn init_console(ctx: &mut JSContext) {
     let console_ptr = Box::into_raw(Box::new(console_obj));
     ctx.runtime_mut().gc_heap_mut().track(console_ptr);
     let console_value = JSValue::new_object(console_ptr);
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         set_non_enumerable(global_obj, console_atom, console_value);
     }
 }
@@ -1946,9 +1951,9 @@ fn init_math(ctx: &mut JSContext) {
     let math_ptr = Box::into_raw(Box::new(math_obj));
     ctx.runtime_mut().gc_heap_mut().track(math_ptr);
     let math_value = JSValue::new_object(math_ptr);
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         set_non_enumerable(global_obj, math_atom, math_value);
     }
 }
@@ -1981,8 +1986,8 @@ fn init_json(ctx: &mut JSContext) {
     json_obj.set(ctx.intern("isRawJSON"), is_raw_json_fn);
     let json_ptr = Box::into_raw(Box::new(json_obj));
     ctx.runtime_mut().gc_heap_mut().track(json_ptr);
-    let json_value = JSValue::new_object(json_ptr);
-    let json_mut = json_value.as_object_mut();
+    let mut json_value = JSValue::new_object(json_ptr);
+    let json_mut = json_value.try_as_object_mut().expect("object value");
     json_mut.define_property(
         tag_key,
         PropertyDescriptor {
@@ -2038,9 +2043,9 @@ fn init_json(ctx: &mut JSContext) {
             set: None,
         },
     );
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         set_non_enumerable(global_obj, json_atom, json_value);
     }
 }
@@ -2529,10 +2534,10 @@ fn init_number(ctx: &mut JSContext) {
     }
     let num_ptr = Box::into_raw(Box::new(num_func));
     ctx.runtime_mut().gc_heap_mut().track_function(num_ptr);
-    let num_value = JSValue::new_function(num_ptr);
-    let global = ctx.global();
+    let mut num_value = JSValue::new_function(num_ptr);
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         set_non_enumerable(global_obj, number_atom, num_value);
     }
 
@@ -2584,7 +2589,7 @@ fn init_number(ctx: &mut JSContext) {
     desc.enumerable = false;
     desc.configurable = false;
     num_value
-        .as_function_mut()
+        .try_as_function_mut().expect("function value")
         .base
         .define_property(ctx.common_atoms.prototype, desc);
 }
@@ -3268,7 +3273,7 @@ fn init_boolean(ctx: &mut JSContext) {
     }
     let bool_ptr = Box::into_raw(Box::new(bool_func));
     ctx.runtime_mut().gc_heap_mut().track_function(bool_ptr);
-    let bool_value = JSValue::new_function(bool_ptr);
+    let mut bool_value = JSValue::new_function(bool_ptr);
 
     let mut proto_obj = JSObject::new_typed(ObjectType::Boolean);
     proto_obj.set(ctx.common_atoms.__value__, JSValue::bool(false));
@@ -3298,7 +3303,7 @@ fn init_boolean(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_bool_prototype(proto_ptr);
 
-    let bool_func_ref = bool_value.as_function_mut();
+    let bool_func_ref = bool_value.try_as_function_mut().expect("function value");
     bool_func_ref.base.define_property(
         ctx.common_atoms.prototype,
         PropertyDescriptor {
@@ -3322,9 +3327,9 @@ fn init_boolean(ctx: &mut JSContext) {
         },
     );
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         set_non_enumerable(global_obj, boolean_atom, bool_value);
     }
 }
@@ -3535,9 +3540,9 @@ fn init_promise(ctx: &mut JSContext) {
 }
 
 fn init_global_funcs(ctx: &mut JSContext) {
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         set_non_enumerable(
             global_obj,
             ctx.intern("isNaN"),
@@ -3645,7 +3650,8 @@ fn init_global_funcs(ctx: &mut JSContext) {
             create_builtin_function(ctx, "cancelAnimationFrame"),
         );
 
-        set_non_enumerable(global_obj, ctx.intern("globalThis"), global);
+        let global_value = ctx.global();
+        set_non_enumerable(global_obj, ctx.intern("globalThis"), global_value);
 
         set_non_enumerable(
             global_obj,

@@ -70,9 +70,9 @@ pub fn init_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(error_ptr);
     let error_value = JSValue::new_function(error_ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, error_atom, error_value);
     }
 
@@ -103,14 +103,14 @@ pub fn init_error(ctx: &mut JSContext) {
     ctx.set_error_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     if ctx.get_builtin_func("error_constructor").is_some() {
-        let f_binding = JSValue::new_function(error_ptr);
-        let f = f_binding.as_function_mut();
+        let mut f_binding = JSValue::new_function(error_ptr);
+        let f = f_binding.try_as_function_mut().expect("function value");
         set_ctor_prototype(&mut f.base, ctx.intern("prototype"), proto_value);
     }
 
     let proto_atom = ctx.intern("ErrorPrototype");
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, proto_atom, proto_value);
     }
 
@@ -131,9 +131,9 @@ pub fn init_error(ctx: &mut JSContext) {
                 let error_ctor_ptr = error_ctor.get_ptr();
                 for name in ["TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "SuppressedError", "AggregateError"] {
                     let atom = ctx.intern(name);
-                    if let Some(ctor_val) = global.try_as_object().expect("object value").get(atom) {
+                    if let Some(mut ctor_val) = global.try_as_object().expect("object value").get(atom) {
                         if ctor_val.is_function() {
-                            let ctor = ctor_val.as_function_mut();
+                            let ctor = ctor_val.try_as_function_mut().expect("function value");
                             ctor.base.set_prototype_raw(error_ctor_ptr);
                         }
                     }
@@ -172,9 +172,9 @@ fn init_type_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 
@@ -199,8 +199,8 @@ fn init_type_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_type_error_prototype(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -253,13 +253,13 @@ fn init_reference_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_reference_error_prototype(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 }
@@ -313,13 +313,13 @@ fn init_syntax_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_syntax_error_prototype(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 }
@@ -373,13 +373,13 @@ fn init_range_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_range_error_prototype(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 }
@@ -413,9 +413,9 @@ fn init_uri_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 
@@ -440,8 +440,8 @@ fn init_uri_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_uri_error_prototype(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -474,9 +474,9 @@ fn init_eval_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 
@@ -501,8 +501,8 @@ fn init_eval_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
     ctx.set_eval_error_prototype(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -714,9 +714,9 @@ fn init_suppressed_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 
@@ -740,8 +740,8 @@ fn init_suppressed_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_suppressed_error_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 
@@ -799,9 +799,9 @@ fn init_aggregate_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let value = JSValue::new_function(ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        let global_obj = global.as_object_mut();
+        let global_obj = global.try_as_object_mut().expect("object value");
         crate::builtins::global::set_non_enumerable(global_obj, atom, value);
     }
 
@@ -825,8 +825,8 @@ fn init_aggregate_error(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_aggregate_error_prototype(proto_ptr);
     let proto_value = JSValue::new_object(proto_ptr);
-    let ctor_binding = JSValue::new_function(ptr);
-    let ctor = ctor_binding.as_function_mut();
+    let mut ctor_binding = JSValue::new_function(ptr);
+    let ctor = ctor_binding.try_as_function_mut().expect("function value");
     set_ctor_prototype(&mut ctor.base, ctx.intern("prototype"), proto_value);
 }
 

@@ -738,9 +738,9 @@ pub fn init_intl(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track_function(intl_ptr);
     let intl_value = JSValue::new_function(intl_ptr);
 
-    let global = ctx.global();
+    let mut global = ctx.global();
     if global.is_object() {
-        global.as_object_mut().set(ctx.intern("Intl"), intl_value);
+        global.try_as_object_mut().expect("object value").set(ctx.intern("Intl"), intl_value);
     }
 }
 
@@ -801,8 +801,8 @@ fn init_collator(ctx: &mut JSContext) -> JSValue {
     let ptr = Box::into_raw(Box::new(ctor));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
     let ctor_val = JSValue::new_function(ptr);
-    let proto_binding = JSValue::new_object(proto_ptr);
-    let proto_obj = proto_binding.as_object_mut();
+    let mut proto_binding = JSValue::new_object(proto_ptr);
+    let proto_obj = proto_binding.try_as_object_mut().expect("object value");
     proto_obj.set(ctx.common_atoms.constructor, ctor_val);
     ctor_val
 }
