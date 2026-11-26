@@ -39,6 +39,7 @@ fn create_array_buffer_with_max(
 
     obj.set_array_buffer_data(data);
     let ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -119,6 +120,7 @@ fn create_typed_array(
     );
 
     let ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     Ok(JSValue::new_object(ptr))
 }
 
@@ -361,6 +363,7 @@ fn data_view_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     }
 
     let ptr = Box::into_raw(Box::new(obj));
+    ctx.runtime_mut().gc_heap_mut().track(ptr);
     JSValue::new_object(ptr)
 }
 
@@ -3011,4 +3014,43 @@ pub fn register_builtins(ctx: &mut JSContext) {
         "typedarray_species_get",
         HostFunction::new("get [Symbol.species]", 0, typedarray_species_get),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_tracked_after_gc(ctx: &mut JSContext, value: JSValue) {
+        assert!(value.is_object());
+        let ptr = value.get_ptr();
+        let slot = value.as_object().gc_slot as usize;
+        ctx.runtime_mut().gc_heap_mut().extra_roots.push(value);
+        let mut vm = crate::runtime::vm::VM::new();
+        vm.run_gc(ctx);
+        assert_eq!(ctx.runtime().gc_heap().tracked_ptr_at(slot), Some(ptr));
+    }
+
+    #[test]
+    fn test_buffer_views_and_typed_arrays_are_tracked() {
+        let mut rt = crate::JSRuntime::new();
+        let mut ctx = rt.new_context();
+        for source in [
+            "new ArrayBuffer(8)",
+            "new Uint8Array(8)",
+            "new DataView(new ArrayBuffer(8))",
+        ] {
+            let value = crate::eval(&mut ctx, source).unwrap();
+            assert_tracked_after_gc(&mut ctx, value);
+        }
+
+        let typed_array = crate::eval(&mut ctx, "new Uint8Array(8)").unwrap();
+        ctx.runtime_mut().gc_heap_mut().extra_roots.push(typed_array);
+        let buffer = typed_array.as_object().get(ctx.intern("buffer")).unwrap();
+        assert_tracked_after_gc(&mut ctx, buffer);
+
+        let view = crate::eval(&mut ctx, "new DataView(new ArrayBuffer(8))").unwrap();
+        ctx.runtime_mut().gc_heap_mut().extra_roots.push(view);
+        let buffer = view.as_object().get(ctx.intern("buffer")).unwrap();
+        assert_tracked_after_gc(&mut ctx, buffer);
+    }
 }
