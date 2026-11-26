@@ -27,6 +27,7 @@ fn skip_ws_bulk(input: &[u8], mut pos: usize) -> usize {
 
 pub struct JsonParser<'a> {
     input: &'a [u8],
+    text: &'a str,
     pos: usize,
 }
 
@@ -34,6 +35,7 @@ impl<'a> JsonParser<'a> {
     pub fn new(input: &'a str) -> Self {
         JsonParser {
             input: input.as_bytes(),
+            text: input,
             pos: 0,
         }
     }
@@ -180,21 +182,21 @@ impl<'a> JsonParser<'a> {
                     if n <= i64::MAX as u64 + 1 {
                         n.wrapping_neg() as i64
                     } else {
-                        let s = unsafe { std::str::from_utf8_unchecked(bytes) };
+                        let s = &self.text[start..self.pos];
                         let f: f64 = s.parse().map_err(|_| "JSON: invalid number".to_string())?;
                         return Ok(JSValue::new_float(f));
                     }
                 } else if n <= i64::MAX as u64 {
                     n as i64
                 } else {
-                    let s = unsafe { std::str::from_utf8_unchecked(bytes) };
+                    let s = &self.text[start..self.pos];
                     let f: f64 = s.parse().map_err(|_| "JSON: invalid number".to_string())?;
                     return Ok(JSValue::new_float(f));
                 };
                 return Ok(JSValue::new_int(i));
             }
 
-            let num_str = unsafe { std::str::from_utf8_unchecked(&self.input[start..self.pos]) };
+            let num_str = &self.text[start..self.pos];
             if let Ok(i) = num_str.parse::<i64>() {
                 return Ok(JSValue::new_int(i));
             }
@@ -204,7 +206,7 @@ impl<'a> JsonParser<'a> {
             return Ok(JSValue::new_float(f));
         }
 
-        let num_str = unsafe { std::str::from_utf8_unchecked(&self.input[start..self.pos]) };
+        let num_str = &self.text[start..self.pos];
         let f: f64 = num_str
             .parse()
             .map_err(|_| "JSON: invalid number".to_string())?;
@@ -227,7 +229,7 @@ impl<'a> JsonParser<'a> {
                     ));
                 }
             }
-            let s = unsafe { std::str::from_utf8_unchecked(slice) };
+            let s = &self.text[start..first_special];
             let atom = ctx.intern(s);
             self.pos = first_special + 1;
             return Ok(JSValue::new_string(atom));
@@ -243,8 +245,7 @@ impl<'a> JsonParser<'a> {
                     ));
                 }
             }
-            let s = unsafe { std::str::from_utf8_unchecked(slice) };
-            s.to_string()
+            self.text[start..first_special].to_string()
         } else {
             String::new()
         };
@@ -286,7 +287,7 @@ impl<'a> JsonParser<'a> {
                         }
                     }
 
-                    buf.push_str(unsafe { std::str::from_utf8_unchecked(span) });
+                    buf.push_str(&self.text[self.pos..next_special]);
                     self.pos = next_special;
                 }
                 _ => unreachable!(

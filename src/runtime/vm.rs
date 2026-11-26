@@ -18385,17 +18385,20 @@ impl VM {
             } else if let Some(ref s) = str_a {
                 combined[len_b..total].copy_from_slice(s.as_bytes());
             }
-            let atom = ctx.intern(unsafe { std::str::from_utf8_unchecked(&combined[..total]) });
+            let atom = match std::str::from_utf8(&combined[..total]) {
+                Ok(s) => ctx.intern(s),
+                Err(_) => ctx.intern(&String::from_utf8_lossy(&combined[..total])),
+            };
             JSValue::new_string(atom)
         } else {
             let mut combined = String::with_capacity(total);
             if let Some(buf) = buf_b {
-                combined.push_str(unsafe { std::str::from_utf8_unchecked(&buf[..len_b]) });
+                combined.push_str(&String::from_utf8_lossy(&buf[..len_b]));
             } else if let Some(ref s) = str_b {
                 combined.push_str(s);
             }
             if let Some(buf) = buf_a {
-                combined.push_str(unsafe { std::str::from_utf8_unchecked(&buf[..len_a]) });
+                combined.push_str(&String::from_utf8_lossy(&buf[..len_a]));
             } else if let Some(ref s) = str_a {
                 combined.push_str(s);
             }

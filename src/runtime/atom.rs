@@ -103,8 +103,9 @@ impl AtomTable {
             let mut buf = [0u8; 64];
             buf[..a.len()].copy_from_slice(a.as_bytes());
             buf[a.len()..total_len].copy_from_slice(b.as_bytes());
-            let s = unsafe { std::str::from_utf8_unchecked(&buf[..total_len]) };
-            return self.intern(s);
+            if let Ok(s) = std::str::from_utf8(&buf[..total_len]) {
+                return self.intern(s);
+            }
         }
 
         let mut combined = String::with_capacity(total_len);
@@ -125,16 +126,17 @@ impl AtomTable {
             buf[..a_len].copy_from_slice(a_str.as_bytes());
             buf[a_len..total].copy_from_slice(b_str.as_bytes());
 
-            let s = unsafe { std::str::from_utf8_unchecked(&buf[..total]) };
-            self.intern(s)
-        } else {
-            let a_owned = a_str.to_string();
-            let b_owned = b_str.to_string();
-            let mut combined = String::with_capacity(total);
-            combined.push_str(&a_owned);
-            combined.push_str(&b_owned);
-            self.intern(&combined)
+            if let Ok(s) = std::str::from_utf8(&buf[..total]) {
+                return self.intern(s);
+            }
         }
+
+        let a_owned = a_str.to_string();
+        let b_owned = b_str.to_string();
+        let mut combined = String::with_capacity(total);
+        combined.push_str(&a_owned);
+        combined.push_str(&b_owned);
+        self.intern(&combined)
     }
 
     pub fn get(&self, atom: Atom) -> &str {
