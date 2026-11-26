@@ -329,9 +329,10 @@ pub fn init_object(ctx: &mut JSContext) {
     let object_value = JSValue::new_function(object_ptr);
 
     if let Some(op) = ctx.get_object_prototype() {
-        unsafe {
-            (*op).set(ctx.common_atoms.constructor, object_value);
-        }
+        let op_val = JSValue::new_object(op as usize);
+        op_val
+            .as_object_mut()
+            .set(ctx.common_atoms.constructor, object_value);
     }
     let global = ctx.global();
     if global.is_object() {
@@ -1048,10 +1049,10 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             ctx.pending_exception = Some(JSValue::new_object(eptr));
             return JSValue::undefined();
         }
-        let mut current = new_proto;
+        let mut current = args[1].as_object().prototype_object();
         let mut depth = 0u32;
-        while let Some(ptr) = unsafe { current.as_ref() }.and_then(|o| o.prototype) {
-            if ptr == obj as *mut JSObject || depth > 1000 {
+        while let Some(proto) = current {
+            if proto as *const JSObject as *mut JSObject == obj as *mut JSObject || depth > 1000 {
                 let mut err = crate::object::object::JSObject::new_typed(
                     crate::object::object::ObjectType::Error,
                 );
@@ -1067,7 +1068,7 @@ fn object_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 ctx.pending_exception = Some(JSValue::new_object(eptr));
                 return JSValue::undefined();
             }
-            current = ptr;
+            current = proto.prototype_object();
             depth += 1;
         }
         obj.prototype = Some(new_proto);
@@ -1150,15 +1151,13 @@ fn object_to_string(_ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     }
                     if tag == "Number" || tag == "Boolean" {
                         if let Some(date_proto) = _ctx.get_date_prototype() {
-                            let mut p = obj.prototype;
+                            let mut p = obj.prototype_object();
                             while let Some(pp) = p {
-                                if pp == date_proto {
+                                if std::ptr::eq(pp as *const JSObject, date_proto as *const JSObject) {
                                     tag = "Date";
                                     break;
                                 }
-                                unsafe {
-                                    p = (*pp).prototype;
-                                }
+                                p = pp.prototype_object();
                             }
                         }
                     }
