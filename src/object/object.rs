@@ -732,6 +732,7 @@ pub struct ObjectExtra {
     pub array_buffer_data: Option<usize>,
 
     pub typed_array_kind: Option<TypedArrayKind>,
+    pub typed_array_tracks_length: bool,
 
     pub proxy_target: Option<JSValue>,
     pub proxy_handler: Option<JSValue>,
@@ -798,6 +799,7 @@ impl JSObject {
                 compiled_regex: None,
                 array_buffer_data: None,
                 typed_array_kind: None,
+                typed_array_tracks_length: false,
                 proxy_target: None,
                 proxy_handler: None,
                 proxy_callable: false,
@@ -1221,6 +1223,16 @@ impl JSObject {
 
     pub fn set_typed_array_kind(&mut self, kind: TypedArrayKind) {
         self.ensure_extra().typed_array_kind = Some(kind);
+    }
+
+    pub fn typed_array_tracks_length(&self) -> bool {
+        self.extra
+            .as_ref()
+            .map_or(false, |e| e.typed_array_tracks_length)
+    }
+
+    pub fn set_typed_array_tracks_length(&mut self, tracks: bool) {
+        self.ensure_extra().typed_array_tracks_length = tracks;
     }
 
     #[inline]

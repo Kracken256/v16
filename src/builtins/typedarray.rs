@@ -6,18 +6,36 @@ use crate::value::JSValue;
 #[derive(Debug)]
 pub struct ArrayBufferData {
     pub data: Vec<u8>,
+    pub max_byte_length: Option<usize>,
 }
 
 fn create_array_buffer(ctx: &mut JSContext, length: usize) -> JSValue {
+    create_array_buffer_with_max(ctx, length, None)
+}
+
+fn create_resizable_array_buffer(ctx: &mut JSContext, length: usize, max_byte_length: usize) -> JSValue {
+    create_array_buffer_with_max(ctx, length, Some(max_byte_length))
+}
+
+fn create_array_buffer_with_max(
+    ctx: &mut JSContext,
+    length: usize,
+    max_byte_length: Option<usize>,
+) -> JSValue {
     let mut obj = JSObject::new_typed(ObjectType::ArrayBuffer);
     if let Some(proto_ptr) = ctx.get_array_buffer_prototype() {
         obj.prototype = Some(proto_ptr);
     }
     let data = ArrayBufferData {
         data: vec![0; length],
+        max_byte_length,
     };
 
-    obj.set(ctx.intern("byteLength"), JSValue::new_int(length as i64));
+    crate::builtins::global::set_non_enumerable(
+        &mut obj,
+        ctx.intern("byteLength"),
+        JSValue::new_int(length as i64),
+    );
 
     let data_ptr = Box::into_raw(Box::new(data));
     obj.set_array_buffer_data(data_ptr as usize);
@@ -55,6 +73,7 @@ fn create_typed_array(
 
     let byte_length = buffer_data.data.len();
     let remaining_bytes = byte_length.saturating_sub(byte_offset);
+    let tracks_length = length.is_none() && buffer_data.max_byte_length.is_some();
 
     let element_length = match length {
         Some(len) => len,
@@ -68,6 +87,7 @@ fn create_typed_array(
 
     let mut obj = JSObject::new_typed(ObjectType::TypedArray);
     obj.set_typed_array_kind(kind);
+    obj.set_typed_array_tracks_length(tracks_length);
     if let Some(ta_proto_ptr) = ctx.get_typed_array_prototype_for_kind(kind.kind_index()) {
         obj.prototype = Some(ta_proto_ptr);
     } else if let Some(ta_proto_ptr) = ctx.get_typed_array_prototype() {
@@ -228,6 +248,7 @@ fn array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
         i as usize
     };
+    let mut max_byte_length: Option<usize> = None;
     if let Some(opts) = args.get(1) {
         if opts.is_object() {
             if let Some(mbl) = opts.as_object().get(ctx.intern("maxByteLength")) {
@@ -241,11 +262,21 @@ fn array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                         array_buffer_range_error(ctx, "Invalid array buffer max byte length");
                         return JSValue::undefined();
                     }
+                    max_byte_length = Some(i as usize);
                 }
             }
         }
     }
-    create_array_buffer(ctx, length)
+    match max_byte_length {
+        Some(max) => {
+            if max < length {
+                array_buffer_range_error(ctx, "Invalid array buffer max byte length");
+                return JSValue::undefined();
+            }
+            create_resizable_array_buffer(ctx, length, max)
+        }
+        None => create_array_buffer(ctx, length),
+    }
 }
 
 fn shared_array_buffer_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -512,8 +543,14 @@ fn typed_array_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue
         return JSValue::undefined();
     }
     let obj = args[0].as_object();
-    obj.get(ctx.intern("byteLength"))
-        .unwrap_or(JSValue::undefined())
+    if obj.obj_type() != ObjectType::TypedArray {
+        return JSValue::undefined();
+    }
+    match typed_array_view_state(ctx, obj) {
+        Some(state) if !state.out_of_bounds => JSValue::new_int(state.byte_length as i64),
+        Some(_) => JSValue::new_int(0),
+        None => JSValue::undefined(),
+    }
 }
 
 fn typed_array_get_byte_offset(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -530,8 +567,10 @@ fn typed_array_get_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let obj = args[0].as_object();
-    obj.get(ctx.intern("length"))
-        .unwrap_or(JSValue::undefined())
+    if obj.obj_type() != ObjectType::TypedArray {
+        return JSValue::undefined();
+    }
+    JSValue::new_int(ta_get_length(ctx, obj) as i64)
 }
 
 fn typed_array_to_string_tag(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -553,8 +592,94 @@ fn array_buffer_get_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
         return JSValue::undefined();
     }
     let obj = args[0].as_object();
-    obj.get(ctx.intern("byteLength"))
+    if obj.obj_type() != ObjectType::ArrayBuffer {
+        return JSValue::undefined();
+    }
+    get_array_buffer_data(obj)
+        .map(|d| JSValue::new_int(d.data.len() as i64))
         .unwrap_or(JSValue::undefined())
+}
+
+fn array_buffer_get_resizable(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if args.is_empty() || !args[0].is_object() {
+        return JSValue::undefined();
+    }
+    let obj = args[0].as_object();
+    if obj.obj_type() != ObjectType::ArrayBuffer {
+        return JSValue::undefined();
+    }
+    get_array_buffer_data(obj)
+        .map(|d| JSValue::bool(d.max_byte_length.is_some()))
+        .unwrap_or(JSValue::undefined())
+}
+
+fn array_buffer_get_max_byte_length(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    if args.is_empty() || !args[0].is_object() {
+        return JSValue::undefined();
+    }
+    let obj = args[0].as_object();
+    if obj.obj_type() != ObjectType::ArrayBuffer {
+        return JSValue::undefined();
+    }
+    match get_array_buffer_data(obj) {
+        Some(d) => match d.max_byte_length {
+            Some(max) => JSValue::new_int(max as i64),
+            None => JSValue::new_int(d.data.len() as i64),
+        },
+        None => JSValue::undefined(),
+    }
+}
+
+fn array_buffer_resize(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this_val = args.first().copied().unwrap_or(JSValue::undefined());
+    if !this_val.is_object() || this_val.as_object().obj_type() != ObjectType::ArrayBuffer {
+        throw_type_error(
+            ctx,
+            "ArrayBuffer.prototype.resize called on incompatible receiver",
+        );
+        return JSValue::undefined();
+    }
+    let obj = this_val.as_object_mut();
+    let max_byte_length = match get_array_buffer_data(obj) {
+        Some(d) => match d.max_byte_length {
+            Some(max) => max,
+            None => {
+                throw_type_error(ctx, "ArrayBuffer is not resizable");
+                return JSValue::undefined();
+            }
+        },
+        None => {
+            throw_type_error(ctx, "ArrayBuffer is not resizable");
+            return JSValue::undefined();
+        }
+    };
+    let new_length = if args.len() < 2 || args[1].is_undefined() {
+        0
+    } else {
+        let n = match crate::builtins::global::js_to_number_value(ctx, &args[1]) {
+            Ok(n) => n,
+            Err(()) => return JSValue::undefined(),
+        };
+        let i = if n.is_nan() { 0.0 } else { n.trunc() };
+        if i < 0.0 || i > 2147483647.0 {
+            array_buffer_range_error(ctx, "Invalid array buffer length");
+            return JSValue::undefined();
+        }
+        i as usize
+    };
+    if new_length > max_byte_length {
+        array_buffer_range_error(ctx, "Invalid array buffer length");
+        return JSValue::undefined();
+    }
+    if let Some(data) = get_array_buffer_data(obj) {
+        data.data.resize(new_length, 0);
+    }
+    crate::builtins::global::set_non_enumerable(
+        obj,
+        ctx.intern("byteLength"),
+        JSValue::new_int(new_length as i64),
+    );
+    JSValue::undefined()
 }
 
 fn array_buffer_slice(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -1080,9 +1205,61 @@ fn ta_check_this(args: &[JSValue], ctx: &mut JSContext) -> bool {
     true
 }
 
-pub fn ta_get_length(ctx: &mut JSContext, obj: &JSObject) -> usize {
-    obj.get(ctx.common_atoms.length)
+pub struct TypedArrayViewState {
+    pub byte_offset: usize,
+    pub length: usize,
+    pub byte_length: usize,
+    pub out_of_bounds: bool,
+}
+
+pub fn typed_array_view_state(ctx: &mut JSContext, obj: &JSObject) -> Option<TypedArrayViewState> {
+    let kind = obj.get_typed_array_kind()?;
+    let bytes_per_element = kind.bytes_per_element();
+    let byte_offset = obj
+        .get(ctx.intern("byteOffset"))
         .map(|v| v.get_int() as usize)
+        .unwrap_or(0);
+    let buffer = obj.get(ctx.intern("buffer"))?;
+    if !buffer.is_object() {
+        return None;
+    }
+    let buffer_obj = buffer.as_object();
+    let buffer_byte_length = get_array_buffer_data(&buffer_obj)?.data.len();
+    if obj.typed_array_tracks_length() {
+        if byte_offset > buffer_byte_length {
+            return Some(TypedArrayViewState {
+                byte_offset,
+                length: 0,
+                byte_length: 0,
+                out_of_bounds: true,
+            });
+        }
+        let length = (buffer_byte_length - byte_offset) / bytes_per_element;
+        Some(TypedArrayViewState {
+            byte_offset,
+            length,
+            byte_length: length * bytes_per_element,
+            out_of_bounds: false,
+        })
+    } else {
+        let length = obj
+            .get(ctx.common_atoms.length)
+            .map(|v| v.get_int() as usize)
+            .unwrap_or(0);
+        let byte_length = length * bytes_per_element;
+        let out_of_bounds = byte_offset + byte_length > buffer_byte_length;
+        Some(TypedArrayViewState {
+            byte_offset,
+            length,
+            byte_length,
+            out_of_bounds,
+        })
+    }
+}
+
+pub fn ta_get_length(ctx: &mut JSContext, obj: &JSObject) -> usize {
+    typed_array_view_state(ctx, obj)
+        .map(|state| if state.out_of_bounds { 0 } else { state.length })
         .unwrap_or(0)
 }
 
@@ -1771,7 +1948,18 @@ fn ta_iterator_next_impl(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     }
     let target_obj = target.as_object();
-    let len = ta_get_length(ctx, target_obj);
+    let state = match typed_array_view_state(ctx, target_obj) {
+        Some(state) => state,
+        None => {
+            throw_type_error(ctx, "Method called on incompatible receiver");
+            return JSValue::undefined();
+        }
+    };
+    if state.out_of_bounds {
+        throw_type_error(ctx, "TypedArray is out of bounds");
+        return JSValue::undefined();
+    }
+    let len = state.length;
     if iter_idx < len {
         let value = ta_get_element(ctx, target_obj, iter_idx).unwrap_or(JSValue::undefined());
         let result_value = match kind {
@@ -2019,6 +2207,24 @@ pub fn init_typed_array(ctx: &mut JSContext) {
     ab_proto.set(
         ctx.intern("slice"),
         create_builtin_function(ctx, "arraybuffer_slice"),
+    );
+    let ab_resize = create_builtin_function(ctx, "arraybuffer_resize");
+    crate::builtins::global::set_non_enumerable(&mut ab_proto, ctx.intern("resize"), ab_resize);
+    let ab_resizable = create_builtin_function(ctx, "arraybuffer_resizable");
+    ab_proto.define_accessor_flags(
+        ctx.intern("resizable"),
+        Some(ab_resizable),
+        None,
+        false,
+        true,
+    );
+    let ab_max_byte_length = create_builtin_function(ctx, "arraybuffer_max_byte_length");
+    ab_proto.define_accessor_flags(
+        ctx.intern("maxByteLength"),
+        Some(ab_max_byte_length),
+        None,
+        false,
+        true,
     );
     ab_proto.set(ctx.intern("constructor"), ab_func);
     let ab_to_string_tag_key = crate::builtins::symbol::get_symbol_to_string_tag_prop_key(ctx);
@@ -2519,6 +2725,21 @@ pub fn register_builtins(ctx: &mut JSContext) {
     ctx.register_builtin(
         "arraybuffer_byteLength",
         HostFunction::method("byteLength", 0, array_buffer_get_byte_length),
+    );
+
+    ctx.register_builtin(
+        "arraybuffer_resizable",
+        HostFunction::method("resizable", 0, array_buffer_get_resizable),
+    );
+
+    ctx.register_builtin(
+        "arraybuffer_max_byte_length",
+        HostFunction::method("maxByteLength", 0, array_buffer_get_max_byte_length),
+    );
+
+    ctx.register_builtin(
+        "arraybuffer_resize",
+        HostFunction::method("resize", 1, array_buffer_resize),
     );
 
     ctx.register_builtin(
