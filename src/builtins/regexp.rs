@@ -28,6 +28,11 @@ pub fn init_regexp(ctx: &mut JSContext) {
         HostFunction::ctor("RegExp", 2, regexp_constructor),
     );
 
+    ctx.register_builtin(
+        "regexp_get_flags",
+        HostFunction::method("get flags", 0, regexp_get_flags),
+    );
+
     let regexp_func = create_builtin_function(ctx, "regexp_constructor");
     crate::builtins::symbol::install_species_accessor(ctx, &regexp_func);
 
@@ -92,6 +97,21 @@ pub fn init_regexp(ctx: &mut JSContext) {
     set_ne(&mut proto_obj, ctx.intern("dotAll"), JSValue::bool(false));
     set_ne(&mut proto_obj, ctx.intern("lastIndex"), JSValue::new_int(0));
     set_ne(&mut proto_obj, ctx.common_atoms.constructor, regexp_func.clone());
+
+    let flags_getter = create_builtin_function(ctx, "regexp_get_flags");
+    {
+        let entry = crate::object::object::AccessorEntry {
+            get: Some(flags_getter),
+            set: None,
+            enumerable: false,
+            configurable: true,
+        };
+        proto_obj
+            .ensure_extra()
+            .accessors
+            .get_or_insert_with(|| Box::new(crate::util::FxHashMap::default()))
+            .insert(ctx.intern("flags"), entry);
+    }
 
     if let Some(obj_proto_ptr) = ctx.get_object_prototype() {
         proto_obj.prototype = Some(obj_proto_ptr);
@@ -296,6 +316,35 @@ pub fn create_regexp_object_precompiled(
 
     let ptr = Box::into_raw(Box::new(regexp_obj)) as usize;
     JSValue::new_object(ptr)
+}
+
+fn regexp_get_flags(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
+    let this = args.get(0).copied().unwrap_or(JSValue::undefined());
+    if !this.is_object_like() {
+        return crate::builtins::global::throw_type_error(
+            ctx,
+            "RegExp.prototype.flags getter called on non-object",
+        );
+    }
+    let entries = [
+        ("hasIndices", 'd'),
+        ("global", 'g'),
+        ("ignoreCase", 'i'),
+        ("multiline", 'm'),
+        ("dotAll", 's'),
+        ("unicode", 'u'),
+        ("unicodeSets", 'v'),
+        ("sticky", 'y'),
+    ];
+    let mut flags = String::new();
+    for (name, letter) in entries {
+        let atom = ctx.intern(name);
+        let value = this.as_object().get(atom).unwrap_or(JSValue::undefined());
+        if value.is_truthy() {
+            flags.push(letter);
+        }
+    }
+    JSValue::new_string(ctx.intern(&flags))
 }
 
 pub fn regexp_test(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
