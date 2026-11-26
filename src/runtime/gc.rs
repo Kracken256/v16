@@ -473,6 +473,10 @@ impl GcHeap {
 
         self.mark_value(&func.arrow_super);
         self.mark_value(&func.arrow_new_target);
+        if !func.arrow_enclosing_ctor_ptr.is_null() {
+            let enclosing_ctor = JSValue::new_function(func.arrow_enclosing_ctor_ptr);
+            self.mark_value(&enclosing_ctor);
+        }
         self.mark_value(&func.home_object);
         self.mark_value(&func.arrow_super_base);
 
@@ -1452,6 +1456,33 @@ mod tests {
         unsafe {
             let _ = Box::from_raw(func_ptr);
             let _ = Box::from_raw(this_ptr);
+        }
+    }
+
+    #[test]
+    fn test_gc_trace_function_arrow_enclosing_ctor() {
+        let mut heap = GcHeap::new();
+
+        let ctor = JSFunction::new_builtin(Atom(0), 0);
+        let ctor_ptr = Box::into_raw(Box::new(ctor));
+        heap.track_function(ctor_ptr);
+
+        let mut arrow = JSFunction::new_builtin(Atom(0), 0);
+        arrow.arrow_enclosing_ctor_ptr = ctor_ptr;
+        let arrow_ptr = Box::into_raw(Box::new(arrow));
+        heap.track_function(arrow_ptr);
+
+        let roots = vec![JSValue::new_function(arrow_ptr)];
+
+        let freed = heap.run_gc(&roots);
+
+        assert_eq!(freed, 0);
+        assert_eq!(heap.object_count(), 2);
+
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(arrow_ptr);
+            let _ = Box::from_raw(ctor_ptr);
         }
     }
 
