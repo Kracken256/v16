@@ -4585,11 +4585,57 @@ impl CodeGenerator {
             }
 
             if let Some(init) = &d.init {
+                let with_resolved = if decl.kind == VariableKind::Var {
+                    if let BindingPattern::Identifier(name) = &d.id {
+                        if !self.with_scopes.is_empty() {
+                            let is_with_target = match self.lookup_var_scope_index(name) {
+                                Some(index) => self.with_applies_to_local(name, index),
+                                None => self.with_applies_to_outer(name),
+                            };
+                            if is_with_target {
+                                let object_reg = self.emit_with_resolve(name, ctx);
+                                Some((name.clone(), object_reg))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let reg = self.gen_expression_with_name(init, &d.id, ctx)?;
                 if decl.kind.is_using() {
                     self.emit_add_disposable_resource(reg, decl.kind.is_await_using())?;
                 }
-                self.gen_binding_pattern(&d.id, reg, decl.kind, ctx)?;
+                match with_resolved {
+                    Some((name, object_reg)) => {
+                        self.declare_var(&name, decl.kind);
+                        for scope in self.scope_stack.iter_mut().rev() {
+                            if let Some(entry) = scope.get_mut(&name) {
+                                entry.initialized = true;
+                                break;
+                            }
+                        }
+                        let fallback_jump = self.emit_jump_if_nullish(object_reg);
+                        self.emit_with_set_resolved(object_reg, reg, &name, ctx);
+                        self.emit(Opcode::Jump);
+                        let end_jump = self.code.len();
+                        self.emit_i32(0);
+                        let fallback = self.code.len();
+                        self.patch_jump(fallback_jump, fallback);
+                        self.gen_with_store(&name, reg, ctx)?;
+                        let end = self.code.len();
+                        self.patch_jump(end_jump, end);
+                        self.free_register(object_reg);
+                    }
+                    None => {
+                        self.gen_binding_pattern(&d.id, reg, decl.kind, ctx)?;
+                    }
+                }
                 if self.is_global_scope() && !self.is_eval && decl.kind != VariableKind::Var {
                     let mut names = std::collections::HashSet::new();
                     Self::collect_binding_pattern_bindings(&d.id, &mut names);
