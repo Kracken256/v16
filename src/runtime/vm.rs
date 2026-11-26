@@ -4383,17 +4383,25 @@ impl VM {
         ctx: &mut JSContext,
         js_func: &crate::object::function::JSFunction,
     ) -> Option<*mut crate::object::object::JSObject> {
-        let intrinsic = if js_func.is_async() {
-            ctx.get_async_generator_prototype()
-        } else {
-            ctx.get_generator_prototype()
-        };
         if let Some(proto_val) = js_func.base.get(ctx.common_atoms.prototype) {
             if proto_val.is_object_like() {
                 return Some(proto_val.get_ptr() as *mut crate::object::object::JSObject);
             }
         }
-        intrinsic
+        let current = ctx as *mut JSContext as usize;
+        if js_func.realm_context != 0 && js_func.realm_context != current {
+            let realm_ctx = unsafe { &*(js_func.realm_context as *const JSContext) };
+            return if js_func.is_async() {
+                realm_ctx.get_async_generator_prototype()
+            } else {
+                realm_ctx.get_generator_prototype()
+            };
+        }
+        if js_func.is_async() {
+            ctx.get_async_generator_prototype()
+        } else {
+            ctx.get_generator_prototype()
+        }
     }
 
     fn frame_is_derived_constructor(frame: &CallFrame) -> bool {
