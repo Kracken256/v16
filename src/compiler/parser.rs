@@ -3337,9 +3337,6 @@ impl Parser {
                     };
                     if is_proto {
                         proto_data_count += 1;
-                        if proto_data_count > 1 {
-                            return Err(self.error("Duplicate __proto__ fields are not allowed"));
-                        }
                     }
                 }
                 self.advance();
@@ -3403,6 +3400,7 @@ impl Parser {
             properties,
             trailing_comma_after_spread,
             parenthesized: false,
+            has_duplicate_proto: proto_data_count > 1,
         }))
     }
 

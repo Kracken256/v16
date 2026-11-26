@@ -125,6 +125,7 @@ pub struct ObjectExpression {
     pub properties: Vec<Property>,
     pub trailing_comma_after_spread: bool,
     pub parenthesized: bool,
+    pub has_duplicate_proto: bool,
 }
 
 #[derive(Debug, Clone)]

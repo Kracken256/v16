@@ -1417,6 +1417,9 @@ fn validate_expression(expr: &Expression, ctx: Ctx) -> Result<(), String> {
             Ok(())
         }
         Expression::ObjectExpression(obj) => {
+            if obj.has_duplicate_proto {
+                return Err("SyntaxError: Duplicate __proto__ fields are not allowed".to_string());
+            }
             for prop in &obj.properties {
                 match prop {
                     Property::Property {
