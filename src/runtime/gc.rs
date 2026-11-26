@@ -456,6 +456,10 @@ impl GcHeap {
             self.mark(proto_ptr);
         }
 
+        if !func.cached_prototype_ptr.is_null() {
+            self.mark(func.cached_prototype_ptr);
+        }
+
         if let Some(ref env) = func.with_env {
             self.mark_value(env);
         }
@@ -1483,6 +1487,33 @@ mod tests {
         unsafe {
             let _ = Box::from_raw(arrow_ptr);
             let _ = Box::from_raw(ctor_ptr);
+        }
+    }
+
+    #[test]
+    fn test_gc_trace_function_cached_prototype() {
+        let mut heap = GcHeap::new();
+
+        let proto_obj = JSObject::new();
+        let proto_ptr = Box::into_raw(Box::new(proto_obj));
+        heap.track(proto_ptr);
+
+        let mut func = JSFunction::new_builtin(Atom(0), 0);
+        func.cached_prototype_ptr = proto_ptr;
+        let func_ptr = Box::into_raw(Box::new(func));
+        heap.track_function(func_ptr);
+
+        let roots = vec![JSValue::new_function(func_ptr)];
+
+        let freed = heap.run_gc(&roots);
+
+        assert_eq!(freed, 0);
+        assert_eq!(heap.object_count(), 2);
+
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(func_ptr);
+            let _ = Box::from_raw(proto_ptr);
         }
     }
 
