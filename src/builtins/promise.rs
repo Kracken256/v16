@@ -307,10 +307,8 @@ fn promise_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         ctx.runtime_mut().gc_heap_mut().track(ptr);
         JSValue::new_object(ptr)
     };
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        resolve_promise_value(ctx, vm, promise_val, value);
-    } else {
+    let resolved = ctx.with_vm(|vm, ctx| resolve_promise_value(ctx, vm, promise_val, value));
+    if resolved.is_none() {
         let p = promise_val.as_object_mut();
         fulfill_promise(ctx, p, value);
     }
@@ -409,8 +407,7 @@ fn promise_catch(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         None
     };
 
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         match then_fn {
             Some(f) if f.is_function() => {
                 let result = vm.call_function_with_this(
@@ -442,9 +439,8 @@ fn promise_catch(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 JSValue::undefined()
             }
         }
-    } else {
-        JSValue::undefined()
-    }
+    })
+    .unwrap_or_else(JSValue::undefined)
 }
 
 fn promise_finally(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -458,8 +454,7 @@ fn promise_finally(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         None
     };
 
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         match then_fn {
             Some(f) if f.is_function() => {
                 let result = vm.call_function_with_this(
@@ -491,9 +486,8 @@ fn promise_finally(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 JSValue::undefined()
             }
         }
-    } else {
-        JSValue::undefined()
-    }
+    })
+    .unwrap_or_else(JSValue::undefined)
 }
 
 fn promise_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -975,10 +969,8 @@ fn promise_internal_resolve(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return JSValue::undefined();
         }
     }
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        resolve_promise_value(ctx, vm, promise_val, value);
-    } else {
+    let resolved = ctx.with_vm(|vm, ctx| resolve_promise_value(ctx, vm, promise_val, value));
+    if resolved.is_none() {
         let promise = promise_val.as_object_mut();
         if promise.is_promise() && get_promise_state(ctx, promise).is_pending() {
             fulfill_promise(ctx, promise, value);
@@ -1086,12 +1078,8 @@ fn call_callback(
     callback: JSValue,
     args: &[JSValue],
 ) -> Result<JSValue, String> {
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-        vm.call_function(ctx, callback, args)
-    } else {
-        Err("VM not available".to_string())
-    }
+    ctx.with_vm(|vm, ctx| vm.call_function(ctx, callback, args))
+        .unwrap_or_else(|| Err("VM not available".to_string()))
 }
 
 fn create_promise_prototype(ctx: &mut JSContext) -> JSValue {
