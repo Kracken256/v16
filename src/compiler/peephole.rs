@@ -174,10 +174,6 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
                         let add_b = read_u16(code, next_pc + 5);
                         if add_b == dst {
                             code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 1] = code[next_pc + 1];
-                            code[next_pc + 2] = code[next_pc + 2];
-                            code[next_pc + 3] = code[next_pc + 3];
-                            code[next_pc + 4] = code[next_pc + 4];
                             code[next_pc + 5] = 0;
                             code[next_pc + 6] = 0;
 
@@ -188,8 +184,6 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
                             changed = true;
                         } else if add_a == dst {
                             code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 1] = code[next_pc + 1];
-                            code[next_pc + 2] = code[next_pc + 2];
                             code[next_pc + 3] = code[next_pc + 5];
                             code[next_pc + 4] = code[next_pc + 6];
                             code[next_pc + 5] = 0;
@@ -245,8 +239,6 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
                         let mul_b = read_u16(code, next_pc + 5);
                         if mul_b == dst {
                             code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 3] = code[next_pc + 3];
-                            code[next_pc + 4] = code[next_pc + 4];
                             code[next_pc + 5] = 0;
                             code[next_pc + 6] = 0;
                             code[pc] = Opcode::Nop as u8;
@@ -281,8 +273,6 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
                     let move_src = read_u16(code, next_pc + 3);
                     if move_src == dst && (i8::MIN as i32..=i8::MAX as i32).contains(&val) {
                         code[next_pc] = Opcode::LoadInt8 as u8;
-                        code[next_pc + 1] = code[next_pc + 1];
-                        code[next_pc + 2] = code[next_pc + 2];
                         code[next_pc + 3] = val as i8 as u8;
 
                         code[next_pc + 4] = 0;
