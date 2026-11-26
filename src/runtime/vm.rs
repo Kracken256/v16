@@ -3036,19 +3036,13 @@ impl VM {
         if !obj_val.is_object() && !obj_val.is_function() {
             return None;
         }
-        let base_ptr = if obj_val.is_function() {
-            std::ptr::addr_of!(obj_val.as_function().base)
-        } else {
-            obj_val.get_ptr() as *const crate::object::object::JSObject
-        };
-        let mut current = Some(base_ptr as *mut crate::object::object::JSObject);
+        let mut current = Some(obj_val.as_object());
         let mut depth = 0u32;
-        while let Some(ptr) = current {
-            if ptr.is_null() || depth > 1000 {
+        while let Some(pobj) = current {
+            if depth > 1000 {
                 break;
             }
             depth += 1;
-            let pobj = unsafe { &*ptr };
             if let Some(getter) = pobj.get_own_accessor_value(atom) {
                 if getter.is_function() {
                     match self.call_function_with_this(ctx, getter, obj_val, &[]) {
@@ -3064,7 +3058,7 @@ impl VM {
             if let Some(value) = pobj.get_own(atom) {
                 return Some(value);
             }
-            current = pobj.prototype;
+            current = pobj.prototype_object();
         }
         None
     }
@@ -3105,15 +3099,14 @@ impl VM {
             );
             return None;
         }
-        let proto_ptr = proto_val.get_ptr() as *mut crate::object::object::JSObject;
-        let obj_ptr = obj_val.get_ptr() as *const crate::object::object::JSObject;
-        let mut current = unsafe { (*obj_ptr).prototype };
+        let proto_ptr = proto_val.get_ptr();
+        let mut current = obj_val.as_object().prototype_object();
         let mut depth = 0u32;
         while let Some(p) = current {
-            if std::ptr::eq(p, proto_ptr) {
+            if p as *const crate::object::object::JSObject as usize == proto_ptr {
                 return Some(true);
             }
-            current = unsafe { (*p).prototype };
+            current = p.prototype_object();
             depth += 1;
             if depth > 1000 {
                 break;
@@ -6212,8 +6205,7 @@ impl VM {
         ctx.reset_interrupt_counter();
 
         loop {
-            if self.pending_throw.is_some() {
-                let exc = unsafe { self.pending_throw.take().unwrap_unchecked() };
+            if let Some(exc) = self.pending_throw.take() {
                 match self.dispatch_throw_value(ctx, exc) {
                     ThrowDispatch::Caught => {}
                     ThrowDispatch::Uncaught(e) => return Err(e),
@@ -9024,8 +9016,7 @@ impl VM {
                         self.set_reg(key_reg, key_val);
                     }
                     let result = if obj_val.is_object_like() && key_val.is_int() {
-                        let ptr = obj_val.get_ptr();
-                        let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
+                        let js_obj = obj_val.as_object();
                         if js_obj.is_dense_array() {
                             let idx = key_val.get_int() as usize;
                             let index_atom = self.int_atom(idx, ctx);
@@ -9378,8 +9369,7 @@ impl VM {
                         }
                     }
                     if obj_val.is_object_like() && key_val.is_int() {
-                        let ptr = obj_val.get_ptr();
-                        let js_obj = unsafe { JSValue::object_from_ptr_mut(ptr) };
+                        let js_obj = obj_val.as_object_mut();
                         if js_obj.is_dense_array() {
                             let idx = key_val.get_int() as usize;
                             if let Some(arr) = js_obj.as_dense_array_mut() {
@@ -14618,8 +14608,7 @@ impl VM {
             return self.proxy_get_internal(ctx, target, key, receiver);
         }
         let atom = self.key_value_to_atom(ctx, key);
-        let ptr = target.get_ptr();
-        let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
+        let js_obj = target.as_object();
         if let Some(entry) = js_obj.get_own_accessor_entry(atom) {
             if let Some(getter) = entry.get {
                 if getter.is_function() {
@@ -16001,8 +15990,7 @@ impl VM {
             return Some(JSValue::undefined());
         }
         if obj_val.is_object_like() {
-            let ptr = obj_val.get_ptr();
-            let js_obj = unsafe { JSValue::object_from_ptr(ptr) };
+            let js_obj = obj_val.as_object();
             if js_obj.is_mapped_arguments() {
                 if let Some(entry) = js_obj.argument_entry(atom) {
                     if entry.is_accessor() {
@@ -16989,7 +16977,7 @@ impl VM {
         }
         if obj_val.is_object_like() {
             let ptr = obj_val.get_ptr();
-            let js_obj = unsafe { JSValue::object_from_ptr_mut(ptr) };
+            let js_obj = obj_val.as_object_mut();
             if js_obj.is_dense_array() && atom == ctx.common_atoms.length {
                 let writable = js_obj
                     .find_offset(atom)
