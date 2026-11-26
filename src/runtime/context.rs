@@ -558,7 +558,8 @@ impl JSContext {
             }
         });
         for ptr in function_ptrs {
-            let func = unsafe { &mut *(ptr as *mut crate::object::function::JSFunction) };
+            let func_val = JSValue::new_function(ptr);
+            let func = func_val.as_function_mut();
             func.realm_context = context;
             func.realm_global = global;
         }
