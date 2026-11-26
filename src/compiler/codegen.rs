@@ -13620,6 +13620,7 @@ mod tests {
             crate::builtins::promise::is_promise(&result),
             "expected a Promise"
         );
+        crate::builtins::promise::run_microtasks_with_vm(&mut ctx, &mut vm);
         let promise_obj = result.as_object();
         let state = promise_obj
             .get(ctx.common_atoms.__promise_state__)
