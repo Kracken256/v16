@@ -1311,28 +1311,18 @@ impl VM {
         let base = prev.registers_base + prev.registers_count;
         let total = base + needed;
         if total > self.registers.len() {
-            if total > self.registers.capacity() {
-                let new_cap = (self.registers.capacity() * 2 + 64).max(total);
-                self.registers.reserve(new_cap - self.registers.len());
-            }
-
-            unsafe {
-                self.registers.set_len(total);
-            }
+            self.registers.resize(total, JSValue::undefined());
             self.cached_registers_ptr =
                 unsafe { self.registers.as_mut_ptr().add(self.cached_registers_base) };
         }
 
-        unsafe {
-            let ptr = self.registers.as_mut_ptr().add(base);
-            ptr.write(this_value);
-            for (i, arg) in args.iter().enumerate() {
-                ptr.add(i + 1).write(*arg);
-            }
-            let undef = JSValue::undefined();
-            for i in (args.len() + 1)..needed {
-                ptr.add(i).write(undef);
-            }
+        self.registers[base] = this_value;
+        for (i, arg) in args.iter().enumerate() {
+            self.registers[base + i + 1] = *arg;
+        }
+        let undef = JSValue::undefined();
+        for i in (args.len() + 1)..needed {
+            self.registers[base + i] = undef;
         }
 
         self.frame_index += 1;
@@ -1472,31 +1462,22 @@ impl VM {
         let total = base + needed;
 
         if total > self.registers.len() {
-            if total > self.registers.capacity() {
-                let new_cap = (self.registers.capacity() * 2 + 64).max(total);
-                self.registers.reserve(new_cap - self.registers.len());
-            }
-
-            unsafe {
-                self.registers.set_len(total);
-            }
+            self.registers.resize(total, JSValue::undefined());
             self.cached_registers_ptr =
                 unsafe { self.registers.as_mut_ptr().add(self.cached_registers_base) };
         }
 
-        unsafe {
-            let ptr = self.registers.as_mut_ptr().add(base);
-            ptr.write(this_value);
+        self.registers[base] = this_value;
 
-            for (i, r) in arg_regs.iter().enumerate() {
-                ptr.add(i + 1).write(self.get_reg(*r));
-            }
-            let fill_start = arg_regs.len() + 1;
-            if fill_start < needed {
-                let undef = JSValue::undefined();
-                for i in fill_start..needed {
-                    ptr.add(i).write(undef);
-                }
+        for (i, r) in arg_regs.iter().enumerate() {
+            let value = self.get_reg(*r);
+            self.registers[base + i + 1] = value;
+        }
+        let fill_start = arg_regs.len() + 1;
+        if fill_start < needed {
+            let undef = JSValue::undefined();
+            for i in fill_start..needed {
+                self.registers[base + i] = undef;
             }
         }
 
