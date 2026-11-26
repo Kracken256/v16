@@ -470,10 +470,12 @@ impl JSContext {
     }
 
     pub fn runtime(&self) -> &JSRuntime {
+        // SAFETY: the runtime pointer is set at context construction and the context is never used after its runtime is dropped.
         unsafe { &*self.runtime }
     }
 
     pub fn runtime_mut(&mut self) -> &mut JSRuntime {
+        // SAFETY: the runtime pointer is set at context construction, is valid for the context's lifetime, and `&mut self` serializes access.
         unsafe { &mut *self.runtime }
     }
 
@@ -1168,6 +1170,7 @@ impl JSContext {
         f: impl FnOnce(&mut crate::runtime::vm::VM, &mut JSContext) -> R,
     ) -> Option<R> {
         let ptr = self.register_vm_ptr?;
+        // SAFETY: the driver installs a live VM pointer for the duration of execution and clears it before dropping the VM.
         let vm = unsafe { &mut *ptr };
         Some(f(vm, self))
     }
@@ -1246,6 +1249,7 @@ impl JSContext {
 
     pub fn event_loop_mut(&mut self) -> &mut EventLoop {
         if let Some(ptr) = self.running_event_loop {
+            // SAFETY: the pointer is installed only while an outer event loop drives a nested loop and refers to a live caller-owned loop.
             unsafe { &mut *ptr }
         } else {
             &mut self.event_loop

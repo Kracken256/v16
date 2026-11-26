@@ -154,6 +154,7 @@ impl JSFunction {
         if self.realm_context.is_null() {
             None
         } else {
+            // SAFETY: the realm context is installed when the function is created and kept alive for the function's lifetime.
             Some(unsafe { &*self.realm_context })
         }
     }
@@ -163,6 +164,7 @@ impl JSFunction {
         if self.realm_context.is_null() {
             None
         } else {
+            // SAFETY: the realm context is installed when the function is created, stays alive for the function's lifetime, and is mutated only by the single-threaded engine.
             Some(unsafe { &mut *self.realm_context })
         }
     }

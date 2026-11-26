@@ -932,6 +932,7 @@ impl JSObject {
     #[inline(always)]
     pub fn as_dense_array(&self) -> Option<&crate::object::array_obj::JSArrayObject> {
         if self.is_dense_array() {
+            // SAFETY: the dense flag is set only on objects allocated and tracked as JSArrayObject, which begins with this JSObject header.
             Some(unsafe {
                 &*(self as *const JSObject as *const crate::object::array_obj::JSArrayObject)
             })
@@ -943,6 +944,7 @@ impl JSObject {
     #[inline(always)]
     pub fn as_dense_array_mut(&mut self) -> Option<&mut crate::object::array_obj::JSArrayObject> {
         if self.is_dense_array() {
+            // SAFETY: the dense flag is set only on objects allocated and tracked as JSArrayObject, which begins with this JSObject header, and `&mut self` gives exclusive access.
             Some(unsafe {
                 &mut *(self as *mut JSObject as *mut crate::object::array_obj::JSArrayObject)
             })
@@ -965,6 +967,7 @@ impl JSObject {
     pub fn prototype_object(&self) -> Option<&JSObject> {
         self.prototype
             .filter(|ptr| !ptr.is_null())
+            // SAFETY: non-null prototype pointers are GC-tracked objects that outlive this object because the collector traces the prototype edge.
             .map(|ptr| unsafe { &*ptr })
     }
 
@@ -3710,6 +3713,7 @@ mod tests {
         child_obj.set(Atom(1), JSValue::new_int(99));
         assert_eq!(child_obj.get(Atom(1)).unwrap().get_int(), 99);
 
+        // SAFETY: the pointer was produced by `Box::into_raw` above and is reclaimed exactly once here.
         unsafe {
             let _ = Box::from_raw(parent_ptr);
         }
@@ -3727,6 +3731,7 @@ mod tests {
         assert!(child_obj.has_property(Atom(1)));
         assert!(!child_obj.has_own(Atom(1)));
 
+        // SAFETY: the pointer was produced by `Box::into_raw` above and is reclaimed exactly once here.
         unsafe {
             let _ = Box::from_raw(parent_ptr);
         }

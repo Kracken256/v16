@@ -38,6 +38,7 @@ mod platform {
     const EPOLL_CLOEXEC: i32 = 0o2000000;
     const EPOLL_MAX_EVENTS: usize = 256;
 
+    // SAFETY: these declarations mirror the platform libc ABI; all calls validate their arguments.
     unsafe extern "C" {
         fn epoll_create1(flags: i32) -> i32;
         fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *const EpollEvent) -> i32;
@@ -53,6 +54,7 @@ mod platform {
 
     impl Selector {
         pub fn new() -> Result<Self, String> {
+            // SAFETY: epoll_create1 is called with a constant flag, and the returned descriptor is checked for failure.
             let epfd = unsafe { epoll_create1(EPOLL_CLOEXEC) };
             if epfd < 0 {
                 return Err(format!("epoll_create1 failed: {epfd}"));
@@ -79,6 +81,7 @@ mod platform {
                 events,
                 data: fd as u64,
             };
+            // SAFETY: the selector owns a valid epoll descriptor and `ev` points to a live local event.
             let ret = unsafe { epoll_ctl(self.epfd, EPOLL_CTL_ADD, fd, &ev) };
             if ret < 0 {
                 return Err(format!("epoll_ctl ADD failed for fd {fd}: {ret}"));
@@ -89,6 +92,7 @@ mod platform {
 
         fn unregister(&mut self, fd: RawFd) -> Result<(), String> {
             let ev = EpollEvent { events: 0, data: 0 };
+            // SAFETY: the selector owns a valid epoll descriptor and `ev` points to a live local event.
             let ret = unsafe { epoll_ctl(self.epfd, EPOLL_CTL_DEL, fd, &ev) };
             if ret < 0 {
                 return Err(format!("epoll_ctl DEL failed for fd {fd}: {ret}"));
@@ -110,6 +114,7 @@ mod platform {
                 events,
                 data: fd as u64,
             };
+            // SAFETY: the selector owns a valid epoll descriptor and `ev` points to a live local event.
             let ret = unsafe { epoll_ctl(self.epfd, EPOLL_CTL_MOD, fd, &ev) };
             if ret < 0 {
                 return Err(format!("epoll_ctl MOD failed for fd {fd}: {ret}"));
@@ -119,6 +124,7 @@ mod platform {
 
         fn wait(&mut self, timeout_ms: i32) -> Result<Vec<Event>, String> {
             let mut raw_events = vec![EpollEvent { events: 0, data: 0 }; EPOLL_MAX_EVENTS];
+            // SAFETY: `raw_events` holds EPOLL_MAX_EVENTS writable entries and the epoll descriptor is valid.
             let n = unsafe {
                 epoll_wait(
                     self.epfd,
@@ -150,6 +156,7 @@ mod platform {
 
     impl Drop for Selector {
         fn drop(&mut self) {
+            // SAFETY: the descriptor was created by epoll_create1 and is owned solely by this selector.
             unsafe {
                 close(self.epfd);
             }
@@ -194,6 +201,7 @@ mod platform {
         tv_nsec: i64,
     }
 
+    // SAFETY: these declarations mirror the platform libc ABI; all calls validate their arguments.
     unsafe extern "C" {
         fn kqueue() -> i32;
         fn kevent(
@@ -215,6 +223,7 @@ mod platform {
 
     impl Selector {
         pub fn new() -> Result<Self, String> {
+            // SAFETY: kqueue takes no arguments and the returned descriptor is checked for failure.
             let kq = unsafe { kqueue() };
             if kq < 0 {
                 return Err(format!("kqueue() failed: {kq}"));
@@ -249,6 +258,7 @@ mod platform {
                     udata: std::ptr::null_mut(),
                 });
             }
+            // SAFETY: `self.kq` is a live kqueue descriptor and `changes` is a live local slice of changes.
             let ret = unsafe {
                 kevent(
                     self.kq,
@@ -285,6 +295,7 @@ mod platform {
                     udata: std::ptr::null_mut(),
                 },
             ];
+            // SAFETY: `self.kq` is a live kqueue descriptor and `changes` is a live local array of two changes.
             let ret = unsafe {
                 kevent(
                     self.kq,
@@ -335,6 +346,7 @@ mod platform {
                 t as *const _ as *const std::ffi::c_void
             });
 
+            // SAFETY: `raw_events` holds KQ_MAX_EVENTS writable entries, `self.kq` is live, and `ts_ptr` is null or a live local timespec.
             let n = unsafe {
                 kevent(
                     self.kq,
@@ -369,6 +381,7 @@ mod platform {
 
     impl Drop for Selector {
         fn drop(&mut self) {
+            // SAFETY: the descriptor was created by kqueue and is owned solely by this selector.
             unsafe {
                 close(self.kq);
             }
@@ -418,6 +431,7 @@ mod platform {
         }
     }
 
+    // SAFETY: these declarations mirror the platform libc ABI; all calls validate their arguments.
     unsafe extern "C" {
         fn select(
             nfds: i32,
@@ -486,6 +500,7 @@ mod platform {
                 None
             };
 
+            // SAFETY: the descriptor sets and optional timeout are live locals passed as the API expects.
             let ret = unsafe {
                 select(
                     nfds,

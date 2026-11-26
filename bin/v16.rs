@@ -92,6 +92,7 @@ fn setup_context(ctx: &mut JSContext) {
 
     let global = ctx.global();
     let global_ptr = global.get_ptr();
+    // SAFETY: the context's global value holds a live object for the duration of this borrow.
     let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
 
     let print_fn_val = {
@@ -193,6 +194,7 @@ fn execute_jsc(script_path: &str) {
     let script_dir_str = script_dir.to_string_lossy().to_string();
     let global = ctx.global();
     let global_ptr = global.get_ptr();
+    // SAFETY: the context's global value holds a live object for the duration of this borrow.
     let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
     global_obj.set(
         ctx.intern("__scriptDir"),
@@ -232,6 +234,7 @@ fn execute_js(script_path: &str, opt_level: OptLevel) {
     let script_dir_str = script_dir.to_string_lossy().to_string();
     let global = ctx.global();
     let global_ptr = global.get_ptr();
+    // SAFETY: the context's global value holds a live object for the duration of this borrow.
     let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
     global_obj.set(
         ctx.intern("__scriptDir"),
@@ -316,6 +319,7 @@ fn load_fn(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let base_dir = {
         let global = ctx.global();
         let global_ptr = global.get_ptr();
+        // SAFETY: the context's global value holds a live object for this read.
         let global_obj = unsafe { &*(global_ptr as *const JSObject) };
         match global_obj.get(ctx.intern("__scriptDir")) {
             Some(v) if v.is_string() => PathBuf::from(ctx.get_atom_str(v.get_atom()).to_string()),
@@ -488,6 +492,7 @@ fn js_value_to_string_safe(result: &Result<JSValue, String>, ctx: &mut JSContext
         Ok(val) => {
             let global = ctx.global();
             let global_ptr = global.get_ptr();
+            // SAFETY: the context's global value holds a live object for the duration of this borrow.
             let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
             global_obj.set(ctx.intern("_"), *val);
 

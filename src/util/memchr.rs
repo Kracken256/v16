@@ -12,9 +12,11 @@ pub fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") {
+            // SAFETY: the runtime feature check guarantees AVX2 is available on this CPU.
             return unsafe { memchr_avx2(needle, haystack) };
         }
         if is_x86_feature_detected!("sse2") {
+            // SAFETY: the runtime feature check guarantees SSE2 is available on this CPU.
             return unsafe { memchr_sse2(needle, haystack) };
         }
     }
@@ -58,6 +60,7 @@ unsafe fn memchr_sse2(needle: u8, haystack: &[u8]) -> Option<usize> {
     let ptr = haystack.as_ptr();
     let mut i = 0usize;
 
+    // SAFETY: each load reads a full 16-byte chunk that lies within the slice, and unaligned loads are used.
     unsafe {
         let vec = _mm_set1_epi8(needle as i8);
         while i + 16 <= len {
@@ -90,6 +93,7 @@ unsafe fn memchr_avx2(needle: u8, haystack: &[u8]) -> Option<usize> {
     let ptr = haystack.as_ptr();
     let mut i = 0usize;
 
+    // SAFETY: each load reads a full 32-byte chunk that lies within the slice, and unaligned loads are used.
     unsafe {
         let vec = _mm256_set1_epi8(needle as i8);
         while i + 32 <= len {
@@ -134,9 +138,11 @@ pub fn memchr2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") {
+            // SAFETY: the runtime feature check guarantees AVX2 is available on this CPU.
             return unsafe { memchr2_avx2(n1, n2, haystack) };
         }
         if is_x86_feature_detected!("sse2") {
+            // SAFETY: the runtime feature check guarantees SSE2 is available on this CPU.
             return unsafe { memchr2_sse2(n1, n2, haystack) };
         }
     }
@@ -179,6 +185,7 @@ unsafe fn memchr2_sse2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
     let ptr = haystack.as_ptr();
     let mut i = 0usize;
 
+    // SAFETY: each load reads a full 16-byte chunk that lies within the slice, and unaligned loads are used.
     unsafe {
         let v1 = _mm_set1_epi8(n1 as i8);
         let v2 = _mm_set1_epi8(n2 as i8);
@@ -213,6 +220,7 @@ unsafe fn memchr2_avx2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
     let ptr = haystack.as_ptr();
     let mut i = 0usize;
 
+    // SAFETY: each load reads a full 32-byte chunk that lies within the slice, and unaligned loads are used.
     unsafe {
         let v1 = _mm256_set1_epi8(n1 as i8);
         let v2 = _mm256_set1_epi8(n2 as i8);

@@ -330,23 +330,27 @@ impl JSValue {
 
     #[inline(always)]
     pub fn as_object(&self) -> &crate::object::object::JSObject {
+        // SAFETY: the value was constructed with a live GC-tracked object pointer and its tag is one of the object tags checked by the accessor's callers.
         unsafe { &*self.get_ptr() }
     }
 
     #[inline(always)]
     #[allow(clippy::mut_from_ref)]
     pub fn as_object_mut(&self) -> &mut crate::object::object::JSObject {
+        // SAFETY: the value holds a live GC-tracked object pointer; the engine mutates objects only through single-threaded VM/context paths that hold the unique execution borrow.
         unsafe { &mut *self.get_ptr() }
     }
 
     #[inline(always)]
     pub fn as_function(&self) -> &crate::object::function::JSFunction {
+        // SAFETY: only values tagged TAG_FUNC reach this accessor, and JSFunction starts with a #[repr(C)] JSObject header, so the object pointer is a valid JSFunction pointer.
         unsafe { &*(self.get_ptr() as *const crate::object::function::JSFunction) }
     }
 
     #[inline(always)]
     #[allow(clippy::mut_from_ref)]
     pub fn as_function_mut(&self) -> &mut crate::object::function::JSFunction {
+        // SAFETY: only values tagged TAG_FUNC reach this accessor, JSFunction starts with a #[repr(C)] JSObject header, and mutation is serialized by the single-threaded VM/context borrow.
         unsafe { &mut *(self.get_ptr() as *mut crate::object::function::JSFunction) }
     }
 

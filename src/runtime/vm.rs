@@ -907,11 +907,13 @@ impl VM {
 
     #[inline(always)]
     fn caller_vm_ref(&self) -> Option<&VM> {
+        // SAFETY: the eval driver installs the caller VM pointer and keeps that VM alive for the duration of the nested call.
         self.caller_vm.map(|ptr| unsafe { &*ptr })
     }
 
     #[inline(always)]
     fn caller_vm_mut(&mut self) -> Option<&mut VM> {
+        // SAFETY: the eval driver installs the caller VM pointer, keeps it alive, and execution is single-threaded.
         self.caller_vm.map(|ptr| unsafe { &mut *ptr })
     }
 
@@ -2420,6 +2422,7 @@ impl VM {
     #[inline(always)]
     fn read_u8(&mut self) -> u8 {
         let pc = self.pc;
+        // SAFETY: `cached_code_ptr` points at the current bytecode and `pc` is an in-bounds instruction offset tracked by the decoder.
         let val = unsafe { *self.cached_code_ptr.add(pc) };
         self.pc = pc + 1;
         val
@@ -2427,6 +2430,7 @@ impl VM {
 
     #[inline(always)]
     fn read_i64(&mut self) -> i64 {
+        // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const i64) };
         self.pc += 8;
@@ -2435,6 +2439,7 @@ impl VM {
 
     #[inline(always)]
     fn read_i32(&mut self) -> i32 {
+        // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const i32) };
         self.pc += 4;
@@ -2500,6 +2505,7 @@ impl VM {
         if idx >= self.frames[self.frame_index].constants_len {
             return JSValue::undefined();
         }
+        // SAFETY: the bounds check above guarantees `idx` addresses a valid constant of the current frame.
         unsafe { *self.cached_const_ptr.add(idx) }
     }
 
@@ -15426,6 +15432,7 @@ impl VM {
 
     #[inline(always)]
     fn read_u16_pc(&mut self) -> u16 {
+        // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const u16) };
         self.pc += 2;
@@ -15434,6 +15441,7 @@ impl VM {
 
     #[inline(always)]
     fn read_u32_pc(&mut self) -> u32 {
+        // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const u32) };
         self.pc += 4;
@@ -15442,6 +15450,7 @@ impl VM {
 
     #[inline(always)]
     fn read_i32_pc(&mut self) -> i32 {
+        // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const i32) };
         self.pc += 4;

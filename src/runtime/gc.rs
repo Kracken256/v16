@@ -143,7 +143,9 @@ impl Nursery {
             return None;
         }
         let base = self.backing.as_mut_ptr() as *mut u8;
+        // SAFETY: the capacity check above guarantees the aligned slot fits in the backing buffer, whose alignment is at least 8.
         let ptr = unsafe { base.add(aligned) as *mut T };
+        // SAFETY: `ptr` addresses a fresh, properly aligned slot inside the nursery buffer that is not yet initialized.
         unsafe {
             std::ptr::write(ptr, value);
         }
@@ -499,6 +501,7 @@ impl GcHeap {
         let tag = self.tags[idx];
 
         if tag == TAG_ARRAY {
+            // SAFETY: objects tracked with TAG_ARRAY are allocated as JSArrayObject with the JSObject header first.
             let arr = unsafe { &*ptr.cast::<JSArrayObject>() };
             arr.for_each_element(|value| {
                 self.mark_value(value);
@@ -635,14 +638,17 @@ impl GcHeap {
     #[inline(always)]
     unsafe fn drop_tracked(ptr: *mut JSObject, tag: u8) {
         if tag == TAG_ARRAY {
+            // SAFETY: `ptr` was allocated as a boxed JSArrayObject and the collector owns the allocation.
             unsafe {
                 let _ = Box::from_raw(ptr.cast::<JSArrayObject>());
             }
         } else if tag == TAG_FUNCTION {
+            // SAFETY: `ptr` was allocated as a boxed JSFunction and the collector owns the allocation.
             unsafe {
                 let _ = Box::from_raw(ptr.cast::<JSFunction>());
             }
         } else {
+            // SAFETY: `ptr` was allocated as a boxed JSObject and the collector owns the allocation.
             unsafe {
                 let _ = Box::from_raw(ptr);
             }
@@ -652,14 +658,17 @@ impl GcHeap {
     #[inline(always)]
     unsafe fn drop_in_place_tracked(ptr: *mut JSObject, tag: u8) {
         if tag == TAG_ARRAY {
+            // SAFETY: `ptr` points at a live JSArrayObject that the collector has removed from its tables.
             unsafe {
                 std::ptr::drop_in_place(ptr.cast::<JSArrayObject>());
             }
         } else if tag == TAG_FUNCTION {
+            // SAFETY: `ptr` points at a live JSFunction that the collector has removed from its tables.
             unsafe {
                 std::ptr::drop_in_place(ptr.cast::<JSFunction>());
             }
         } else {
+            // SAFETY: `ptr` points at a live JSObject that the collector has removed from its tables.
             unsafe {
                 std::ptr::drop_in_place(ptr);
             }
@@ -974,6 +983,7 @@ impl GcHeap {
                 props.clear();
                 pooled_props = Some(props);
             }
+            // SAFETY: this object was classified as dead and is owned solely by the collector, so it can be dropped in place.
             unsafe {
                 if tag == TAG_OBJECT {
                     std::ptr::drop_in_place(ptr);
@@ -1056,6 +1066,7 @@ impl GcHeap {
                 props.clear();
                 pooled_props = Some(props);
             }
+            // SAFETY: unreachable objects are owned solely by the collector, and the drop path matches the allocation kind recorded by `tag`.
             unsafe {
                 if tag == TAG_OBJECT {
                     if in_nursery {
@@ -1153,6 +1164,7 @@ impl GcHeap {
             let ptr = self.objects[idx];
             let tag = self.tags[idx];
             let in_nursery = self.nursery.contains(ptr as *const u8);
+            // SAFETY: unreachable objects are owned solely by the collector, and the drop path matches nursery versus boxed allocation.
             unsafe {
                 if in_nursery {
                     Self::drop_in_place_tracked(ptr, tag);
@@ -1260,6 +1272,7 @@ mod tests {
         heap.untrack(ptr);
         assert_eq!(heap.object_count(), 0);
 
+        // SAFETY: the pointer came from `Box::into_raw` above and is reclaimed exactly once.
         unsafe {
             let _ = Box::from_raw(ptr);
         }
@@ -1276,9 +1289,11 @@ mod tests {
         let value = JSValue::new_object(ptr);
         heap.mark_value(&value);
 
+        // SAFETY: `ptr` refers to the live boxed object created above.
         let idx = unsafe { (*(ptr as *const JSObject)).gc_slot } as usize;
         assert_eq!(heap.marks[idx], 1);
 
+        // SAFETY: the pointer came from `Box::into_raw` above and is reclaimed exactly once.
         unsafe {
             let _ = Box::from_raw(ptr);
         }
@@ -1307,6 +1322,7 @@ mod tests {
         assert!(heap.objects.contains(&reachable_ptr));
         assert!(!heap.objects.contains(&unreachable_ptr));
 
+        // SAFETY: the collector kept the reachable object alive and this test reclaims it exactly once.
         unsafe {
             let _ = Box::from_raw(reachable_ptr);
         }
@@ -1332,6 +1348,7 @@ mod tests {
         assert_eq!(freed, 0);
         assert_eq!(heap.object_count(), 2);
 
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
         unsafe {
             let _ = Box::from_raw(parent_ptr);
             let _ = Box::from_raw(child_ptr);
@@ -1363,6 +1380,7 @@ mod tests {
         assert_eq!(freed, 0);
         assert_eq!(heap.object_count(), 3);
 
+        // SAFETY: all pointers came from `Box::into_raw` above and are reclaimed exactly once.
         unsafe {
             let _ = Box::from_raw(parent_ptr);
             let _ = Box::from_raw(child_ptr);
@@ -1397,6 +1415,7 @@ mod tests {
         assert_eq!(freed, 0);
         assert_eq!(heap.object_count(), 1);
 
+        // SAFETY: `heap` visits only live tracked objects; each callback pointer stays valid for the call.
         heap.for_each_live_object(|live_ptr, tag| unsafe {
             if tag == TAG_OBJECT {
                 let obj_ref = &mut *live_ptr;
@@ -1404,6 +1423,7 @@ mod tests {
             }
         });
 
+        // SAFETY: `ptr` is a live tracked object that the collector kept reachable above.
         let obj_ref = unsafe { &*(ptr as *const JSObject) };
         assert_eq!(obj_ref.get(a).unwrap().get_int(), 10);
         assert!(obj_ref.get(b).is_none());
@@ -1413,6 +1433,7 @@ mod tests {
         obj_ref.for_each_property(|_, _, _| count += 1);
         assert_eq!(count, 2);
 
+        // SAFETY: the pointer came from `Box::into_raw` above and is reclaimed exactly once.
         unsafe {
             let _ = Box::from_raw(ptr);
         }
@@ -1458,6 +1479,7 @@ mod tests {
         assert_eq!(heap.object_count(), 1);
         assert_eq!(heap.nursery_indices.len(), 1);
 
+        // SAFETY: `ptr` is a live nursery object owned by `heap`.
         unsafe {
             (*ptr).set(Atom(1), JSValue::new_int(42));
             assert_eq!((*ptr).get(Atom(1)).unwrap().get_int(), 42);
@@ -1473,6 +1495,7 @@ mod tests {
     fn test_gc_heap_minor_gc_promotes_reachable() {
         let mut heap = GcHeap::new();
         let ptr = heap.alloc_object().expect("nursery alloc should succeed");
+        // SAFETY: `ptr` is a live nursery object owned by `heap`.
         unsafe {
             (*ptr).set(Atom(1), JSValue::new_int(99));
         }
@@ -1483,12 +1506,15 @@ mod tests {
         assert_eq!(heap.object_count(), 1);
         assert_eq!(heap.nursery_indices.len(), 1);
 
+        // SAFETY: `ptr` is a live nursery object owned by `heap`.
         let idx = unsafe { (*(ptr as usize as *const JSObject)).gc_slot } as usize;
         assert_eq!(heap.nursery_indices[0], idx);
         let new_ptr = heap.objects[idx];
+        // SAFETY: `new_ptr` is the promoted copy of the live object recorded in the heap.
         let obj_ref = unsafe { &*(new_ptr as *const JSObject) };
         assert_eq!(obj_ref.get(Atom(1)).unwrap().get_int(), 99);
 
+        // SAFETY: the promoted object is owned by the heap and this test reclaims it exactly once.
         unsafe {
             std::ptr::drop_in_place(new_ptr);
         }
@@ -1509,8 +1535,10 @@ mod tests {
         assert_eq!(freed_full, 0);
         assert_eq!(heap.object_count(), 1);
 
+        // SAFETY: `reachable` is the live object promoted by the collector above.
         let idx = unsafe { (*(reachable as *const JSObject)).gc_slot } as usize;
         let new_ptr = heap.objects[idx];
+        // SAFETY: the promoted object is owned by the heap and this test reclaims it exactly once.
         unsafe {
             std::ptr::drop_in_place(new_ptr);
         }
@@ -1522,6 +1550,7 @@ mod tests {
         let arr_ptr = heap
             .alloc_array()
             .expect("nursery array alloc should succeed");
+        // SAFETY: `arr_ptr` is a live nursery array owned by `heap`.
         unsafe {
             (*arr_ptr).set(0, JSValue::new_int(1));
             (*arr_ptr).set(1, JSValue::new_int(2));
@@ -1533,13 +1562,16 @@ mod tests {
         assert_eq!(heap.object_count(), 1);
         assert_eq!(heap.nursery_indices.len(), 1);
 
+        // SAFETY: `arr_ptr` is a live nursery array owned by `heap`.
         let idx = unsafe { (*(arr_ptr as *const JSObject)).gc_slot } as usize;
         assert_eq!(heap.nursery_indices[0], idx);
         let new_ptr = heap.objects[idx];
+        // SAFETY: `new_ptr` is the promoted copy of the live dense array allocated above.
         let arr_ref = unsafe { &*(new_ptr as *const JSArrayObject) };
         assert_eq!(arr_ref.get(0).unwrap().get_int(), 1);
         assert_eq!(arr_ref.get(1).unwrap().get_int(), 2);
 
+        // SAFETY: the promoted array is owned by the heap and this test reclaims it exactly once.
         unsafe {
             std::ptr::drop_in_place(new_ptr as *mut JSArrayObject);
         }
@@ -1571,6 +1603,7 @@ mod tests {
         assert!(heap.objects.contains(&reachable_ptr));
         assert!(!heap.objects.contains(&unreachable_ptr));
 
+        // SAFETY: the collector kept the reachable object alive and this test reclaims it exactly once.
         unsafe {
             let _ = Box::from_raw(reachable_ptr);
         }
@@ -1591,6 +1624,7 @@ mod tests {
         let roots = vec![JSValue::new_object(parent_ptr)];
         heap.start_incremental_mark(&roots);
         while heap.incremental_mark_step(1) {
+            // SAFETY: `parent_ptr` is a live boxed object rooted above.
             if heap.marks[unsafe { (*(parent_ptr as *const JSObject)).gc_slot } as usize]
                 == COLOR_BLACK
             {
@@ -1606,6 +1640,7 @@ mod tests {
         assert_eq!(freed, 0);
         assert_eq!(heap.object_count(), 2);
 
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
         unsafe {
             let _ = Box::from_raw(parent_ptr);
             let _ = Box::from_raw(child_ptr);
