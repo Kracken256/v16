@@ -1033,6 +1033,19 @@ impl CodeGenerator {
         }
     }
 
+    fn capture_slot_operand(&mut self, expr: &Expression, reg: u16) -> u16 {
+        if let Expression::Identifier(id) = expr {
+            if self.lookup_var_slot(&id.name) == Some(reg) {
+                let copy = self.alloc_register();
+                self.emit(Opcode::Move);
+                self.emit_u16(copy);
+                self.emit_u16(reg);
+                return copy;
+            }
+        }
+        reg
+    }
+
     fn push_scope(&mut self) {
         self.scope_stack.push(FxHashMap::default());
         self.scope_is_global.push(false);
@@ -10655,6 +10668,14 @@ impl CodeGenerator {
                             self.emit_u16(obj_reg);
                             self.emit_u32(atom.0);
 
+                            let obj_reg = {
+                                let this_reg = self.capture_slot_operand(&member.object, obj_reg);
+                                if this_reg != obj_reg {
+                                    self.free_register(obj_reg);
+                                }
+                                this_reg
+                            };
+
                             let mut arg_regs = Vec::new();
                             for arg in &call.arguments {
                                 if let Argument::Expression(expr) = arg {
@@ -10863,7 +10884,11 @@ impl CodeGenerator {
                 } else if is_ns {
                     (func_reg, None, Some(obj_reg))
                 } else {
-                    (func_reg, Some(obj_reg), None)
+                    let this_reg = self.capture_slot_operand(&member.object, obj_reg);
+                    if this_reg != obj_reg {
+                        self.free_register(obj_reg);
+                    }
+                    (func_reg, Some(this_reg), None)
                 }
             }
             Expression::ChainExpression(inner) => {
@@ -10872,6 +10897,7 @@ impl CodeGenerator {
             }
             other => {
                 let func_reg = self.gen_expression(other, ctx)?;
+                let func_reg = self.capture_slot_operand(other, func_reg);
                 (func_reg, None, None)
             }
         };
@@ -11071,6 +11097,7 @@ impl CodeGenerator {
         ctx: &mut JSContext,
     ) -> Result<u16, String> {
         let func = self.gen_expression(&new.callee, ctx)?;
+        let func = self.capture_slot_operand(&new.callee, func);
         let has_spread = new
             .arguments
             .iter()
