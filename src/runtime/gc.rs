@@ -628,6 +628,10 @@ impl GcHeap {
                 for v in &state.snapshot {
                     self.mark_value(v);
                 }
+                if let Some(func_ptr) = state.func_ptr {
+                    let func = JSValue::new_function(func_ptr);
+                    self.mark_value(&func);
+                }
                 self.mark_value(&state.param_env);
             }
 
@@ -1514,6 +1518,49 @@ mod tests {
         unsafe {
             let _ = Box::from_raw(func_ptr);
             let _ = Box::from_raw(proto_ptr);
+        }
+    }
+
+    #[test]
+    fn test_gc_trace_generator_state_function() {
+        let mut heap = GcHeap::new();
+
+        let func = JSFunction::new_builtin(Atom(0), 0);
+        let func_ptr = Box::into_raw(Box::new(func));
+        heap.track_function(func_ptr);
+
+        let state = crate::object::object::GeneratorState {
+            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            snapshot: Vec::new(),
+            pc: 0,
+            done: false,
+            send_reg: None,
+            argc: 0,
+            saved_args: Vec::new(),
+            func_ptr: Some(func_ptr),
+            handlers: Vec::new(),
+            yield_is_result: false,
+            upvalue_cells: Vec::new(),
+            param_env: JSValue::undefined(),
+            param_env_own: false,
+        };
+        let mut gen_obj = JSObject::new();
+        gen_obj.set_is_generator(true);
+        gen_obj.set_generator_state(state);
+        let gen_ptr = Box::into_raw(Box::new(gen_obj));
+        heap.track(gen_ptr);
+
+        let roots = vec![JSValue::new_object(gen_ptr)];
+
+        let freed = heap.run_gc(&roots);
+
+        assert_eq!(freed, 0);
+        assert_eq!(heap.object_count(), 2);
+
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(gen_ptr);
+            let _ = Box::from_raw(func_ptr);
         }
     }
 
