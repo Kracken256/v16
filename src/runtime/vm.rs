@@ -5028,16 +5028,9 @@ impl VM {
             };
             {
                 let cache = ctx.shape_cache_mut();
-                for (ptr, tag) in live_objects {
-                    unsafe {
-                        if tag == crate::runtime::gc::TAG_ARRAY {
-                            let arr = &mut *(ptr as *mut crate::object::array_obj::JSArrayObject);
-                            arr.header.compact_props(cache);
-                        } else {
-                            let obj = &mut *(ptr as *mut crate::object::object::JSObject);
-                            obj.compact_props(cache);
-                        }
-                    }
+                for (ptr, _tag) in live_objects {
+                    let object = JSValue::new_object(ptr);
+                    object.as_object_mut().compact_props(cache);
                 }
             }
 
