@@ -545,7 +545,8 @@ impl GcHeap {
             let func = unsafe { &*(ptr as *const JSFunction) };
             self.trace_function(func);
         } else {
-            let obj = unsafe { JSValue::object_from_ptr(ptr) };
+            let obj = JSValue::new_object(ptr);
+            let obj = obj.as_object();
             obj.for_each_property(|_atom, value, _attrs| {
                 self.mark_value(&value);
             });

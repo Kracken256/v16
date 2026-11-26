@@ -1366,7 +1366,8 @@ impl VM {
         frame.param_env_own = false;
         frame.ic_table_ptr = function_ptr
             .and_then(|fptr| {
-                let js_func = unsafe { JSValue::function_from_ptr(fptr) };
+                let js_func = JSValue::new_function(fptr);
+                let js_func = js_func.as_function();
                 js_func
                     .bytecode
                     .as_ref()
@@ -1419,7 +1420,8 @@ impl VM {
         self.cached_ic_table_ptr = frame.ic_table_ptr;
         if let Some(fptr) = function_ptr {
             if frame.has_upvalues {
-                let func = unsafe { JSValue::function_from_ptr(fptr) };
+                let func = JSValue::new_function(fptr);
+                let func = func.as_function();
                 if let Some(uv) = func.upvalues.as_ref() {
                     let slots = &uv.upvalue_slots;
                     self.cached_upvalue_slot_ptr = slots.as_ptr();
@@ -1578,7 +1580,8 @@ impl VM {
         self.cached_ic_table_ptr = ic_table_ptr;
         if let Some(fptr) = function_ptr {
             if frame.has_upvalues {
-                let func = unsafe { JSValue::function_from_ptr(fptr) };
+                let func = JSValue::new_function(fptr);
+                let func = func.as_function();
                 if let Some(uv) = func.upvalues.as_ref() {
                     let slots = &uv.upvalue_slots;
                     self.cached_upvalue_slot_ptr = slots.as_ptr();
@@ -2120,7 +2123,8 @@ impl VM {
     ) -> Result<bool, String> {
         if func_val.is_function() {
             let ptr = func_val.get_ptr();
-            let js_func = unsafe { JSValue::function_from_ptr(ptr) };
+            let js_func = JSValue::new_function(ptr);
+            let js_func = js_func.as_function();
             if js_func.is_class_constructor && !is_call_new && !is_super_call {
                 self.set_pending_type_error(
                     ctx,
@@ -6116,7 +6120,8 @@ impl VM {
             frame.ic_table_ptr = bytecode.effective_ic_table_ptr();
             frame.has_upvalues = match frame.function_ptr {
                 Some(ptr) => {
-                    let func = unsafe { JSValue::function_from_ptr(ptr) };
+                    let func = JSValue::new_function(ptr);
+                    let func = func.as_function();
                     func.upvalues
                         .as_ref()
                         .map_or(false, |uv| !uv.upvalue_slots.is_empty())
@@ -6129,7 +6134,8 @@ impl VM {
             self.frames[0].is_strict_frame = bytecode.is_strict;
 
             if let Some(ptr) = self.frames[0].function_ptr {
-                let js_func = unsafe { JSValue::function_from_ptr(ptr) };
+                let js_func = JSValue::new_function(ptr);
+                let js_func = js_func.as_function();
                 if js_func.is_arrow() {
                     self.frames[0].this_cell = js_func.arrow_this_cell.clone();
                     self.frames[0].super_ctor = js_func.arrow_super;
@@ -13561,8 +13567,8 @@ impl VM {
                         let declared_param_count: usize = if !is_strict {
                             match func_ptr {
                                 Some(ptr) => {
-                                    let js_func =
-                                        unsafe { JSValue::function_from_ptr(ptr) };
+                                    let js_func = JSValue::new_function(ptr);
+                                    let js_func = js_func.as_function();
                                     if js_func
                                         .bytecode
                                         .as_ref()
@@ -17270,7 +17276,8 @@ impl VM {
         }
 
         if obj_val.is_function() && atom == ctx.common_atoms.prototype {
-            let js_func = unsafe { JSValue::function_from_ptr_mut(ptr) };
+            let js_func = JSValue::new_function(ptr);
+            let js_func = js_func.as_function_mut();
             if value.is_object() {
                 js_func.cached_prototype_ptr =
                     value.get_ptr() as *mut crate::object::object::JSObject;
@@ -17280,7 +17287,8 @@ impl VM {
         }
 
         if obj_val.is_function() && atom.0 & 0x40000000 != 0 {
-            let js_func = unsafe { JSValue::function_from_ptr_mut(ptr) };
+            let js_func = JSValue::new_function(ptr);
+            let js_func = js_func.as_function_mut();
             js_func.mark_has_symbol_prop();
         }
     }
