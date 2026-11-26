@@ -214,6 +214,7 @@ pub enum Opcode {
     DisposeResourcesFinally = 250,
     SetUpvalueDirect = 251,
     GlobalBinding = 252,
+    WithGetVarBase = 253,
 }
 
 impl Opcode {
@@ -419,6 +420,7 @@ impl Opcode {
             250 => Some(Opcode::DisposeResourcesFinally),
             251 => Some(Opcode::SetUpvalueDirect),
             252 => Some(Opcode::GlobalBinding),
+            253 => Some(Opcode::WithGetVarBase),
             _ => None,
         }
     }
@@ -548,6 +550,7 @@ impl Opcode {
             Opcode::WithHas | Opcode::WithGet | Opcode::WithDelete => 7,
             Opcode::WithSet => 7,
             Opcode::WithGetVar | Opcode::WithSetVar => 11,
+            Opcode::WithGetVarBase => 12,
             Opcode::WithResolve => 7,
             Opcode::WithGetResolved | Opcode::WithSetResolved => 9,
             Opcode::Pos => 5,
@@ -1309,6 +1312,20 @@ impl Bytecode {
                         operands,
                         " r{}, atom({}), kind={}, idx={}, flags={}",
                         dst, atom, kind, index, flags
+                    )
+                    .unwrap();
+                }
+                Opcode::WithGetVarBase => {
+                    let dst = read_u16(1);
+                    let base = read_u16(3);
+                    let atom = read_u32(5);
+                    let kind = read_u8(9);
+                    let index = read_u16(10);
+                    let flags = read_u8(12);
+                    write!(
+                        operands,
+                        " r{}, r{}, atom({}), kind={}, idx={}, flags={}",
+                        dst, base, atom, kind, index, flags
                     )
                     .unwrap();
                 }

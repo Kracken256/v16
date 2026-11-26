@@ -6682,6 +6682,42 @@ impl CodeGenerator {
         }
     }
 
+    fn gen_with_call_expression(
+        &mut self,
+        id: &Identifier,
+        call: &CallExpression,
+        ctx: &mut JSContext,
+    ) -> Result<u16, String> {
+        let (kind, index, flags) = match self.resolve_var(&id.name, ctx) {
+            Some(VarLocation::Local(slot)) => {
+                if self.is_global_binding(&id.name) {
+                    (0u8, 0u16, if self.suppress_ref_error { 0 } else { 2 })
+                } else {
+                    let tdz = self.with_local_tdz(&id.name);
+                    (1u8, slot, if tdz { 1 } else { 0 })
+                }
+            }
+            Some(VarLocation::Upvalue(slot)) => {
+                let tdz = self.with_local_tdz(&id.name);
+                (2u8, slot, if tdz { 1 } else { 0 })
+            }
+            None => (0u8, 0u16, if self.suppress_ref_error { 0 } else { 2 }),
+        };
+        let atom = ctx.intern(&id.name);
+        let func_reg = self.alloc_register();
+        let base_reg = self.alloc_register();
+        self.emit(Opcode::WithGetVarBase);
+        self.emit_u16(func_reg);
+        self.emit_u16(base_reg);
+        self.emit_u32(atom.0);
+        self.emit_u8(kind);
+        self.emit_u16(index);
+        self.emit_u8(flags);
+        self.emit_chain_call(func_reg, base_reg, true, &call.arguments, ctx, id.name == "eval")?;
+        self.free_register(base_reg);
+        Ok(func_reg)
+    }
+
     fn gen_with_global_set(
         &mut self,
         name: &str,
@@ -10357,7 +10393,7 @@ impl CodeGenerator {
                     if optional {
                         short_jumps.push(self.emit_jump_if_nullish(result));
                     }
-                    self.emit_chain_call(result, this_reg, has_this, &arguments, ctx)?;
+                    self.emit_chain_call(result, this_reg, has_this, &arguments, ctx, false)?;
                     self.emit(Opcode::LoadUndefined);
                     self.emit_u16(this_reg);
                     has_this = false;
@@ -10387,6 +10423,7 @@ impl CodeGenerator {
         has_this: bool,
         arguments: &[Argument],
         ctx: &mut JSContext,
+        mark_direct_eval: bool,
     ) -> Result<(), String> {
         let has_spread = arguments.iter().any(|a| matches!(a, Argument::Spread(_)));
         if has_spread {
@@ -10409,6 +10446,9 @@ impl CodeGenerator {
                     }
                 }
             }
+            if mark_direct_eval {
+                self.emit_mark_direct_eval(ctx);
+            }
             if has_this {
                 self.emit(Opcode::CallMethodSpread);
                 self.emit_u16(dst);
@@ -10430,6 +10470,9 @@ impl CodeGenerator {
             if let Argument::Expression(expr) = arg {
                 arg_regs.push(self.gen_expression(expr, ctx)?);
             }
+        }
+        if mark_direct_eval {
+            self.emit_mark_direct_eval(ctx);
         }
         if has_this {
             self.emit(Opcode::CallMethod);
@@ -10647,6 +10690,18 @@ impl CodeGenerator {
                 && self.current_function_name.as_ref().map_or(false, |n| n == &id.name)
                 && self.lookup_var_slot(&id.name).is_none()
                 && !self.upvalue_slots.contains_key(&id.name));
+
+        if !self.with_scopes.is_empty() {
+            if let Expression::Identifier(id) = &*call.callee {
+                let applies = match self.lookup_var_scope_index(&id.name) {
+                    Some(index) => self.with_applies_to_local(&id.name, index),
+                    None => self.with_applies_to_outer(&id.name),
+                };
+                if applies {
+                    return self.gen_with_call_expression(id, call, ctx);
+                }
+            }
+        }
 
         let has_spread = call
             .arguments

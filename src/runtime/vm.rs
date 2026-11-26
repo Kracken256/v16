@@ -11551,7 +11551,23 @@ impl VM {
                     let kind = self.read_u8();
                     let index = self.read_u16_pc();
                     let flags = self.read_u8();
-                    self.with_get_var(ctx, dst, atom, kind, index, flags, instr_pc);
+                    self.with_get_var(ctx, dst, u16::MAX, atom, kind, index, flags, instr_pc);
+                    if let Some(exc) = self.pending_throw.take() {
+                        match self.dispatch_throw_value(ctx, exc) {
+                            ThrowDispatch::Caught => continue,
+                            ThrowDispatch::Uncaught(e) => return Err(e),
+                            ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                        }
+                    }
+                }
+                Opcode::WithGetVarBase => {
+                    let dst = self.read_u16_pc();
+                    let base_dst = self.read_u16_pc();
+                    let atom = crate::runtime::atom::Atom(self.read_u32_pc());
+                    let kind = self.read_u8();
+                    let index = self.read_u16_pc();
+                    let flags = self.read_u8();
+                    self.with_get_var(ctx, dst, base_dst, atom, kind, index, flags, instr_pc);
                     if let Some(exc) = self.pending_throw.take() {
                         match self.dispatch_throw_value(ctx, exc) {
                             ThrowDispatch::Caught => continue,
@@ -14579,6 +14595,7 @@ impl VM {
         &mut self,
         ctx: &mut JSContext,
         dst: u16,
+        base_dst: u16,
         atom: crate::runtime::atom::Atom,
         kind: u8,
         index: u16,
@@ -14595,6 +14612,9 @@ impl VM {
                 self.set_pending_reference_error(ctx, "Cannot access variable before initialization");
                 return;
             }
+            if base_dst != u16::MAX {
+                self.set_reg(base_dst, object);
+            }
             if exists {
                 self.get_named_prop_result(ctx, dst, object, atom, instr_pc);
             } else {
@@ -14604,6 +14624,9 @@ impl VM {
         }
         if self.pending_throw.is_some() {
             return;
+        }
+        if base_dst != u16::MAX {
+            self.set_reg(base_dst, JSValue::undefined());
         }
         if kind == 0 {
             let global = ctx.global();
