@@ -232,15 +232,14 @@ fn call_callback_with_this(
 
 fn get_property_with_getter(
     ctx: &mut JSContext,
-    obj_ptr: usize,
+    obj_val: JSValue,
     prop: crate::runtime::atom::Atom,
 ) -> Result<JSValue, String> {
-    let obj = unsafe { &*(obj_ptr as *const JSObject) };
+    let obj = obj_val.as_object();
     if let Some(entry) = obj.get_own_accessor_entry(prop) {
         if let Some(getter) = entry.get {
             if getter.is_function() {
-                let this = JSValue::new_object(obj_ptr);
-                return call_callback_with_this(ctx, getter, this, &[]);
+                return call_callback_with_this(ctx, getter, obj_val, &[]);
             }
         }
     }
@@ -441,9 +440,7 @@ pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue,
     if !iterator.is_object() {
         return None;
     }
-    let iter_ptr = iterator.get_ptr();
-    let iter_obj = unsafe { &*(iter_ptr as *const JSObject) };
-    let iter_obj_mut = unsafe { &mut *(iter_ptr as *mut JSObject) };
+    let iter_obj = iterator.as_object_mut();
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
 
@@ -456,7 +453,7 @@ pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue,
             if idx < chars.len() {
                 let ch = chars[idx].to_string();
                 let ch_atom = ctx.atom_table_mut().intern(&ch);
-                iter_obj_mut.set(idx_atom, JSValue::new_int((idx + 1) as i64));
+                iter_obj.set(idx_atom, JSValue::new_int((idx + 1) as i64));
                 return Some((JSValue::new_string(ch_atom), false));
             } else {
                 return Some((JSValue::undefined(), true));
@@ -477,7 +474,7 @@ pub fn iterator_next(ctx: &mut JSContext, iterator: JSValue) -> Option<(JSValue,
                     let key = ctx.intern(&idx.to_string());
                     arr_obj.get(key).unwrap_or(JSValue::undefined())
                 };
-                iter_obj_mut.set(idx_atom, JSValue::new_int((idx + 1) as i64));
+                iter_obj.set(idx_atom, JSValue::new_int((idx + 1) as i64));
                 return Some((value, false));
             } else {
                 return Some((JSValue::undefined(), true));
@@ -564,8 +561,6 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     obj.set(size_atom, JSValue::new_int(0));
 
     let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)) as usize);
-    let obj_ptr = this_val.get_ptr();
-    let obj_ref = unsafe { &mut *(obj_ptr as *mut JSObject) };
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -600,9 +595,7 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                     return JSValue::undefined();
                                 }
                                 if value.is_object() {
-                                    let pair_obj = value.as_object();
-                                    let pair_ptr = pair_obj as *const JSObject as usize;
-                                    let k = match get_property_with_getter(ctx, pair_ptr, k_atom_0) {
+                                    let k = match get_property_with_getter(ctx, value, k_atom_0) {
                                         Ok(v) => v,
                                         Err(_) => {
                                             let saved_exc = ctx.pending_exception.take();
@@ -611,7 +604,7 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                             return JSValue::undefined();
                                         }
                                     };
-                                    let v = match get_property_with_getter(ctx, pair_ptr, k_atom_1) {
+                                    let v = match get_property_with_getter(ctx, value, k_atom_1) {
                                         Ok(v) => v,
                                         Err(_) => {
                                             let saved_exc = ctx.pending_exception.take();
@@ -649,9 +642,7 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                     return JSValue::undefined();
                                 }
                                 if value.is_object() {
-                                    let pair_obj = value.as_object();
-                                    let pair_ptr = pair_obj as *const JSObject as usize;
-                                    let k = match get_property_with_getter(ctx, pair_ptr, k_atom_0) {
+                                    let k = match get_property_with_getter(ctx, value, k_atom_0) {
                                         Ok(v) => v,
                                         Err(_) => {
                                             let saved_exc = ctx.pending_exception.take();
@@ -660,7 +651,7 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                             return JSValue::undefined();
                                         }
                                     };
-                                    let v = match get_property_with_getter(ctx, pair_ptr, k_atom_1) {
+                                    let v = match get_property_with_getter(ctx, value, k_atom_1) {
                                         Ok(v) => v,
                                         Err(_) => {
                                             let saved_exc = ctx.pending_exception.take();
@@ -670,16 +661,16 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                                         }
                                     };
 
-                                    let cur_size = map_size(ctx, obj_ref);
-                                    if let Some(idx) = map_find(ctx, obj_ref, &k) {
+                                    let cur_size = map_size(ctx, this_val.as_object_mut());
+                                    if let Some(idx) = map_find(ctx, this_val.as_object_mut(), &k) {
                                         let mv_atom = map_val_atom(ctx, idx);
-                                        obj_ref.set(mv_atom, v);
+                                        this_val.as_object_mut().set(mv_atom, v);
                                     } else {
                                         let mk_atom = map_key_atom(ctx, cur_size);
                                         let mv_atom = map_val_atom(ctx, cur_size);
-                                        obj_ref.set(mk_atom, k);
-                                        obj_ref.set(mv_atom, v);
-                                        obj_ref.set(size_atom, JSValue::new_int((cur_size + 1) as i64));
+                                        this_val.as_object_mut().set(mk_atom, k);
+                                        this_val.as_object_mut().set(mv_atom, v);
+                                        this_val.as_object_mut().set(size_atom, JSValue::new_int((cur_size + 1) as i64));
                                     }
                                 }
                             }
@@ -691,9 +682,9 @@ pub fn map_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let size_val = obj_ref.get(size_atom).unwrap_or(JSValue::new_int(0));
+    let size_val = this_val.as_object_mut().get(size_atom).unwrap_or(JSValue::new_int(0));
     let size_prop_atom = ctx.intern("size");
-    obj_ref.set(size_prop_atom, size_val);
+    this_val.as_object_mut().set(size_prop_atom, size_val);
 
     this_val
 }
@@ -1200,9 +1191,7 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         throw_type_error(ctx, "Iterator.prototype.next called on incompatible receiver");
         return JSValue::undefined();
     }
-    let obj_ptr = this.get_ptr();
-    let obj = unsafe { &*(obj_ptr as *const JSObject) };
-    let obj_mut = unsafe { &mut *(obj_ptr as *mut JSObject) };
+    let obj = this.as_object_mut();
     let arr_atom = ctx.common_atoms.__iter_arr__;
     let idx_atom = ctx.common_atoms.__iter_idx__;
     let map_atom = ctx.intern("__iter_map__");
@@ -1236,7 +1225,7 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                     _ => make_array(ctx, vec![k, v]),
                 }
             };
-            obj_mut.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
+            obj.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
             let mut result = JSObject::new();
             result.set(value_atom, value);
             result.set(done_atom, JSValue::bool(false));
@@ -1266,7 +1255,7 @@ fn map_set_iterator_next(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let len = arr_obj.get(ctx.common_atoms.length).map(|v| super::string::js_to_length(&v) as usize).unwrap_or(0);
     if iter_idx < len {
         let value = super::array::array_get(arr_obj, iter_idx, ctx).unwrap_or_else(JSValue::undefined);
-        obj_mut.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
+        obj.set(idx_atom, JSValue::new_int((iter_idx + 1) as i64));
         let mut result = JSObject::new();
         result.set(value_atom, value);
         result.set(done_atom, JSValue::bool(false));
@@ -1582,8 +1571,6 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     obj.set(size_atom, JSValue::new_int(0));
 
     let this_val = JSValue::new_object(Box::into_raw(Box::new(obj)) as usize);
-    let obj_ptr = this_val.get_ptr();
-    let obj_ref = unsafe { &mut *(obj_ptr as *mut JSObject) };
 
     if let Some(iterable) = args.first() {
         if iterable.is_object() || iterable.is_string() {
@@ -1621,11 +1608,11 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                         match iterator_next(ctx, iterator) {
                             Some((_value, true)) => break,
                             Some((value, false)) => {
-                                let cur_size = set_size(ctx, obj_ref);
-                                if set_find(ctx, obj_ref, &value).is_none() {
+                                let cur_size = set_size(ctx, this_val.as_object_mut());
+                                if set_find(ctx, this_val.as_object_mut(), &value).is_none() {
                                     let sv_atom = set_val_atom(ctx, cur_size);
-                                    obj_ref.set(sv_atom, value);
-                                    obj_ref.set(size_atom, JSValue::new_int((cur_size + 1) as i64));
+                                    this_val.as_object_mut().set(sv_atom, value);
+                                    this_val.as_object_mut().set(size_atom, JSValue::new_int((cur_size + 1) as i64));
                                 }
                             }
                             None => break,
@@ -1636,9 +1623,9 @@ pub fn set_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         }
     }
 
-    let size_val = obj_ref.get(size_atom).unwrap_or(JSValue::new_int(0));
+    let size_val = this_val.as_object_mut().get(size_atom).unwrap_or(JSValue::new_int(0));
     let size_prop_atom = ctx.intern("size");
-    obj_ref.set(size_prop_atom, size_val);
+    this_val.as_object_mut().set(size_prop_atom, size_val);
 
     this_val
 }
@@ -2281,10 +2268,8 @@ pub fn init_map_set(ctx: &mut JSContext) {
         map_func_ref.base.set(ctx.intern("groupBy"), group_by_fn);
     }
     crate::builtins::symbol::install_species_accessor(ctx, &map_ctor);
-    unsafe {
-        let proto_ref = &mut *(map_proto_ptr as *mut crate::object::object::JSObject);
-        set_ne(proto_ref, ctx.common_atoms.constructor, map_ctor);
-    }
+    let proto_ref = map_proto_value.as_object_mut();
+    set_ne(proto_ref, ctx.common_atoms.constructor, map_ctor);
 
     let map_atom = ctx.intern("Map");
     let global = ctx.global();
@@ -2400,10 +2385,8 @@ pub fn init_map_set(ctx: &mut JSContext) {
         define_ctor_prototype(&mut set_func_ref.base, ctx.common_atoms.prototype, set_proto_value);
     }
     crate::builtins::symbol::install_species_accessor(ctx, &set_ctor);
-    unsafe {
-        let proto_ref = &mut *(set_proto_ptr as *mut crate::object::object::JSObject);
-        set_ne(proto_ref, ctx.common_atoms.constructor, set_ctor);
-    }
+    let proto_ref = set_proto_value.as_object_mut();
+    set_ne(proto_ref, ctx.common_atoms.constructor, set_ctor);
 
     let set_atom = ctx.intern("Set");
     let global = ctx.global();
@@ -2468,10 +2451,8 @@ pub fn init_map_set(ctx: &mut JSContext) {
         let wm_func_ref = weakmap_ctor.as_function_mut();
         define_ctor_prototype(&mut wm_func_ref.base, ctx.common_atoms.prototype, weakmap_proto_value);
     }
-    unsafe {
-        let proto_ref = &mut *(weakmap_proto_ptr as *mut crate::object::object::JSObject);
-        set_ne(proto_ref, ctx.common_atoms.constructor, weakmap_ctor);
-    }
+    let proto_ref = weakmap_proto_value.as_object_mut();
+    set_ne(proto_ref, ctx.common_atoms.constructor, weakmap_ctor);
 
     let weakmap_atom = ctx.intern("WeakMap");
     if global.is_object() {
@@ -2515,10 +2496,8 @@ pub fn init_map_set(ctx: &mut JSContext) {
         let ws_func_ref = weakset_ctor.as_function_mut();
         define_ctor_prototype(&mut ws_func_ref.base, ctx.common_atoms.prototype, weakset_proto_value);
     }
-    unsafe {
-        let proto_ref = &mut *(weakset_proto_ptr as *mut crate::object::object::JSObject);
-        set_ne(proto_ref, ctx.common_atoms.constructor, weakset_ctor);
-    }
+    let proto_ref = weakset_proto_value.as_object_mut();
+    set_ne(proto_ref, ctx.common_atoms.constructor, weakset_ctor);
 
     let weakset_atom = ctx.intern("WeakSet");
     if global.is_object() {
