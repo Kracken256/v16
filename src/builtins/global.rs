@@ -223,8 +223,7 @@ pub fn init_globals(ctx: &mut JSContext) {
             });
             for value in values {
                 if value.is_function() {
-                    let func =
-                        unsafe { crate::value::JSValue::function_from_ptr_mut(value.get_ptr()) };
+                    let func = value.as_function_mut();
                     if func.base.prototype.is_none() {
                         func.base.set_prototype_raw(fn_proto_ptr);
                     }
@@ -253,7 +252,8 @@ pub fn init_globals(ctx: &mut JSContext) {
     }
 
     if let Some(fn_proto_ptr) = ctx.get_function_prototype() {
-        let fn_proto = unsafe { &mut *fn_proto_ptr };
+        let fn_proto_val = JSValue::new_object(fn_proto_ptr as usize);
+        let fn_proto = fn_proto_val.as_object_mut();
         let has_instance_sym = crate::builtins::symbol::get_symbol_has_instance(ctx);
         let hi_func =
             crate::object::function::JSFunction::new_builtin(ctx.intern("[Symbol.hasInstance]"), 1);
@@ -684,7 +684,7 @@ fn v16_import(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             Some(name) => {
                 let atom = ctx.intern(&name);
                 let ns_value = JSValue::new_object(ns_ptr);
-                let ns_obj = unsafe { &*(ns_ptr as *const JSObject) };
+                let ns_obj = ns_value.as_object();
                 if ns_obj.is_module_namespace() {
                     if let Some(desc) = ns_obj.get_own_descriptor(atom) {
                         return crate::builtins::object::namespace_live_descriptor_value(
@@ -797,7 +797,8 @@ fn v16_import_meta(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
         .unwrap_or_default();
 
     if let Some(ptr) = ctx.get_import_meta() {
-        let existing = unsafe { &*(ptr as *const JSObject) };
+        let existing_val = JSValue::new_object(ptr);
+        let existing = existing_val.as_object();
         let matches = existing
             .get(ctx.intern("url"))
             .map(|v| v.is_string() && ctx.get_atom_str(v.get_atom()) == url)
@@ -966,12 +967,8 @@ fn reflect_get(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             }
             return JSValue::undefined();
         }
-        if let Some(proto_ptr) = obj.prototype_ptr() {
-            if proto_ptr.is_null() { break; }
-            current = Some(unsafe { &*proto_ptr });
-        } else {
-            break;
-        }
+        current = obj.prototype_object();
+        if current.is_none() { break; }
     }
     JSValue::undefined()
 }
@@ -1287,13 +1284,13 @@ fn reflect_set_prototype_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             return JSValue::bool(false);
         }
         // Check for cycles
-        let mut current = new_proto;
+        let mut current = proto_val.as_object().prototype_object();
         let mut depth = 0u32;
-        while let Some(ptr) = unsafe { current.as_ref() }.and_then(|o| o.prototype) {
-            if ptr == obj_ptr || depth > 1000 {
+        while let Some(proto) = current {
+            if proto as *const JSObject as *mut JSObject == obj_ptr || depth > 1000 {
                 return JSValue::bool(false);
             }
-            current = ptr;
+            current = proto.prototype_object();
             depth += 1;
         }
         let obj_mut = args[0].as_object_mut();
@@ -2150,14 +2147,14 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
             }
         };
         if let Some(tp_atom) = to_prim_atom {
-            let mut cur: Option<*mut crate::object::object::JSObject> = Some(v.get_ptr() as *mut crate::object::object::JSObject);
+            let mut cur = Some(v.as_object());
             let mut depth = 0u32;
             while let Some(p) = cur {
                 if depth > 100 {
                     break;
                 }
-                unsafe {
-                    let tp_val = (*p).get_own_value(tp_atom);
+                {
+                    let tp_val = p.get_own_value(tp_atom);
                     if let Some(f) = tp_val {
                         if f.is_null_or_undefined() {
                             break;
@@ -2216,7 +2213,7 @@ fn js_to_primitive_number(ctx: &mut JSContext, v: &JSValue) -> Option<JSValue> {
                         }
                         return None;
                     }
-                    cur = (*p).prototype;
+                    cur = p.prototype_object();
                 }
                 depth += 1;
             }
@@ -2584,17 +2581,15 @@ fn init_number(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_number_prototype(proto_ptr);
 
-    let num_func_ptr = num_ptr as *mut crate::object::function::JSFunction;
-    unsafe {
-        use crate::object::object::PropertyDescriptor;
-        let mut desc = PropertyDescriptor::new_data(JSValue::new_object(proto_ptr));
-        desc.writable = false;
-        desc.enumerable = false;
-        desc.configurable = false;
-        (*num_func_ptr)
-            .base
-            .define_property(ctx.common_atoms.prototype, desc);
-    }
+    use crate::object::object::PropertyDescriptor;
+    let mut desc = PropertyDescriptor::new_data(JSValue::new_object(proto_ptr));
+    desc.writable = false;
+    desc.enumerable = false;
+    desc.configurable = false;
+    num_value
+        .as_function_mut()
+        .base
+        .define_property(ctx.common_atoms.prototype, desc);
 }
 
 fn number_value_of(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -2784,19 +2779,17 @@ fn this_number_value(ctx: &mut JSContext, this: &JSValue) -> Option<f64> {
                 is_number_wrapper = true;
             }
             if !is_number_wrapper {
-                let mut current = this.as_object().prototype;
+                let mut current = obj.prototype_object();
                 let mut depth = 0u32;
                 while let Some(p) = current {
-                    if p.is_null() || depth > 10 {
+                    if depth > 10 {
                         break;
                     }
-                    if p as usize == np as usize {
+                    if p as *const JSObject as usize == np as usize {
                         is_number_wrapper = true;
                         break;
                     }
-                    unsafe {
-                        current = (*p).prototype;
-                    }
+                    current = p.prototype_object();
                     depth += 1;
                 }
             }
@@ -3308,31 +3301,29 @@ fn init_boolean(ctx: &mut JSContext) {
     ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
     ctx.set_bool_prototype(proto_ptr);
 
-    let bool_func_ptr = bool_ptr as *mut crate::object::function::JSFunction;
-    unsafe {
-        (*bool_func_ptr).base.define_property(
-            ctx.common_atoms.prototype,
-            PropertyDescriptor {
-                value: Some(JSValue::new_object(proto_ptr)),
-                writable: false,
-                enumerable: false,
-                configurable: false,
-                get: None,
-                set: None,
-            },
-        );
-        (*bool_func_ptr).base.define_property(
-            ctx.intern("length"),
-            PropertyDescriptor {
-                value: Some(JSValue::new_float(1.0)),
-                writable: false,
-                enumerable: false,
-                configurable: true,
-                get: None,
-                set: None,
-            },
-        );
-    }
+    let bool_func_ref = bool_value.as_function_mut();
+    bool_func_ref.base.define_property(
+        ctx.common_atoms.prototype,
+        PropertyDescriptor {
+            value: Some(JSValue::new_object(proto_ptr)),
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            get: None,
+            set: None,
+        },
+    );
+    bool_func_ref.base.define_property(
+        ctx.intern("length"),
+        PropertyDescriptor {
+            value: Some(JSValue::new_float(1.0)),
+            writable: false,
+            enumerable: false,
+            configurable: true,
+            get: None,
+            set: None,
+        },
+    );
 
     let global = ctx.global();
     if global.is_object() {
