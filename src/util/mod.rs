@@ -1,6 +1,7 @@
 pub mod fxhash;
 pub mod iomux;
 pub mod memchr;
+pub mod utf16;
 
 pub use fxhash::FxHashMap;
 pub use fxhash::FxHashSet;

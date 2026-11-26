@@ -685,9 +685,7 @@ impl Lexer {
                             }
                         }
                         if i < self.source.len() && self.source[i] == '}' && digits > 0 && !overflow {
-                            if let Some(decoded) = char::from_u32(code) {
-                                value.push(decoded);
-                            }
+                            value.push(crate::util::utf16::char_for_code_unit(code));
                             let steps = i - self.pos;
                             for _ in 0..steps {
                                 self.advance();
@@ -739,9 +737,7 @@ impl Lexer {
                                 }
                             }
                             if !combined_pair {
-                                if let Some(decoded) = char::from_u32(code) {
-                                    value.push(decoded);
-                                }
+                                value.push(crate::util::utf16::char_for_code_unit(code));
                             }
                         } else {
                             self.fail("Invalid Unicode escape sequence");
@@ -1596,9 +1592,7 @@ impl Lexer {
                         {
                             raw.push('}');
                             self.advance();
-                            if let Some(ch) = char::from_u32(code) {
-                                value.push(ch);
-                            }
+                            value.push(crate::util::utf16::char_for_code_unit(code));
                         } else {
                             invalid_escape = true;
                         }
@@ -1615,8 +1609,37 @@ impl Lexer {
                             digits += 1;
                         }
                         if digits == 4 {
-                            if let Some(ch) = char::from_u32(code) {
-                                value.push(ch);
+                            let mut combined_pair = false;
+                            if (0xD800..=0xDBFF).contains(&code) && self.pos + 6 <= self.source.len()
+                            {
+                                if self.source[self.pos] == '\\' && self.source[self.pos + 1] == 'u'
+                                {
+                                    if let (Some(a2), Some(b2), Some(c2), Some(d2)) = (
+                                        self.source.get(self.pos + 2).and_then(|c| c.to_digit(16)),
+                                        self.source.get(self.pos + 3).and_then(|c| c.to_digit(16)),
+                                        self.source.get(self.pos + 4).and_then(|c| c.to_digit(16)),
+                                        self.source.get(self.pos + 5).and_then(|c| c.to_digit(16)),
+                                    ) {
+                                        let low = (a2 << 12) | (b2 << 8) | (c2 << 4) | d2;
+                                        if (0xDC00..=0xDFFF).contains(&low) {
+                                            let cp =
+                                                0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                                            raw.push('\\');
+                                            self.advance();
+                                            raw.push('u');
+                                            self.advance();
+                                            for _ in 0..4 {
+                                                raw.push(self.source[self.pos]);
+                                                self.advance();
+                                            }
+                                            value.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
+                                            combined_pair = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if !combined_pair {
+                                value.push(crate::util::utf16::char_for_code_unit(code));
                             }
                         } else {
                             invalid_escape = true;

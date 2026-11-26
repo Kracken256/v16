@@ -9047,13 +9047,16 @@ impl VM {
                             }
                         }
                     } else if obj_val.is_string() && key_val.is_int() {
-                        let s = ctx.get_atom_str(obj_val.get_atom());
                         let idx = key_val.get_int();
                         if idx < 0 {
                             JSValue::undefined()
-                        } else if let Some(ch) = s.chars().nth(idx as usize) {
-                            let chs = ch.to_string();
-                            JSValue::new_string(ctx.intern(&chs))
+                        } else if let Some(unit) =
+                            ctx.string_code_unit_at(obj_val.get_atom(), idx as usize)
+                        {
+                            let ch = crate::util::utf16::char_for_code_unit(unit);
+                            let mut buf = [0u8; 4];
+                            let chs = ch.encode_utf8(&mut buf);
+                            JSValue::new_string(ctx.intern(chs))
                         } else {
                             JSValue::undefined()
                         }
@@ -9061,12 +9064,13 @@ impl VM {
                         let str_atom = obj_val.get_atom();
                         let key = ctx.get_atom_str(key_val.get_atom());
                         if key == "length" {
-                            JSValue::new_int(ctx.string_char_count(str_atom) as i64)
+                            JSValue::new_int(ctx.string_code_unit_count(str_atom) as i64)
                         } else if let Ok(idx) = key.parse::<usize>() {
-                            let s = ctx.get_atom_str(str_atom);
-                            if let Some(ch) = s.chars().nth(idx) {
-                                let chs = ch.to_string();
-                                JSValue::new_string(ctx.intern(&chs))
+                            if let Some(unit) = ctx.string_code_unit_at(str_atom, idx) {
+                                let ch = crate::util::utf16::char_for_code_unit(unit);
+                                let mut buf = [0u8; 4];
+                                let chs = ch.encode_utf8(&mut buf);
+                                JSValue::new_string(ctx.intern(chs))
                             } else {
                                 JSValue::undefined()
                             }
@@ -14256,7 +14260,7 @@ impl VM {
                 || obj.is_bigint()
             {
                 if obj.is_string() && atom == ctx.common_atoms.length {
-                    return Ok(JSValue::new_int(ctx.string_char_count(obj.get_atom()) as i64));
+                    return Ok(JSValue::new_int(ctx.string_code_unit_count(obj.get_atom()) as i64));
                 }
                 let mut current = if obj.is_string() {
                     ctx.get_string_prototype()
@@ -15560,7 +15564,7 @@ impl VM {
                 || obj_val.is_bigint())
         {
             if obj_val.is_string() && atom == ctx.common_atoms.length {
-                let len = ctx.string_char_count(obj_val.get_atom()) as i64;
+                let len = ctx.string_code_unit_count(obj_val.get_atom()) as i64;
                 let v = JSValue::new_int(len);
                 self.set_reg(dst, v);
                 return Some(v);
@@ -16019,7 +16023,7 @@ impl VM {
         } else if obj_val.is_string() {
             if atom == ctx.common_atoms.length {
                 Some(JSValue::new_int(
-                    ctx.string_char_count(obj_val.get_atom()) as i64
+                    ctx.string_code_unit_count(obj_val.get_atom()) as i64
                 ))
             } else if let Some(proto_ptr) = ctx.get_string_prototype() {
                 let proto_obj = unsafe { &*proto_ptr };
@@ -17581,9 +17585,9 @@ impl VM {
     }
 
     fn utf16_less_than(a: &str, b: &str) -> bool {
-        let a: Vec<u16> = a.encode_utf16().collect();
-        let b: Vec<u16> = b.encode_utf16().collect();
-        a < b
+        crate::util::utf16::code_units(a)
+            .cmp(crate::util::utf16::code_units(b))
+            .is_lt()
     }
 
     fn bigint_less_than_number(

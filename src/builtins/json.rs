@@ -620,6 +620,10 @@ fn escape_json_string(s: &str) -> String {
             c if c.is_ascii_control() => {
                 out.push_str(&format!("\\u{:04x}", c as u8));
             }
+            c if crate::util::utf16::is_surrogate_escape(c) => {
+                let unit = crate::util::utf16::surrogate_escape_unit(c).unwrap_or(0xFFFD);
+                out.push_str(&format!("\\u{:04x}", unit));
+            }
             c => out.push(c),
         }
     }

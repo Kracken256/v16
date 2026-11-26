@@ -53,6 +53,15 @@ impl AtomTable {
             return Atom(idx);
         }
 
+        let canonical = crate::util::utf16::canonicalize_surrogate_pairs(s);
+        let s = canonical.as_deref().unwrap_or(s);
+        if let Some(&idx) = self.index_map.get(s) {
+            if let Some(entry) = self.entries.get_mut(&idx) {
+                entry.ref_count = entry.ref_count.saturating_add(1);
+            }
+            return Atom(idx);
+        }
+
         let idx = self.next_index;
         self.next_index += 1;
 
@@ -139,22 +148,22 @@ impl AtomTable {
     }
 
     #[inline]
-    pub fn char_count(&self, atom: Atom) -> usize {
+    pub fn code_unit_count(&self, atom: Atom) -> usize {
         let s = self.get(atom);
         if s.is_ascii() {
             s.len()
         } else {
-            s.chars().count()
+            crate::util::utf16::code_unit_len(s)
         }
     }
 
     #[inline]
-    pub fn char_code_at(&self, atom: Atom, index: usize) -> Option<u32> {
+    pub fn code_unit_at(&self, atom: Atom, index: usize) -> Option<u32> {
         let s = self.get(atom);
         if s.is_ascii() {
             s.as_bytes().get(index).map(|&b| b as u32)
         } else {
-            s.chars().nth(index).map(|c| c as u32)
+            crate::util::utf16::code_unit_at(s, index).map(|unit| unit as u32)
         }
     }
 

@@ -896,13 +896,13 @@ fn string_char_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         0usize
     };
 
-    if index >= ctx.string_char_count(atom) {
+    if index >= ctx.string_code_unit_count(atom) {
         return JSValue::new_string(ctx.intern(""));
     }
 
-    match ctx.string_char_code_at(atom, index) {
+    match ctx.string_code_unit_at(atom, index) {
         Some(code) => {
-            let c = char::from_u32(code).unwrap_or('\0');
+            let c = crate::util::utf16::char_for_code_unit(code);
             let mut buf = [0u8; 4];
             let s = c.encode_utf8(&mut buf);
             JSValue::new_string(ctx.intern(s))
@@ -931,7 +931,7 @@ fn string_char_code_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         0
     };
 
-    match ctx.string_char_code_at(atom, index) {
+    match ctx.string_code_unit_at(atom, index) {
         Some(code) => JSValue::new_int(code as i64),
         None => JSValue::new_float(f64::NAN),
     }
@@ -1468,7 +1468,7 @@ fn string_fromcharcode(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let unit = to_uint16(n);
         units.push(unit);
     }
-    let result: String = String::from_utf16_lossy(&units);
+    let result = crate::util::utf16::string_from_code_units(&units);
     JSValue::new_string(ctx.intern(&result))
 }
 
@@ -1528,14 +1528,7 @@ fn string_fromcodepoint(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
             ctx.pending_exception = Some(JSValue::new_object(ptr));
             return JSValue::undefined();
         }
-        let code = cp as u32;
-        if let Some(c) = char::from_u32(code) {
-            result.push(c);
-        } else if code >= 0xD800 && code <= 0xDFFF {
-            result.push('\u{FFFD}');
-        } else {
-            result.push('\u{FFFD}');
-        }
+        result.push(crate::util::utf16::char_for_code_unit(cp as u32));
     }
     JSValue::new_string(ctx.intern(&result))
 }
@@ -2159,26 +2152,25 @@ fn string_code_point_at(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         Some(s) => s,
         None => return JSValue::undefined(),
     };
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
+    let len = crate::util::utf16::code_unit_len(&s) as i64;
     let index = if args.len() > 1 {
         to_integer_index(&args[1], ctx)
     } else {
         0
     };
-    let actual_index = if index < 0 { len as i64 + index } else { index };
-    if actual_index < 0 || actual_index as usize >= len {
+    let actual_index = if index < 0 { len + index } else { index };
+    if actual_index < 0 || actual_index >= len {
         return JSValue::undefined();
     }
-    let c = chars[actual_index as usize];
-    if (c as u32) >= 0xD800 && (c as u32) <= 0xDBFF && actual_index as usize + 1 < len {
-        let next = chars[actual_index as usize + 1];
-        if (next as u32) >= 0xDC00 && (next as u32) <= 0xDFFF {
-            let cp = 0x10000 + (((c as u32) - 0xD800) << 10) + (next as u32) - 0xDC00;
+    let unit = crate::util::utf16::code_unit_at(&s, actual_index as usize).unwrap_or(0);
+    if (0xD800..=0xDBFF).contains(&unit) && actual_index + 1 < len {
+        let next = crate::util::utf16::code_unit_at(&s, actual_index as usize + 1).unwrap_or(0);
+        if (0xDC00..=0xDFFF).contains(&next) {
+            let cp = 0x10000 + ((unit as u32 - 0xD800) << 10) + (next as u32 - 0xDC00);
             return JSValue::new_int(cp as i64);
         }
     }
-    JSValue::new_int(c as u32 as i64)
+    JSValue::new_int(unit as i64)
 }
 
 fn string_match_all(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {

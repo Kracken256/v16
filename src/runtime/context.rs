@@ -735,13 +735,13 @@ impl JSContext {
     }
 
     #[inline]
-    pub fn string_char_count(&self, atom: Atom) -> usize {
-        self.atom_table().char_count(atom)
+    pub fn string_code_unit_count(&self, atom: Atom) -> usize {
+        self.atom_table().code_unit_count(atom)
     }
 
     #[inline]
-    pub fn string_char_code_at(&self, atom: Atom, index: usize) -> Option<u32> {
-        self.atom_table().char_code_at(atom, index)
+    pub fn string_code_unit_at(&self, atom: Atom, index: usize) -> Option<u32> {
+        self.atom_table().code_unit_at(atom, index)
     }
 
     pub fn mark_symbol_atom(&mut self, atom: Atom) {

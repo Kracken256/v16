@@ -311,35 +311,31 @@ impl<'a> JsonParser<'a> {
         }
 
         if (0xD800..=0xDBFF).contains(&code) {
-            if self.advance() != Some(b'\\') || self.advance() != Some(b'u') {
-                return Err("JSON: expected low surrogate after high surrogate".to_string());
+            let saved = self.pos;
+            if self.advance() == Some(b'\\') && self.advance() == Some(b'u') {
+                let mut low = 0u32;
+                let mut digits = 0;
+                while digits < 4 {
+                    let Some(b) = self.advance() else { break };
+                    let digit = match b {
+                        b'0'..=b'9' => (b - b'0') as u32,
+                        b'a'..=b'f' => (b - b'a') as u32 + 10,
+                        b'A'..=b'F' => (b - b'A') as u32 + 10,
+                        _ => break,
+                    };
+                    low = (low << 4) | digit;
+                    digits += 1;
+                }
+                if digits == 4 && (0xDC00..=0xDFFF).contains(&low) {
+                    let combined = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                    return char::from_u32(combined)
+                        .ok_or("JSON: invalid codepoint from surrogate pair".to_string());
+                }
             }
-            let mut low = 0u32;
-            for _ in 0..4 {
-                let b = self
-                    .advance()
-                    .ok_or("JSON: unterminated surrogate escape")?;
-                let digit = match b {
-                    b'0'..=b'9' => (b - b'0') as u32,
-                    b'a'..=b'f' => (b - b'a') as u32 + 10,
-                    b'A'..=b'F' => (b - b'A') as u32 + 10,
-                    _ => {
-                        return Err(format!(
-                            "JSON: invalid hex digit in surrogate '{}'",
-                            b as char
-                        ));
-                    }
-                };
-                low = (low << 4) | digit;
-            }
-            if !(0xDC00..=0xDFFF).contains(&low) {
-                return Err("JSON: invalid low surrogate".to_string());
-            }
-            let combined = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
-            char::from_u32(combined)
-                .ok_or("JSON: invalid codepoint from surrogate pair".to_string())
+            self.pos = saved;
+            Ok(crate::util::utf16::char_for_code_unit(code))
         } else {
-            char::from_u32(code).ok_or("JSON: invalid unicode codepoint".to_string())
+            Ok(crate::util::utf16::char_for_code_unit(code))
         }
     }
 
