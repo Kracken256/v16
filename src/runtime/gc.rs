@@ -628,6 +628,9 @@ impl GcHeap {
                 for v in &state.snapshot {
                     self.mark_value(v);
                 }
+                for v in &state.saved_args {
+                    self.mark_value(v);
+                }
                 if let Some(func_ptr) = state.func_ptr {
                     let func = JSValue::new_function(func_ptr);
                     self.mark_value(&func);
@@ -637,6 +640,9 @@ impl GcHeap {
 
             if let Some(state) = obj.get_async_state() {
                 for v in &state.snapshot {
+                    self.mark_value(v);
+                }
+                for v in &state.saved_args {
                     self.mark_value(v);
                 }
                 if let Some(func_ptr) = state.func_ptr {
@@ -1615,6 +1621,99 @@ mod tests {
         unsafe {
             let _ = Box::from_raw(async_ptr);
             let _ = Box::from_raw(func_ptr);
+        }
+    }
+
+    #[test]
+    fn test_gc_trace_generator_state_saved_args() {
+        let mut heap = GcHeap::new();
+
+        let arg_obj = JSObject::new();
+        let arg_ptr = Box::into_raw(Box::new(arg_obj));
+        heap.track(arg_ptr);
+
+        let state = crate::object::object::GeneratorState {
+            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            snapshot: Vec::new(),
+            pc: 0,
+            done: false,
+            send_reg: None,
+            argc: 0,
+            saved_args: vec![JSValue::new_object(arg_ptr)],
+            func_ptr: None,
+            handlers: Vec::new(),
+            yield_is_result: false,
+            upvalue_cells: Vec::new(),
+            param_env: JSValue::undefined(),
+            param_env_own: false,
+        };
+        let mut gen_obj = JSObject::new();
+        gen_obj.set_is_generator(true);
+        gen_obj.set_generator_state(state);
+        let gen_ptr = Box::into_raw(Box::new(gen_obj));
+        heap.track(gen_ptr);
+
+        let roots = vec![JSValue::new_object(gen_ptr)];
+
+        let freed = heap.run_gc(&roots);
+
+        assert_eq!(freed, 0);
+        assert_eq!(heap.object_count(), 2);
+
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(gen_ptr);
+            let _ = Box::from_raw(arg_ptr);
+        }
+    }
+
+    #[test]
+    fn test_gc_trace_async_state_saved_args() {
+        let mut heap = GcHeap::new();
+
+        let arg_obj = JSObject::new();
+        let arg_ptr = Box::into_raw(Box::new(arg_obj));
+        heap.track(arg_ptr);
+
+        let state = crate::object::object::AsyncState {
+            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            snapshot: Vec::new(),
+            pc: 0,
+            done: false,
+            send_reg: None,
+            saved_args: vec![JSValue::new_object(arg_ptr)],
+            func_ptr: None,
+            handlers: Vec::new(),
+            pending_throw: None,
+            resume_kind: 0,
+            resume_value: JSValue::undefined(),
+            yield_is_result: false,
+            pending_yield: false,
+            pending_finally_return: None,
+            pending_finally_rethrow: None,
+            pending_finally_jump: None,
+            pending_finally_depth: 0,
+            pending_close_state: None,
+            upvalue_cells: Vec::new(),
+            param_env: JSValue::undefined(),
+            param_env_own: false,
+        };
+        let mut async_obj = JSObject::new();
+        async_obj.set_async_state(state);
+        let async_ptr = Box::into_raw(Box::new(async_obj));
+        heap.track(async_ptr);
+
+        let roots = vec![JSValue::new_object(async_ptr)];
+
+        let freed = heap.run_gc(&roots);
+
+        assert_eq!(freed, 0);
+        assert_eq!(heap.object_count(), 2);
+
+        // SAFETY: both pointers came from `Box::into_raw` above and are reclaimed exactly once.
+        unsafe {
+            let _ = Box::from_raw(async_ptr);
+            let _ = Box::from_raw(arg_ptr);
         }
     }
 
