@@ -530,8 +530,8 @@ impl GcHeap {
                 self.mark(proto_ptr as usize);
             }
         } else if tag == TAG_FUNCTION {
-            let func = unsafe { &*(ptr as *const JSFunction) };
-            self.trace_function(func);
+            let func_value = JSValue::new_function(ptr);
+            self.trace_function(func_value.as_function());
         } else {
             let obj = JSValue::new_object(ptr);
             let obj = obj.as_object();
@@ -967,20 +967,23 @@ impl GcHeap {
         for &idx in &dead {
             let ptr = self.objects[idx];
             let tag = self.tags[idx];
+            let mut pooled_props = None;
+            if tag == TAG_OBJECT {
+                let object_value = JSValue::new_object(ptr);
+                let mut props = object_value.as_object_mut().take_props();
+                props.clear();
+                pooled_props = Some(props);
+            }
             unsafe {
                 if tag == TAG_OBJECT {
-                    let obj = &mut *(ptr as *mut JSObject);
-
-                    let mut props = obj.take_props();
-                    props.clear();
-
                     std::ptr::drop_in_place(ptr as *mut JSObject);
-
-                    if props.capacity() <= 8 {
-                        self.prop_pool.push(props);
-                    }
                 } else {
                     Self::drop_in_place_tracked(ptr, tag);
+                }
+            }
+            if let Some(props) = pooled_props {
+                if props.capacity() <= 8 {
+                    self.prop_pool.push(props);
                 }
             }
             self.objects[idx] = 0;
@@ -1046,23 +1049,29 @@ impl GcHeap {
             } else {
                 std::mem::size_of::<JSObject>()
             };
+            let mut pooled_props = None;
+            if tag == TAG_OBJECT {
+                let object_value = JSValue::new_object(ptr);
+                let mut props = object_value.as_object_mut().take_props();
+                props.clear();
+                pooled_props = Some(props);
+            }
             unsafe {
                 if tag == TAG_OBJECT {
-                    let obj = &mut *(ptr as *mut JSObject);
-                    let mut props = obj.take_props();
-                    props.clear();
                     if in_nursery {
                         std::ptr::drop_in_place(ptr as *mut JSObject);
                     } else {
                         let _ = Box::from_raw(ptr as *mut JSObject);
                     }
-                    if props.capacity() <= 8 {
-                        self.prop_pool.push(props);
-                    }
                 } else if in_nursery {
                     Self::drop_in_place_tracked(ptr, tag);
                 } else {
                     Self::drop_tracked(ptr, tag);
+                }
+            }
+            if let Some(props) = pooled_props {
+                if props.capacity() <= 8 {
+                    self.prop_pool.push(props);
                 }
             }
             self.objects[idx] = 0;
