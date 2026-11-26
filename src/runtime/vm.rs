@@ -5019,6 +5019,34 @@ impl VM {
         }
     }
 
+    pub fn construct_with_new_target(
+        &mut self,
+        ctx: &mut JSContext,
+        ctor: JSValue,
+        this_obj: JSValue,
+        args: &[JSValue],
+        new_target: JSValue,
+    ) -> Result<JSValue, String> {
+        if !ctor.is_function() || !Self::value_is_constructor(ctx, ctor) {
+            return Err("not a constructor".to_string());
+        }
+        self.pending_new_target = Some(new_target);
+        let js_func = ctor.as_function();
+        if js_func.is_class_constructor && !js_func.is_derived_constructor {
+            self.mark_instance_elements_pending(this_obj, ctor.get_ptr());
+        }
+        match self.call_function_with_this_impl(ctx, ctor, this_obj, args, true) {
+            Ok(result) => {
+                if result.is_object_like() {
+                    Ok(result)
+                } else {
+                    Ok(this_obj)
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn call_function_with_this(
         &mut self,
         ctx: &mut JSContext,

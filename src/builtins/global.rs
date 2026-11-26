@@ -1669,8 +1669,7 @@ fn reflect_construct(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
 
     if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
         let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        vm.pending_new_target = Some(new_target);
-        match vm.call_function_with_this(ctx, target, new_obj, &call_args) {
+        match vm.construct_with_new_target(ctx, target, new_obj, &call_args, new_target) {
             Ok(result) => {
                 if result.is_object_like() {
                     return result;
