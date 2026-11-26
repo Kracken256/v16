@@ -672,6 +672,49 @@ impl std::fmt::Debug for NestedBytecode {
     }
 }
 
+fn read_u8_checked(data: &[u8], offset: &mut usize) -> Result<u8, String> {
+    let byte = *data
+        .get(*offset)
+        .ok_or_else(|| "Invalid .jsc: truncated input".to_string())?;
+    *offset += 1;
+    Ok(byte)
+}
+
+fn read_u16_checked(data: &[u8], offset: &mut usize) -> Result<u16, String> {
+    let end = offset
+        .checked_add(2)
+        .ok_or_else(|| "Invalid .jsc: offset overflow".to_string())?;
+    let bytes = data
+        .get(*offset..end)
+        .ok_or_else(|| "Invalid .jsc: truncated input".to_string())?;
+    *offset = end;
+    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+fn read_u32_checked(data: &[u8], offset: &mut usize) -> Result<u32, String> {
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| "Invalid .jsc: offset overflow".to_string())?;
+    let bytes = data
+        .get(*offset..end)
+        .ok_or_else(|| "Invalid .jsc: truncated input".to_string())?;
+    *offset = end;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_u64_checked(data: &[u8], offset: &mut usize) -> Result<u64, String> {
+    let end = offset
+        .checked_add(8)
+        .ok_or_else(|| "Invalid .jsc: offset overflow".to_string())?;
+    let bytes = data
+        .get(*offset..end)
+        .ok_or_else(|| "Invalid .jsc: truncated input".to_string())?;
+    *offset = end;
+    Ok(u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]))
+}
+
 impl Bytecode {
     pub fn new() -> Self {
         Self {
@@ -1552,50 +1595,37 @@ impl Bytecode {
             return Err(format!("Unsupported .jsc version: {}", version));
         }
         let mut offset = 8usize;
-        let read_u32 = |o: &mut usize| -> u32 {
-            let v = u32::from_le_bytes([data[*o], data[*o + 1], data[*o + 2], data[*o + 3]]);
-            *o += 4;
-            v
-        };
-        let read_u16 = |o: &mut usize| -> u16 {
-            let v = u16::from_le_bytes([data[*o], data[*o + 1]]);
-            *o += 2;
-            v
-        };
-        let read_u64 = |o: &mut usize| -> u64 {
-            let v = u64::from_le_bytes([
-                data[*o],
-                data[*o + 1],
-                data[*o + 2],
-                data[*o + 3],
-                data[*o + 4],
-                data[*o + 5],
-                data[*o + 6],
-                data[*o + 7],
-            ]);
-            *o += 8;
-            v
-        };
-        let locals_count = read_u32(&mut offset);
-        let param_count = read_u16(&mut offset);
-        let uses_arguments = data[offset] != 0;
-        offset += 1;
-        let has_simple_parameters = data[offset] != 0;
-        offset += 1;
-        let code_len = read_u64(&mut offset) as usize;
-        if offset + code_len > data.len() {
-            return Err("Invalid .jsc: code truncated".to_string());
-        }
-        let code = data[offset..offset + code_len].to_vec();
-        offset += code_len;
-        let constants_count = read_u64(&mut offset) as usize;
-        if offset + constants_count * 8 > data.len() {
+        let locals_count = read_u32_checked(data, &mut offset)?;
+        let param_count = read_u16_checked(data, &mut offset)?;
+        let uses_arguments = read_u8_checked(data, &mut offset)? != 0;
+        let has_simple_parameters = read_u8_checked(data, &mut offset)? != 0;
+        let code_len = usize::try_from(read_u64_checked(data, &mut offset)?)
+            .map_err(|_| "Invalid .jsc: code too long".to_string())?;
+        let code_end = offset
+            .checked_add(code_len)
+            .ok_or_else(|| "Invalid .jsc: code too long".to_string())?;
+        let code = data
+            .get(offset..code_end)
+            .ok_or_else(|| "Invalid .jsc: code truncated".to_string())?
+            .to_vec();
+        offset = code_end;
+        let constants_count = usize::try_from(read_u64_checked(data, &mut offset)?)
+            .map_err(|_| "Invalid .jsc: too many constants".to_string())?;
+        let constants_bytes = constants_count
+            .checked_mul(8)
+            .ok_or_else(|| "Invalid .jsc: too many constants".to_string())?;
+        let constants_end = offset
+            .checked_add(constants_bytes)
+            .ok_or_else(|| "Invalid .jsc: too many constants".to_string())?;
+        if constants_end > data.len() {
             return Err("Invalid .jsc: constants truncated".to_string());
         }
         let mut constants = Vec::with_capacity(constants_count);
         for _ in 0..constants_count {
-            let bits = read_u64(&mut offset);
-            constants.push(crate::value::JSValue::from_raw_bits(bits));
+            let bits = read_u64_checked(data, &mut offset)?;
+            let value = crate::value::JSValue::from_serialized_bits(bits)
+                .ok_or_else(|| "Invalid .jsc: unsupported constant".to_string())?;
+            constants.push(value);
         }
         Ok(Self {
             code,
@@ -1834,5 +1864,60 @@ mod tests {
             "SetField disasm wrong: {}",
             output
         );
+    }
+
+    #[test]
+    fn test_serialize_roundtrip_primitive_constants() {
+        let mut bytecode = Bytecode::new();
+        bytecode.code = vec![Opcode::Return as u8, 0x00, 0x00];
+        bytecode.constants = vec![
+            crate::value::JSValue::undefined(),
+            crate::value::JSValue::null(),
+            crate::value::JSValue::bool(true),
+            crate::value::JSValue::new_int(-7),
+            crate::value::JSValue::new_float(3.5),
+            crate::value::JSValue::new_float(f64::NAN),
+            crate::value::JSValue::new_string(crate::runtime::atom::Atom(42)),
+        ];
+
+        let data = bytecode.serialize();
+        let decoded = Bytecode::deserialize(&data).expect("primitive constants must load");
+        assert_eq!(decoded.constants.len(), bytecode.constants.len());
+        for (decoded_value, original_value) in
+            decoded.constants.iter().zip(bytecode.constants.iter())
+        {
+            assert_eq!(decoded_value.raw_bits(), original_value.raw_bits());
+        }
+    }
+
+    #[test]
+    fn test_deserialize_rejects_pointer_constants() {
+        for value in [
+            crate::value::JSValue::new_object(0x1000),
+            crate::value::JSValue::new_function(0x2000),
+            crate::value::JSValue::new_bigint(0x3000),
+        ] {
+            let mut bytecode = Bytecode::new();
+            bytecode.constants = vec![value];
+            assert!(
+                Bytecode::deserialize(&bytecode.serialize()).is_err(),
+                "pointer constants must not load"
+            );
+        }
+    }
+
+    #[test]
+    fn test_deserialize_rejects_truncated_input() {
+        let mut bytecode = Bytecode::new();
+        bytecode.code = vec![Opcode::Return as u8, 0x00, 0x00];
+        bytecode.constants = vec![crate::value::JSValue::new_int(1)];
+        let data = bytecode.serialize();
+        for prefix_len in 0..data.len() {
+            assert!(
+                Bytecode::deserialize(&data[..prefix_len]).is_err(),
+                "truncated prefix of {prefix_len} bytes was accepted"
+            );
+        }
+        assert!(Bytecode::deserialize(&data).is_ok());
     }
 }

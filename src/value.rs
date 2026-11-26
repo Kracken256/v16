@@ -26,8 +26,15 @@ impl JSValue {
         self.0
     }
 
-    pub fn from_raw_bits(bits: u64) -> Self {
-        JSValue(bits)
+    pub fn from_serialized_bits(bits: u64) -> Option<Self> {
+        let value = JSValue(bits);
+        if value.is_float() {
+            return Some(value);
+        }
+        match value.get_tag() {
+            TAG_UNDEFINED | TAG_NULL | TAG_BOOL | TAG_INT | TAG_STRING => Some(value),
+            _ => None,
+        }
     }
 
     const fn is_tagged(bits: u64) -> bool {
