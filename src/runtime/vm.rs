@@ -1768,6 +1768,20 @@ impl VM {
         None
     }
 
+    #[inline]
+    fn frame_realm_global(&self, ctx: &JSContext) -> JSValue {
+        if let Some(fptr) = self.frames[self.frame_index].function_ptr {
+            let func = unsafe { &*(fptr as *const crate::object::function::JSFunction) };
+            if func.realm_global.is_object_like() {
+                let current = ctx.global();
+                if !current.is_object_like() || current.raw_bits() != func.realm_global.raw_bits() {
+                    return func.realm_global;
+                }
+            }
+        }
+        ctx.global()
+    }
+
     #[inline(always)]
     pub fn get_var_in_caller_vm(&self, name_atom: u32) -> Option<JSValue> {
         if let Some(ptr) = self.caller_vm {
@@ -7842,7 +7856,7 @@ impl VM {
                             }
                             self.set_reg(dst, binding);
                         } else {
-                            let global = ctx.global();
+                            let global = self.frame_realm_global(ctx);
                             let mut result = JSValue::undefined();
                             if global.is_object() {
                                 let global_obj = global.as_object();
@@ -7967,7 +7981,7 @@ impl VM {
                         let caller_has_binding = self.get_var_in_caller_vm(atom.0).is_some();
                         let mut global_has_binding = false;
                         if !caller_has_binding {
-                            let global = ctx.global();
+                            let global = self.frame_realm_global(ctx);
                             if global.is_object() {
                                 global_has_binding = global.as_object().has_property(atom);
                             }
@@ -7990,7 +8004,7 @@ impl VM {
                                 }
                             }
                         } else if global_has_binding || !is_strict {
-                            let global = ctx.global();
+                            let global = self.frame_realm_global(ctx);
                             if global.is_object() {
                                 let mut failure = false;
                                 if is_strict {
@@ -8059,7 +8073,7 @@ impl VM {
                             let mut found = false;
 
                             if self.eval_binding_frames == 0 && self.caller_vm.is_none() {
-                                let global = ctx.global();
+                                let global = self.frame_realm_global(ctx);
                                 if global.is_object() {
                                     found = global.as_object().get_own(atom).is_some();
                                 }
@@ -8085,7 +8099,7 @@ impl VM {
                                     }
                                 }
                                 if !found {
-                                    let global = ctx.global();
+                                    let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
                                         found = global.as_object().get_own(atom).is_some();
                                     }
@@ -8095,7 +8109,7 @@ impl VM {
                                     found = true;
                                 }
                                 if !found {
-                                    let global = ctx.global();
+                                    let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
                                         found = global.as_object().get_own(atom).is_some();
                                     }
@@ -8128,7 +8142,7 @@ impl VM {
                                 }
                             }
                         }
-                        let global = ctx.global();
+                        let global = self.frame_realm_global(ctx);
                         if global.is_object() {
                             let global_obj_ref = global.as_object();
                             if is_strict {
@@ -8221,7 +8235,7 @@ impl VM {
                                     }
                                 }
                             }
-                            let global = ctx.global();
+                            let global = self.frame_realm_global(ctx);
                             if global.is_object() {
                                 let global_obj = global.as_object_mut();
                                 global_obj.set_cached_non_configurable(
@@ -8244,7 +8258,7 @@ impl VM {
                             let mut found = false;
 
                             if self.eval_binding_frames == 0 && self.caller_vm.is_none() {
-                                let global = ctx.global();
+                                let global = self.frame_realm_global(ctx);
                                 if global.is_object() {
                                     found = global.as_object().get_own(atom).is_some();
                                 }
@@ -8269,7 +8283,7 @@ impl VM {
                                     }
                                 }
                                 if !found {
-                                    let global = ctx.global();
+                                    let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
                                         found = global.as_object().get_own(atom).is_some();
                                     }
@@ -8279,7 +8293,7 @@ impl VM {
                                     found = true;
                                 }
                                 if !found {
-                                    let global = ctx.global();
+                                    let global = self.frame_realm_global(ctx);
                                     if global.is_object() {
                                         found = global.as_object().get_own(atom).is_some();
                                     }
@@ -8312,7 +8326,7 @@ impl VM {
                                 }
                             }
                         }
-                        let global = ctx.global();
+                        let global = self.frame_realm_global(ctx);
                         if global.is_object() {
                             let global_obj = global.as_object_mut();
                             global_obj.set_cached_non_configurable(
@@ -13065,16 +13079,18 @@ impl VM {
                         self.ensure_own_param_env(ctx);
                     }
                     func.param_env = self.frames[self.frame_index].param_env;
+                    func.realm_global = ctx.global();
                     let active_realm = ctx.active_realm();
                     if active_realm != 0 {
                         func.realm_context = active_realm;
-                        func.realm_global = ctx.global();
                     } else if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
                         let parent = unsafe {
                             &*(parent_ptr as *const crate::object::function::JSFunction)
                         };
                         if parent.realm_context != 0 {
                             func.realm_context = parent.realm_context;
+                        }
+                        if parent.realm_global.is_object_like() {
                             func.realm_global = parent.realm_global;
                         }
                     }
@@ -13212,7 +13228,7 @@ impl VM {
                         exists = true;
                     }
                     if !exists {
-                        let global = ctx.global();
+                        let global = self.frame_realm_global(ctx);
                         if global.is_object() {
                             exists = global.as_object().get_own(atom).is_some();
                         }
