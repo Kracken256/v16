@@ -1352,15 +1352,15 @@ impl VM {
         frame.constants_len = constants_len;
         frame.function_ptr = function_ptr;
         frame.with_env = function_ptr
-            .map(|ptr| unsafe {
-                (&*(ptr as *const crate::object::function::JSFunction))
-                    .with_env
-                    .clone()
+            .map(|ptr| {
+                let func_val = JSValue::new_function(ptr);
+                func_val.as_function().with_env.clone()
             })
             .flatten();
         frame.param_env = function_ptr
-            .map(|ptr| unsafe {
-                (&*(ptr as *const crate::object::function::JSFunction)).param_env
+            .map(|ptr| {
+                let func_val = JSValue::new_function(ptr);
+                func_val.as_function().param_env
             })
             .unwrap_or(JSValue::undefined());
         frame.param_env_own = false;
@@ -1517,12 +1517,16 @@ impl VM {
         frame.constants_ptr = constants_ptr;
         frame.constants_len = constants_len;
         frame.function_ptr = function_ptr;
-        frame.with_env = function_ptr.map(|ptr| unsafe {
-            (&*(ptr as *const crate::object::function::JSFunction)).with_env.clone()
-        }).flatten();
+        frame.with_env = function_ptr
+            .map(|ptr| {
+                let func_val = JSValue::new_function(ptr);
+                func_val.as_function().with_env.clone()
+            })
+            .flatten();
         frame.param_env = function_ptr
-            .map(|ptr| unsafe {
-                (&*(ptr as *const crate::object::function::JSFunction)).param_env
+            .map(|ptr| {
+                let func_val = JSValue::new_function(ptr);
+                func_val.as_function().param_env
             })
             .unwrap_or(JSValue::undefined());
         frame.param_env_own = false;
@@ -4478,8 +4482,9 @@ impl VM {
     }
 
     fn frame_is_derived_constructor(frame: &CallFrame) -> bool {
-        frame.function_ptr.map_or(false, |fptr| unsafe {
-            (*(fptr as *const crate::object::function::JSFunction)).is_derived_constructor
+        frame.function_ptr.map_or(false, |fptr| {
+            let func_val = JSValue::new_function(fptr);
+            func_val.as_function().is_derived_constructor
         })
     }
 
@@ -4756,8 +4761,7 @@ impl VM {
             return "undefined".to_string();
         }
         if value.is_object() {
-            let ptr = value.get_ptr();
-            let obj = unsafe { &*(ptr as *const crate::object::JSObject) };
+            let obj = value.as_object();
             let name = obj.get(ctx.common_atoms.name).and_then(|v| {
                 if v.is_string() {
                     Some(ctx.get_atom_str(v.get_atom()).to_string())
@@ -5571,12 +5575,10 @@ impl VM {
         let result = self.execute_inner(ctx, bytecode, false, 0, true);
 
         if !self.ctx_ptr.is_null() {
-            unsafe {
-                let count = self.frames[0].registers_count;
-                for i in 0..count {
-                    self.registers[i].release_atoms_in(&mut *self.ctx_ptr);
-                    self.registers[i] = JSValue::undefined();
-                }
+            let count = self.frames[0].registers_count;
+            for i in 0..count {
+                self.registers[i].release_atoms_in(ctx);
+                self.registers[i] = JSValue::undefined();
             }
         }
         self.ctx_ptr = std::ptr::null_mut();
@@ -6082,16 +6084,21 @@ impl VM {
             frame.constants_len = bytecode.effective_const_len();
             frame.return_pc = 0;
             frame.function_ptr = self.pending_function_ptr.take();
-            frame.with_env = frame.function_ptr.map(|ptr| unsafe {
-                (&*(ptr as *const crate::object::function::JSFunction)).with_env.clone()
-            }).flatten();
+            frame.with_env = frame
+                .function_ptr
+                .map(|ptr| {
+                    let func_val = JSValue::new_function(ptr);
+                    func_val.as_function().with_env.clone()
+                })
+                .flatten();
             let (frame_param_env, frame_param_env_own) = match self.pending_param_env.take() {
                 Some(pair) => pair,
                 None => (
                     frame
                         .function_ptr
-                        .map(|ptr| unsafe {
-                            (&*(ptr as *const crate::object::function::JSFunction)).param_env
+                        .map(|ptr| {
+                            let func_val = JSValue::new_function(ptr);
+                            func_val.as_function().param_env
                         })
                         .unwrap_or(JSValue::undefined()),
                     false,
@@ -6315,10 +6322,8 @@ impl VM {
                                         let obj =
                                             ret.as_object();
                                         if let Some(shape) = obj.shape_ptr() {
-                                            let func_mut = unsafe {
-                                                &mut *(fptr
-                                                    as *mut crate::object::function::JSFunction)
-                                            };
+                                            let func_mut_val = JSValue::new_function(fptr);
+                                            let func_mut = func_mut_val.as_function_mut();
                                             if let Some(ref mut bc_mut) = func_mut.bytecode {
                                                 bc_mut.cached_constructor_final_shape = Some(shape);
                                             }
@@ -6412,9 +6417,7 @@ impl VM {
                         return Ok(ExecutionOutcome::Yield(JSValue::undefined()));
                     }
                     if crate::builtins::promise::is_promise(&val) {
-                        let ptr = val.get_ptr();
-                        let promise_obj =
-                            unsafe { &*(ptr as *mut crate::object::object::JSObject) };
+                        let promise_obj = val.as_object();
                         let state_atom = ctx.common_atoms.__promise_state__;
                         let result_atom = ctx.common_atoms.__promise_result__;
                         let state = promise_obj
@@ -11590,10 +11593,8 @@ impl VM {
                             set: None,
                         };
                         proto_obj.define_property(ctx.common_atoms.constructor, ctor_desc);
-                        let func = unsafe {
-                            &mut *(ctor_val.get_ptr()
-                                as *mut crate::object::function::JSFunction)
-                        };
+                        let func_val = JSValue::new_function(ctor_val.get_ptr());
+                        let func = func_val.as_function_mut();
                         func.cached_prototype_ptr =
                             proto_val.get_ptr() as *mut crate::object::object::JSObject;
                     }
@@ -11926,9 +11927,7 @@ impl VM {
                 }
 
                 Opcode::CallCurrent1 => {
-                    unsafe {
-                        (*self.frames.as_mut_ptr().add(self.frame_index)).current_pc = instr_pc;
-                    }
+                    self.frames[self.frame_index].current_pc = instr_pc;
                     let dst = self.read_u16_pc();
                     let arg_reg = self.read_u16_pc();
                     let caller = &self.frames[self.frame_index];
@@ -11975,9 +11974,7 @@ impl VM {
                 | Opcode::CallMethod
                 | Opcode::CallNew
                 | Opcode::CallCurrent => {
-                    unsafe {
-                        (*self.frames.as_mut_ptr().add(self.frame_index)).current_pc = instr_pc;
-                    }
+                    self.frames[self.frame_index].current_pc = instr_pc;
                     let is_call_current = op == Opcode::CallCurrent;
                     let is_call0 = op == Opcode::Call0;
                     let is_call1 = op == Opcode::Call1;
@@ -12241,9 +12238,7 @@ impl VM {
                 }
 
                 Opcode::CallNamedMethod => {
-                    unsafe {
-                        (*self.frames.as_mut_ptr().add(self.frame_index)).current_pc = instr_pc;
-                    }
+                    self.frames[self.frame_index].current_pc = instr_pc;
                     let dst = self.read_u16_pc();
                     let obj_reg = self.read_u16_pc();
                     let atom = crate::runtime::atom::Atom(self.read_u32_pc());
@@ -12802,9 +12797,8 @@ impl VM {
                         let parent_bytecode_span = (self.pc - newfunc_start_pc) as u32;
 
                         if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
-                            let parent_func = unsafe {
-                                &mut *(parent_ptr as *mut crate::object::function::JSFunction)
-                            };
+                            let parent_func_val = JSValue::new_function(parent_ptr);
+                            let parent_func = parent_func_val.as_function_mut();
                             if let Some(bc) = parent_func.bytecode.as_mut() {
                                 let key = newfunc_start_pc as u32;
                                 // Check instance's own nested_bytecodes first
@@ -13099,8 +13093,8 @@ impl VM {
                     let proto_atom = ctx.common_atoms.prototype;
                     let func_ptr = Box::into_raw(Box::new(func)) as usize;
                     ctx.runtime_mut().gc_heap_mut().track_function(func_ptr);
-                    let unboxed_func =
-                        unsafe { &mut *(func_ptr as *mut crate::object::function::JSFunction) };
+                    let unboxed_func_val = JSValue::new_function(func_ptr);
+                    let unboxed_func = unboxed_func_val.as_function_mut();
                     if has_prototype && !is_class_constructor {
                         let mut proto_obj = crate::object::object::JSObject::new();
                         let parent_proto = if is_generator && is_async {
@@ -13117,20 +13111,17 @@ impl VM {
                         ctx.runtime_mut().gc_heap_mut().track(proto_ptr);
                         let func_value = JSValue::new_function(func_ptr);
                         if !is_generator {
-                            unsafe {
-                                let proto_obj_mut =
-                                    &mut *(proto_ptr as *mut crate::object::object::JSObject);
-                                let ctor_desc = crate::object::object::PropertyDescriptor {
-                                    value: Some(func_value),
-                                    writable: true,
-                                    enumerable: false,
-                                    configurable: true,
-                                    get: None,
-                                    set: None,
-                                };
-                                proto_obj_mut
-                                    .define_property(ctx.common_atoms.constructor, ctor_desc);
-                            }
+                            let proto_val = JSValue::new_object(proto_ptr);
+                            let proto_obj_mut = proto_val.as_object_mut();
+                            let ctor_desc = crate::object::object::PropertyDescriptor {
+                                value: Some(func_value),
+                                writable: true,
+                                enumerable: false,
+                                configurable: true,
+                                get: None,
+                                set: None,
+                            };
+                            proto_obj_mut.define_property(ctx.common_atoms.constructor, ctor_desc);
                         }
                         let proto_desc = crate::object::object::PropertyDescriptor {
                             value: Some(JSValue::new_object(proto_ptr)),
@@ -15261,8 +15252,7 @@ impl VM {
         if !crate::builtins::promise::is_promise(&val) {
             return Ok(Some(val));
         }
-        let ptr = val.get_ptr();
-        let promise_obj = unsafe { &*(ptr as *mut crate::object::object::JSObject) };
+        let promise_obj = val.as_object();
         let state_atom = ctx.common_atoms.__promise_state__;
         let result_atom = ctx.common_atoms.__promise_result__;
         let state = promise_obj
@@ -15306,8 +15296,7 @@ impl VM {
             return Ok(false);
         }
 
-        let iter_ptr = iter_val.get_ptr();
-        let iter_obj = unsafe { &mut *(iter_ptr as *mut crate::object::object::JSObject) };
+        let iter_obj = iter_val.as_object_mut();
         let arr_atom = ctx.common_atoms.__iter_arr__;
 
         if phase == 0
@@ -16074,9 +16063,8 @@ impl VM {
                                                 break;
                                             }
                                             depth += 1;
-                                            unsafe {
-                                                cur = (*p).prototype;
-                                            }
+                                            let p_val = JSValue::new_object(p as usize);
+                                            cur = p_val.as_object().prototype;
                                         }
                                     }
                                     if proto_matches {
