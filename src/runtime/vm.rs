@@ -12624,17 +12624,9 @@ impl VM {
                         let locals_count = self.read_u16_pc() as u32;
                         let bytecode_len = self.read_u32();
                         let mut fb_code = Vec::with_capacity(bytecode_len as usize);
-
-                        unsafe {
-                            let src = self.cached_code_ptr.add(self.pc);
-                            fb_code.set_len(bytecode_len as usize);
-                            std::ptr::copy_nonoverlapping(
-                                src,
-                                fb_code.as_mut_ptr(),
-                                bytecode_len as usize,
-                            );
+                        for _ in 0..bytecode_len {
+                            fb_code.push(self.read_u8());
                         }
-                        self.pc += bytecode_len as usize;
                         let constants_len = self.read_u32();
                         let mut fb_constants = Vec::with_capacity(constants_len as usize);
                         for _ in 0..constants_len {
