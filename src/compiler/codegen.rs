@@ -2963,28 +2963,31 @@ impl CodeGenerator {
                 self.emit_line(line);
             }
 
-            if return_last_expr && i == last_nonempty_stmt_idx {
-                if let ASTNode::ExpressionStatement(es) = stmt {
+            if matches!(stmt, ASTNode::FunctionDeclaration(_)) {
+            } else if !return_last_expr {
+                self.gen_statement(stmt, ctx)?;
+            } else if let ASTNode::ExpressionStatement(es) = stmt {
+                let reg = if i == last_nonempty_stmt_idx {
                     if let Some(name) = self.field_init_name.clone() {
-                        last_expr_reg = Some(
-                            self.gen_expression_with_assign_name(&es.expression, &name, ctx)?,
-                        );
+                        self.gen_expression_with_assign_name(&es.expression, &name, ctx)?
                     } else {
-                        last_expr_reg = Some(self.gen_expression(&es.expression, ctx)?);
+                        self.gen_expression(&es.expression, ctx)?
                     }
-                } else if matches!(stmt, ASTNode::FunctionDeclaration(_)) {
-                } else if let Some(reg) = self.gen_statement_as_expression(stmt, ctx)? {
-                    last_expr_reg = Some(reg);
                 } else {
-                    self.gen_statement(stmt, ctx)?;
+                    self.gen_expression(&es.expression, ctx)?
+                };
+                if let Some(prev) = last_expr_reg {
+                    if prev != reg {
+                        self.emit(Opcode::Move);
+                        self.emit_u16(prev);
+                        self.emit_u16(reg);
+                    }
+                    self.free_register(reg);
+                } else {
+                    last_expr_reg = Some(reg);
                 }
-            } else if matches!(stmt, ASTNode::FunctionDeclaration(_)) {
-            } else if return_last_expr {
-                // Track expression statement values for the UpdateEmpty chain.
-                // Declaration/control-flow statements produce empty completions
-                // and should preserve the previous value.
-                if let ASTNode::ExpressionStatement(es) = stmt {
-                    let reg = self.gen_expression(&es.expression, ctx)?;
+            } else if !Self::statement_is_statically_empty(stmt) {
+                if let Some(reg) = self.gen_statement_as_expression(stmt, ctx)? {
                     if let Some(prev) = last_expr_reg {
                         if prev != reg {
                             self.emit(Opcode::Move);
