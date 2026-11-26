@@ -2996,6 +2996,10 @@ impl VM {
             return true;
         }
         if value.is_object() {
+            let obj = value.as_object();
+            if obj.is_proxy() {
+                return obj.proxy_callable();
+            }
             if let Some(function_prototype) = ctx.get_function_prototype() {
                 return value.get_ptr() as *mut crate::object::object::JSObject
                     == function_prototype;
@@ -4396,9 +4400,11 @@ impl VM {
                 !f.is_arrow() && !f.is_async() && !f.is_generator() && !f.is_method
             }
         } else if value.is_object() {
-            value
-                .as_object()
-                .get(ctx.common_atoms.__boundFn)
+            let obj = value.as_object();
+            if obj.is_proxy() {
+                return obj.proxy_constructable();
+            }
+            obj.get(ctx.common_atoms.__boundFn)
                 .map_or(false, |target| Self::value_is_constructor(ctx, target))
         } else {
             false
@@ -7257,15 +7263,25 @@ impl VM {
                         ca.typeof_function
                     } else if a.is_object() {
                         let obj = a.as_object();
-                        let is_function_prototype =
-                            ctx.get_function_prototype().map_or(false, |function_prototype| {
-                                a.get_ptr() as *mut crate::object::object::JSObject
-                                    == function_prototype
-                            });
-                        if obj.get(ctx.common_atoms.__boundFn).is_some() || is_function_prototype {
-                            ca.typeof_function
+                        if obj.is_proxy() {
+                            if obj.proxy_callable() {
+                                ca.typeof_function
+                            } else {
+                                ca.typeof_object
+                            }
                         } else {
-                            ca.typeof_object
+                            let is_function_prototype =
+                                ctx.get_function_prototype().map_or(false, |function_prototype| {
+                                    a.get_ptr() as *mut crate::object::object::JSObject
+                                        == function_prototype
+                                });
+                            if obj.get(ctx.common_atoms.__boundFn).is_some()
+                                || is_function_prototype
+                            {
+                                ca.typeof_function
+                            } else {
+                                ca.typeof_object
+                            }
                         }
                     } else {
                         ca.typeof_object
@@ -10783,6 +10799,23 @@ impl VM {
                         self.set_pending_type_error(
                             ctx,
                             "Class extends value does not have a valid prototype property",
+                        );
+                        if let Some(exc) = self.pending_throw.take() {
+                            match self.dispatch_throw_value(ctx, exc) {
+                                ThrowDispatch::Caught => continue,
+                                ThrowDispatch::Uncaught(e) => return Err(e),
+                                ThrowDispatch::AsyncComplete(o) => return Ok(o),
+                            }
+                        }
+                    }
+                }
+                Opcode::CheckConstructor => {
+                    let reg = self.read_u16_pc();
+                    let value = self.get_reg(reg);
+                    if !Self::value_is_constructor(ctx, value) {
+                        self.set_pending_type_error(
+                            ctx,
+                            "Class extends value is not a constructor",
                         );
                         if let Some(exc) = self.pending_throw.take() {
                             match self.dispatch_throw_value(ctx, exc) {

@@ -11799,6 +11799,12 @@ impl CodeGenerator {
             Some(expr) => Some(self.gen_expression(expr, ctx)?),
             None => None,
         };
+        if let Some(reg) = super_val_reg {
+            if !is_null_heritage {
+                self.emit(Opcode::CheckConstructor);
+                self.emit_u16(reg);
+            }
+        }
 
         let ctor_method = body.elements.iter().find(|e| {
             if let ClassElement::Method(m) = e {

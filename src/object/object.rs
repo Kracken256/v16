@@ -719,6 +719,8 @@ pub struct ObjectExtra {
 
     pub proxy_target: Option<JSValue>,
     pub proxy_handler: Option<JSValue>,
+    pub proxy_callable: bool,
+    pub proxy_constructable: bool,
 
     pub generator_state: Option<Box<GeneratorState>>,
 
@@ -782,6 +784,8 @@ impl JSObject {
                 typed_array_kind: None,
                 proxy_target: None,
                 proxy_handler: None,
+                proxy_callable: false,
+                proxy_constructable: false,
                 generator_state: None,
                 async_generator_state: None,
                 async_state: None,
@@ -1223,10 +1227,28 @@ impl JSObject {
         self.is_proxy() && self.proxy_handler().is_none()
     }
 
-    pub fn set_proxy_slots(&mut self, target: JSValue, handler: JSValue) {
+    #[inline]
+    pub fn proxy_callable(&self) -> bool {
+        self.extra.as_ref().is_some_and(|e| e.proxy_callable)
+    }
+
+    #[inline]
+    pub fn proxy_constructable(&self) -> bool {
+        self.extra.as_ref().is_some_and(|e| e.proxy_constructable)
+    }
+
+    pub fn set_proxy_slots(
+        &mut self,
+        target: JSValue,
+        handler: JSValue,
+        callable: bool,
+        constructable: bool,
+    ) {
         let extra = self.ensure_extra();
         extra.proxy_target = Some(target);
         extra.proxy_handler = Some(handler);
+        extra.proxy_callable = callable;
+        extra.proxy_constructable = constructable;
     }
 
     pub fn revoke_proxy(&mut self) {

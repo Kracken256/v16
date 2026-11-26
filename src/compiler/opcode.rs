@@ -215,6 +215,7 @@ pub enum Opcode {
     SetUpvalueDirect = 251,
     GlobalBinding = 252,
     WithGetVarBase = 253,
+    CheckConstructor = 254,
 }
 
 impl Opcode {
@@ -421,6 +422,7 @@ impl Opcode {
             251 => Some(Opcode::SetUpvalueDirect),
             252 => Some(Opcode::GlobalBinding),
             253 => Some(Opcode::WithGetVarBase),
+            254 => Some(Opcode::CheckConstructor),
             _ => None,
         }
     }
@@ -551,6 +553,7 @@ impl Opcode {
             Opcode::WithSet => 7,
             Opcode::WithGetVar | Opcode::WithSetVar => 11,
             Opcode::WithGetVarBase => 12,
+            Opcode::CheckConstructor => 3,
             Opcode::WithResolve => 7,
             Opcode::WithGetResolved | Opcode::WithSetResolved => 9,
             Opcode::Pos => 5,
@@ -1328,6 +1331,10 @@ impl Bytecode {
                         dst, base, atom, kind, index, flags
                     )
                     .unwrap();
+                }
+                Opcode::CheckConstructor => {
+                    let reg = read_u16(1);
+                    write!(operands, " r{}", reg).unwrap();
                 }
                 Opcode::WithSetVar => {
                     let atom = read_u32(1);
