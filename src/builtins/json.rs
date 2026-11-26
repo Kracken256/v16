@@ -14,14 +14,14 @@ fn unwrap_wrapper_object(ctx: &mut JSContext, obj: &JSObject) -> Option<JSValue>
             if let Some(pp) = proto {
                 if let Some(ntp) = ctx.get_number_prototype() {
                     if pp == ntp as usize as *mut JSObject {
-                        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                            let obj_ptr = obj as *const _ as usize;
-                            let obj_val = JSValue::new_object(obj_ptr);
-                            if let Some(value_of_fn) = obj.get(ctx.common_atoms.value_of) {
-                                if value_of_fn.is_function() {
-                                    return vm.call_function_with_this(ctx, value_of_fn, obj_val, &[]).ok();
-                                }
+                        if let Some(value_of_fn) = obj.get(ctx.common_atoms.value_of) {
+                            if value_of_fn.is_function() {
+                                let obj_ptr = obj as *const _ as usize;
+                                let obj_val = JSValue::new_object(obj_ptr);
+                                let called = ctx.with_vm(|vm, ctx| {
+                                    vm.call_function_with_this(ctx, value_of_fn, obj_val, &[]).ok()
+                                });
+                                return called.unwrap_or(Some(val));
                             }
                         }
                         return Some(val);
@@ -34,14 +34,14 @@ fn unwrap_wrapper_object(ctx: &mut JSContext, obj: &JSObject) -> Option<JSValue>
             if let Some(pp) = proto {
                 if let Some(stp) = ctx.get_string_prototype() {
                     if pp == stp as usize as *mut JSObject {
-                        if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                            let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                            let obj_ptr = obj as *const _ as usize;
-                            let obj_val = JSValue::new_object(obj_ptr);
-                            if let Some(to_str_fn) = obj.get(ctx.common_atoms.to_string) {
-                                if to_str_fn.is_function() {
-                                    return vm.call_function_with_this(ctx, to_str_fn, obj_val, &[]).ok();
-                                }
+                        if let Some(to_str_fn) = obj.get(ctx.common_atoms.to_string) {
+                            if to_str_fn.is_function() {
+                                let obj_ptr = obj as *const _ as usize;
+                                let obj_val = JSValue::new_object(obj_ptr);
+                                let called = ctx.with_vm(|vm, ctx| {
+                                    vm.call_function_with_this(ctx, to_str_fn, obj_val, &[]).ok()
+                                });
+                                return called.unwrap_or(Some(val));
                             }
                         }
                         return Some(val);
@@ -91,74 +91,76 @@ pub fn json_parse(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         return JSValue::undefined();
     } else if args[0].is_object() {
         let val = &args[0];
-        let vm_opt = ctx.get_register_vm_ptr();
-        let vm = vm_opt.map(|ptr| unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) });
-        if let Some(vm) = vm {
-            let obj = val.as_object();
-            // Try toString first (hint: string)
-            let mut got_primitive: Option<String> = None;
-            let to_string_fn = obj.get(ctx.common_atoms.to_string);
-            if let Some(f) = to_string_fn {
-                if f.is_function() {
-                    match vm.call_function_with_this(ctx, f, *val, &[]) {
-                        Ok(r) => {
-                            if ctx.pending_exception.is_some() {
-                                return JSValue::undefined();
-                            }
-                            got_primitive = if r.is_string() {
-                                Some(ctx.get_atom_str(r.get_atom()).to_string())
-                            } else if !r.is_object() {
-                                Some(crate::builtins::global::jsvalue_to_string(&r, ctx))
-                            } else {
-                                None
-                            };
-                        }
-                        Err(_) => {
-                            if ctx.pending_exception.is_some() {
-                                return JSValue::undefined();
-                            }
-                        }
-                    }
-                }
-            }
-            // Try valueOf if toString didn't return a primitive
-            if got_primitive.is_none() {
-                let value_of_fn = obj.get(ctx.common_atoms.value_of);
-                if let Some(f) = value_of_fn {
+        let early = ctx
+            .with_vm(|vm, ctx| {
+                let obj = val.as_object();
+                let mut got_primitive: Option<String> = None;
+                let to_string_fn = obj.get(ctx.common_atoms.to_string);
+                if let Some(f) = to_string_fn {
                     if f.is_function() {
                         match vm.call_function_with_this(ctx, f, *val, &[]) {
                             Ok(r) => {
                                 if ctx.pending_exception.is_some() {
-                                    return JSValue::undefined();
+                                    return Some(JSValue::undefined());
                                 }
-                                if !r.is_object() {
-                                    let s = crate::builtins::global::jsvalue_to_string(&r, ctx);
-                                    got_primitive = Some(s);
-                                }
+                                got_primitive = if r.is_string() {
+                                    Some(ctx.get_atom_str(r.get_atom()).to_string())
+                                } else if !r.is_object() {
+                                    Some(crate::builtins::global::jsvalue_to_string(&r, ctx))
+                                } else {
+                                    None
+                                };
                             }
                             Err(_) => {
                                 if ctx.pending_exception.is_some() {
-                                    return JSValue::undefined();
+                                    return Some(JSValue::undefined());
                                 }
                             }
                         }
                     }
                 }
-            }
-            if let Some(s) = got_primitive {
-                match super::json_parser::JsonParser::new(&s).parse_root(ctx) {
-                    Ok(v) => return v,
-                    Err(_) => {
-                        let mut err = crate::object::object::JSObject::new_typed(crate::object::object::ObjectType::Error);
-                        if let Some(proto) = ctx.get_syntax_error_prototype() { err.prototype = Some(proto); }
-                        err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("JSON.parse: unexpected character")));
-                        let ptr = Box::into_raw(Box::new(err)) as usize;
-                        ctx.runtime_mut().gc_heap_mut().track(ptr);
-                        ctx.pending_exception = Some(JSValue::new_object(ptr));
-                        return JSValue::undefined();
+                if got_primitive.is_none() {
+                    let value_of_fn = obj.get(ctx.common_atoms.value_of);
+                    if let Some(f) = value_of_fn {
+                        if f.is_function() {
+                            match vm.call_function_with_this(ctx, f, *val, &[]) {
+                                Ok(r) => {
+                                    if ctx.pending_exception.is_some() {
+                                        return Some(JSValue::undefined());
+                                    }
+                                    if !r.is_object() {
+                                        let s = crate::builtins::global::jsvalue_to_string(&r, ctx);
+                                        got_primitive = Some(s);
+                                    }
+                                }
+                                Err(_) => {
+                                    if ctx.pending_exception.is_some() {
+                                        return Some(JSValue::undefined());
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-            }
+                if let Some(s) = got_primitive {
+                    match super::json_parser::JsonParser::new(&s).parse_root(ctx) {
+                        Ok(v) => return Some(v),
+                        Err(_) => {
+                            let mut err = crate::object::object::JSObject::new_typed(crate::object::object::ObjectType::Error);
+                            if let Some(proto) = ctx.get_syntax_error_prototype() { err.prototype = Some(proto); }
+                            err.set(ctx.common_atoms.message, JSValue::new_string(ctx.intern("JSON.parse: unexpected character")));
+                            let ptr = Box::into_raw(Box::new(err)) as usize;
+                            ctx.runtime_mut().gc_heap_mut().track(ptr);
+                            ctx.pending_exception = Some(JSValue::new_object(ptr));
+                            return Some(JSValue::undefined());
+                        }
+                    }
+                }
+                None
+            })
+            .flatten();
+        if let Some(v) = early {
+            return v;
         }
         // Fallback: throw TypeError when ToPrimitive fails
         let mut err = crate::object::object::JSObject::new_typed(crate::object::object::ObjectType::Error);
@@ -312,13 +314,10 @@ fn apply_to_json(ctx: &mut JSContext, val: &mut JSValue, key: crate::runtime::at
     let to_json_fn = get_to_json(ctx, *val);
     if let Some(f) = to_json_fn {
         if f.is_function() {
-            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                let key_val = JSValue::new_string(key);
-                let args = vec![key_val];
-                if let Ok(r) = vm.call_function_with_this(ctx, f, *val, &args) {
-                    *val = r;
-                }
+            let key_val = JSValue::new_string(key);
+            let args = vec![key_val];
+            if let Some(Ok(r)) = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, f, *val, &args)) {
+                *val = r;
             }
         }
     }
@@ -350,22 +349,23 @@ fn jsvalue_to_json_with_options(
     // Apply replacer
     if let Some(repl) = replacer {
         if repl.is_function() {
-            let vm_ptr = ctx.get_register_vm_ptr();
-            if let Some(ptr) = vm_ptr {
-                let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
-                let args = vec![JSValue::new_string(ctx.intern("")), val];
-                // Create wrapper object as `this` for the replacer (spec step 9-10)
-                let mut wrapper_obj = crate::object::object::JSObject::new();
-                if let Some(proto_ptr) = ctx.get_object_prototype() {
-                    wrapper_obj.prototype = Some(proto_ptr);
-                }
-                wrapper_obj.set(ctx.common_atoms.empty, *value);
-                let wrapper_ptr = Box::into_raw(Box::new(wrapper_obj)) as usize;
-                ctx.runtime_mut().gc_heap_mut().track(wrapper_ptr);
-                let wrapper_val = JSValue::new_object(wrapper_ptr);
-                if let Ok(result) = vm.call_function_with_this(ctx, *repl, wrapper_val, &args) {
-                    val = result;
-                }
+            let replaced = ctx
+                .with_vm(|vm, ctx| {
+                    let args = vec![JSValue::new_string(ctx.intern("")), val];
+                    // Create wrapper object as `this` for the replacer (spec step 9-10)
+                    let mut wrapper_obj = crate::object::object::JSObject::new();
+                    if let Some(proto_ptr) = ctx.get_object_prototype() {
+                        wrapper_obj.prototype = Some(proto_ptr);
+                    }
+                    wrapper_obj.set(ctx.common_atoms.empty, *value);
+                    let wrapper_ptr = Box::into_raw(Box::new(wrapper_obj)) as usize;
+                    ctx.runtime_mut().gc_heap_mut().track(wrapper_ptr);
+                    let wrapper_val = JSValue::new_object(wrapper_ptr);
+                    vm.call_function_with_this(ctx, *repl, wrapper_val, &args).ok()
+                })
+                .flatten();
+            if let Some(result) = replaced {
+                val = result;
             }
         }
     }
@@ -383,8 +383,7 @@ fn jsvalue_to_json_with_options(
 }
 
 fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate::runtime::atom::Atom) -> JSValue {
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         let val = if holder.is_object() {
             holder.as_object().get(key)
         } else {
@@ -461,9 +460,7 @@ fn json_walk(ctx: &mut JSContext, reviver: JSValue, holder: JSValue, key: crate:
                 JSValue::undefined()
             }
         }
-    } else {
-        JSValue::undefined()
-    }
+    }).unwrap_or_else(JSValue::undefined)
 }
 
 fn get_indent_string_with_ctx(ctx: &mut JSContext, space: &JSValue) -> String {
@@ -474,45 +471,55 @@ fn get_indent_string_with_ctx(ctx: &mut JSContext, space: &JSValue) -> String {
         if let Some(v) = inner {
             if v.is_string() {
                 // String wrapper: use ToString (toString first, then valueOf)
-                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                    let to_str_fn = obj.get(ctx.common_atoms.to_string);
-                    if let Some(f) = to_str_fn {
-                        if f.is_function() {
-                            if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
-                                if r.is_string() { return get_indent_string_with_ctx(ctx, &r); }
+                let converted = ctx
+                    .with_vm(|vm, ctx| {
+                        let to_str_fn = obj.get(ctx.common_atoms.to_string);
+                        if let Some(f) = to_str_fn {
+                            if f.is_function() {
+                                if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
+                                    if r.is_string() { return Some(get_indent_string_with_ctx(ctx, &r)); }
+                                }
                             }
                         }
-                    }
-                    let val_fn = obj.get(ctx.common_atoms.value_of);
-                    if let Some(f) = val_fn {
-                        if f.is_function() {
-                            if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
-                                if r.is_string() { return get_indent_string_with_ctx(ctx, &r); }
+                        let val_fn = obj.get(ctx.common_atoms.value_of);
+                        if let Some(f) = val_fn {
+                            if f.is_function() {
+                                if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
+                                    if r.is_string() { return Some(get_indent_string_with_ctx(ctx, &r)); }
+                                }
                             }
                         }
-                    }
+                        None
+                    })
+                    .flatten();
+                if let Some(s) = converted {
+                    return s;
                 }
             } else if v.is_int() || v.is_float() {
                 // Number wrapper: use ToNumber (valueOf first, then toString)
-                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                    let val_fn = obj.get(ctx.common_atoms.value_of);
-                    if let Some(f) = val_fn {
-                        if f.is_function() {
-                            if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
-                                if !r.is_object() { return get_indent_string_with_ctx(ctx, &r); }
+                let converted = ctx
+                    .with_vm(|vm, ctx| {
+                        let val_fn = obj.get(ctx.common_atoms.value_of);
+                        if let Some(f) = val_fn {
+                            if f.is_function() {
+                                if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
+                                    if !r.is_object() { return Some(get_indent_string_with_ctx(ctx, &r)); }
+                                }
                             }
                         }
-                    }
-                    let to_str_fn = obj.get(ctx.common_atoms.to_string);
-                    if let Some(f) = to_str_fn {
-                        if f.is_function() {
-                            if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
-                                if !r.is_object() { return get_indent_string_with_ctx(ctx, &r); }
+                        let to_str_fn = obj.get(ctx.common_atoms.to_string);
+                        if let Some(f) = to_str_fn {
+                            if f.is_function() {
+                                if let Ok(r) = vm.call_function_with_this(ctx, f, *space, &[]) {
+                                    if !r.is_object() { return Some(get_indent_string_with_ctx(ctx, &r)); }
+                                }
                             }
                         }
-                    }
+                        None
+                    })
+                    .flatten();
+                if let Some(s) = converted {
+                    return s;
                 }
             }
             // Boolean and other wrappers: ignore (space = undefined per spec)
@@ -759,19 +766,12 @@ fn array_to_json(
             apply_to_json(ctx, &mut val, i_key);
             let processed = if let Some(repl) = replacer {
                 if repl.is_function() {
-                    let vm_ptr = ctx.get_register_vm_ptr();
-                    if let Some(ptr) = vm_ptr {
-                        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+                    ctx.with_vm(|vm, ctx| {
                         let args = vec![JSValue::new_string(ctx.intern(&i.to_string())), val];
                         let arr_val = JSValue::new_object(arr as *const _ as usize);
-                        if let Ok(result) = vm.call_function_with_this(ctx, *repl, arr_val, &args) {
-                            result
-                        } else {
-                            val
-                        }
-                    } else {
-                        val
-                    }
+                        vm.call_function_with_this(ctx, *repl, arr_val, &args).unwrap_or(val)
+                    })
+                    .unwrap_or(val)
                 } else {
                     val
                 }
@@ -838,15 +838,14 @@ fn object_to_json(
                                 keys.push(ctx.intern(&f.to_string()));
                             }
                         } else if k.is_object() {
-                            if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                                let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                                let obj = k.as_object();
-                                if let Some(to_str_fn) = obj.get(ctx.common_atoms.to_string) {
-                                    if to_str_fn.is_function() {
-                                        if let Ok(r) = vm.call_function_with_this(ctx, to_str_fn, k, &[]) {
-                                            if r.is_string() {
-                                                keys.push(r.get_atom());
-                                            }
+                            let obj = k.as_object();
+                            let to_str_fn = obj.get(ctx.common_atoms.to_string);
+                            if let Some(to_str_fn) = to_str_fn {
+                                if to_str_fn.is_function() {
+                                    let called = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, to_str_fn, k, &[]));
+                                    if let Some(Ok(r)) = called {
+                                        if r.is_string() {
+                                            keys.push(r.get_atom());
                                         }
                                     }
                                 }
@@ -901,16 +900,12 @@ fn object_to_json(
         let val = if let Some(v) = obj.get_own_value(key) {
             if v.is_function() {
                 // Accessor property: call the getter
-                if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-                    let obj_ptr = obj as *const _ as usize;
-                    let obj_val = JSValue::new_object(obj_ptr);
-                    match vm.call_function_with_this(ctx, v, obj_val, &[]) {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    }
-                } else {
-                    continue;
+                let obj_ptr = obj as *const _ as usize;
+                let obj_val = JSValue::new_object(obj_ptr);
+                let called = ctx.with_vm(|vm, ctx| vm.call_function_with_this(ctx, v, obj_val, &[]));
+                match called {
+                    Some(Ok(r)) => r,
+                    _ => continue,
                 }
             } else {
                 v
@@ -927,20 +922,13 @@ fn object_to_json(
 
         let processed = if let Some(repl) = replacer {
             if repl.is_function() {
-                let vm_ptr = ctx.get_register_vm_ptr();
-                if let Some(ptr) = vm_ptr {
-                    let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+                ctx.with_vm(|vm, ctx| {
                     let args = vec![JSValue::new_string(ctx.intern(&key_str)), val];
                     let obj_ptr = obj as *const _ as usize;
                     let obj_val = JSValue::new_object(obj_ptr);
-                    if let Ok(result) = vm.call_function_with_this(ctx, *repl, obj_val, &args) {
-                        result
-                    } else {
-                        val
-                    }
-                } else {
-                    val
-                }
+                    vm.call_function_with_this(ctx, *repl, obj_val, &args).unwrap_or(val)
+                })
+                .unwrap_or(val)
             } else {
                 val
             }
