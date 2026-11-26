@@ -291,41 +291,6 @@ fn should_skip(meta: &TestMeta) -> bool {
             return true;
         }
     }
-
-    let unsupported_features = [
-        "FinalizationRegistry",
-        "WeakRef",
-        "Top-level-await",
-        "import.meta",
-        "ExportDefault",
-        "ExportAllFrom",
-        "ImportAssertions",
-        "RegExp Unicode Sets",
-        "symbols",
-        "Proxy",
-        "Temporal",
-        "Intl.DurationFormat",
-        "Intl.Segmenter",
-        "Intl.RelativeTimeFormat",
-        "Intl.DisplayNames",
-        "Intl.DateTimeFormat",
-        "Intl.NumberFormat",
-        "Intl.PluralRules",
-        "Intl.ListFormat",
-        "Intl.Collator",
-        "Intl.Locale",
-        "resizable-arraybuffer",
-        "Error.isError",
-        "error-stack-accessor",
-    ];
-
-    for feature in &unsupported_features {
-        for f in &meta.features {
-            if f.contains(feature) {
-                return true;
-            }
-        }
-    }
     false
 }
 
