@@ -1217,7 +1217,16 @@ impl Parser {
             && !self.current.as_ref().map_or(false, |t| t.had_escape)
             && self.peek_at("of")
         {
-            return Err(self.error("Unexpected token 'of' after 'async'"));
+            let saved_pos = self.lexer.pos();
+            let saved_kind = self.lexer.last_token_kind();
+            let saved_cur = self.current.clone();
+            let saved_peek = self.peek_token.clone();
+            self.advance();
+            let arrow_after_of = self.peek_at("=>");
+            self.restore(saved_pos, saved_kind, saved_cur, saved_peek);
+            if !arrow_after_of {
+                return Err(self.error("Unexpected token 'of' after 'async'"));
+            }
         }
 
         let expr = self.parse_expression_no_in()?;
