@@ -6,8 +6,7 @@ use crate::util::FxHashMap;
 use crate::value::JSValue;
 
 fn throw_type_error(ctx: &mut JSContext, message: &str) {
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         let mut err = JSObject::new_typed(crate::object::object::ObjectType::Error);
         err.set(
             ctx.common_atoms.message,
@@ -23,7 +22,7 @@ fn throw_type_error(ctx: &mut JSContext, message: &str) {
         let err_ptr = Box::into_raw(Box::new(err)) as usize;
         ctx.runtime_mut().gc_heap_mut().track(err_ptr);
         vm.pending_throw = Some(JSValue::new_object(err_ptr));
-    }
+    });
 }
 
 fn create_builtin_method(
@@ -281,10 +280,9 @@ pub fn register_builtins(ctx: &mut JSContext) {
 }
 
 fn throw_type_error_callee(ctx: &mut JSContext, _args: &[JSValue]) -> JSValue {
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         vm.set_pending_type_error(ctx, "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them");
-    }
+    });
     JSValue::undefined()
 }
 
@@ -301,10 +299,9 @@ fn throw_type_error_caller_args(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
             return JSValue::undefined();
         }
     }
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         vm.set_pending_type_error(ctx, "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them");
-    }
+    });
     JSValue::undefined()
 }
 
@@ -313,18 +310,18 @@ const SYMBOL_HAS_INSTANCE_DISPLAY: &str = "[Symbol.hasInstance]";
 fn function_has_instance(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
     let f = args.first().copied().unwrap_or_else(JSValue::undefined);
     let v = args.get(1).copied().unwrap_or_else(JSValue::undefined);
-    if let Some(vm_ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(vm_ptr as *mut crate::runtime::vm::VM) };
-        match vm.ordinary_has_instance(ctx, f, v) {
-            Some(result) => return JSValue::bool(result),
+    let found = ctx
+        .with_vm(|vm, ctx| match vm.ordinary_has_instance(ctx, f, v) {
+            Some(result) => Some(JSValue::bool(result)),
             None => {
                 if let Some(exc) = vm.take_pending_exception(ctx) {
                     ctx.pending_exception = Some(exc);
                 }
+                None
             }
-        }
-    }
-    JSValue::undefined()
+        })
+        .flatten();
+    found.unwrap_or_else(JSValue::undefined)
 }
 
 fn function_constructor(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -562,8 +559,7 @@ fn function_call(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         call_args.push(arg.clone());
     }
 
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         let result = vm.call_function_with_this(ctx, *this_val, this_arg, &call_args);
         match result {
             Ok(val) => val,
@@ -616,9 +612,8 @@ fn function_call(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 JSValue::undefined()
             }
         }
-    } else {
-        JSValue::undefined()
-    }
+    })
+    .unwrap_or_else(JSValue::undefined)
 }
 
 fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
@@ -649,10 +644,9 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         if let Some(lv) = len_val {
             if !lv.is_int() {
                 call_args = &[];
-                if let Some(ptr) = ctx.get_register_vm_ptr() {
-                    let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+                let result = ctx.with_vm(|vm, ctx| {
                     let result = vm.call_function_with_this(ctx, *this_val, this_arg, call_args);
-                    return match result {
+                    match result {
                         Ok(val) => val,
                         Err(_) => {
                             if let Some(exc) = vm.last_caught_exception.take() {
@@ -660,9 +654,9 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                             }
                             JSValue::undefined()
                         }
-                    };
-                }
-                return JSValue::undefined();
+                    }
+                });
+                return result.unwrap_or_else(JSValue::undefined);
             }
             let len = lv.get_int() as usize;
 
@@ -751,8 +745,7 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         call_args = &[];
     }
 
-    if let Some(ptr) = ctx.get_register_vm_ptr() {
-        let vm = unsafe { &mut *(ptr as *mut crate::runtime::vm::VM) };
+    ctx.with_vm(|vm, ctx| {
         let result = vm.call_function_with_this(ctx, *this_val, this_arg, call_args);
         match result {
             Ok(val) => val,
@@ -763,9 +756,8 @@ fn function_apply(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
                 JSValue::undefined()
             }
         }
-    } else {
-        JSValue::undefined()
-    }
+    })
+    .unwrap_or_else(JSValue::undefined)
 }
 
 fn function_to_string(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
