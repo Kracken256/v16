@@ -8933,10 +8933,10 @@ impl VM {
                     let dst = self.read_u16_pc();
                     let ptr = if let Some(proto_ptr) = ctx.get_object_prototype() {
                         if let Some(nursery_ptr) = ctx.runtime_mut().gc_heap_mut().alloc_object() {
-                            unsafe {
-                                (*nursery_ptr).prototype = Some(proto_ptr);
-                                (*nursery_ptr).ensure_shape(ctx.shape_cache_mut());
-                            }
+                            let nursery_obj = JSValue::new_object(nursery_ptr as usize);
+                            let nursery_obj = nursery_obj.as_object_mut();
+                            nursery_obj.prototype = Some(proto_ptr);
+                            nursery_obj.ensure_shape(ctx.shape_cache_mut());
                             nursery_ptr as usize
                         } else {
                             let mut obj = crate::object::object::JSObject::new();
