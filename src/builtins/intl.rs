@@ -529,7 +529,7 @@ fn intl_collator_compare_getter(ctx: &mut JSContext, args: &[JSValue]) -> JSValu
         fn_obj.base.set_prototype_raw(fn_proto_ptr);
     }
     define_name_length(ctx, &mut fn_obj.base, "", 2);
-    fn_obj.cached_prototype_ptr = (Box::into_raw(Box::new(state)) as usize) as *mut JSObject;
+    fn_obj.base.set_native_data(Box::new(state));
 
     let ptr = Box::into_raw(Box::new(fn_obj)) as usize;
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);
@@ -552,14 +552,14 @@ fn intl_collator_compare_call(ctx: &mut JSContext, args: &[JSValue]) -> JSValue 
         return JSValue::undefined();
     }
     let f = callee.as_function();
-    if f.cached_prototype_ptr.is_null() {
+    let Some(state) = f.base.get_native_data::<CollatorState>() else {
         throw_type_error(
             ctx,
             "Intl.Collator compare function called on incompatible receiver",
         );
         return JSValue::undefined();
-    }
-    let state = unsafe { *((f.cached_prototype_ptr as usize) as *const CollatorState) };
+    };
+    let state = *state;
 
     let a = args.get(1).copied().unwrap_or(JSValue::undefined());
     let b = args.get(2).copied().unwrap_or(JSValue::undefined());

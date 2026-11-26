@@ -729,6 +729,8 @@ pub struct ObjectExtra {
 
     pub compiled_regex: Option<Box<crate::regexp::Regex>>,
 
+    pub native_data: Option<Box<dyn std::any::Any>>,
+
     pub array_buffer_data: Option<Box<crate::builtins::typedarray::ArrayBufferData>>,
 
     pub typed_array_kind: Option<TypedArrayKind>,
@@ -797,6 +799,7 @@ impl JSObject {
                 accessors: None,
                 property_order: None,
                 compiled_regex: None,
+                native_data: None,
                 array_buffer_data: None,
                 typed_array_kind: None,
                 typed_array_tracks_length: false,
@@ -1249,6 +1252,18 @@ impl JSObject {
     #[inline]
     pub fn take_async_state(&mut self) -> Option<Box<AsyncState>> {
         self.extra.as_mut().and_then(|e| e.async_state.take())
+    }
+
+    pub fn set_native_data(&mut self, data: Box<dyn std::any::Any>) {
+        self.ensure_extra().native_data = Some(data);
+    }
+
+    #[inline]
+    pub fn get_native_data<T: std::any::Any>(&self) -> Option<&T> {
+        self.extra
+            .as_ref()
+            .and_then(|e| e.native_data.as_ref())
+            .and_then(|data| data.downcast_ref::<T>())
     }
 
     #[inline]
