@@ -12,8 +12,7 @@ pub fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") {
-            // SAFETY: the runtime feature check guarantees AVX2 is available on this CPU.
-            return unsafe { memchr_avx2(needle, haystack) };
+            return memchr_avx2(needle, haystack);
         }
         if is_x86_feature_detected!("sse2") {
             return memchr_sse2(needle, haystack);
@@ -85,8 +84,10 @@ fn memchr_sse2(needle: u8, haystack: &[u8]) -> Option<usize> {
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-unsafe fn memchr_avx2(needle: u8, haystack: &[u8]) -> Option<usize> {
+fn memchr_avx2(needle: u8, haystack: &[u8]) -> Option<usize> {
     use core::arch::x86_64::*;
+
+    debug_assert!(is_x86_feature_detected!("avx2"));
 
     let len = haystack.len();
     let ptr = haystack.as_ptr();
@@ -137,8 +138,7 @@ pub fn memchr2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") {
-            // SAFETY: the runtime feature check guarantees AVX2 is available on this CPU.
-            return unsafe { memchr2_avx2(n1, n2, haystack) };
+            return memchr2_avx2(n1, n2, haystack);
         }
         if is_x86_feature_detected!("sse2") {
             return memchr2_sse2(n1, n2, haystack);
@@ -212,8 +212,11 @@ fn memchr2_sse2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-unsafe fn memchr2_avx2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
+fn memchr2_avx2(n1: u8, n2: u8, haystack: &[u8]) -> Option<usize> {
     use core::arch::x86_64::*;
+
+    debug_assert!(is_x86_feature_detected!("avx2"));
+
     let len = haystack.len();
     let ptr = haystack.as_ptr();
     let mut i = 0usize;
