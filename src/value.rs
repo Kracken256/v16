@@ -15,6 +15,8 @@ const TAG_TDZ: u64 = 0x9;
 
 const TAG_SHIFT: u64 = 47;
 const PAYLOAD_MASK: u64 = 0x0000_7FFF_FFFF_FFFF;
+const POINTER_SHIFT: u32 = 3;
+const MAX_PACKED_ADDRESS: usize = (PAYLOAD_MASK as usize) << POINTER_SHIFT;
 
 const CANONICAL_NAN: u64 = QNAN_BASE | (0xF << TAG_SHIFT) | 0x1;
 
@@ -127,20 +129,14 @@ impl JSValue {
 
     #[inline(always)]
     pub fn new_object(ptr: *mut crate::object::object::JSObject) -> Self {
-        // SAFETY: the object constructor only compresses the caller-provided live object pointer.
-        JSValue(Self::pack(
-            TAG_OBJECT,
-            unsafe { Self::compress_ptr(ptr as usize) },
-        ))
+        // SAFETY: the object constructor only packages the caller-provided live object pointer.
+        JSValue(Self::pack(TAG_OBJECT, unsafe { Self::pack_pointer(ptr) }))
     }
 
     #[inline(always)]
     pub fn new_function(ptr: *mut crate::object::function::JSFunction) -> Self {
-        // SAFETY: the function constructor only compresses the caller-provided live function pointer.
-        JSValue(Self::pack(
-            TAG_FUNC,
-            unsafe { Self::compress_ptr(ptr as usize) },
-        ))
+        // SAFETY: the function constructor only packages the caller-provided live function pointer.
+        JSValue(Self::pack(TAG_FUNC, unsafe { Self::pack_pointer(ptr) }))
     }
 
     pub fn new_symbol(atom: Atom) -> Self {
@@ -157,27 +153,44 @@ impl JSValue {
     }
 
     pub fn new_bigint(ptr: *mut crate::object::object::JSObject) -> Self {
-        // SAFETY: the BigInt constructor only compresses the caller-provided live object pointer.
-        JSValue(Self::pack(
-            TAG_BIGINT,
-            unsafe { Self::compress_ptr(ptr as usize) },
-        ))
+        // SAFETY: the BigInt constructor only packages the caller-provided live object pointer.
+        JSValue(Self::pack(TAG_BIGINT, unsafe { Self::pack_pointer(ptr) }))
     }
 
     /// # Safety
     ///
-    /// `ptr` must be the address of a live, 8-byte-aligned, non-null object
-    /// allocation owned by the active runtime, and that address must fit in the
-    /// compressed payload (the platform heap must live below 2^51).
+    /// `ptr` must be non-null, and its address (as exposed by
+    /// [`std::ptr::expose_provenance`]) must be at most [`MAX_PACKED_ADDRESS`]
+    /// so the payload can round-trip it.
+    ///
+    /// The returned payload stores only the address, so recovering the pointer
+    /// relies on exposed provenance (see [`Self::unpack_pointer`]); callers must
+    /// keep the allocation live for as long as the packed value can be
+    /// dereferenced.
     #[inline(always)]
-    unsafe fn compress_ptr(ptr: usize) -> u64 {
-        let compressed = (ptr >> 3) as u64;
-        compressed & PAYLOAD_MASK
+    unsafe fn pack_pointer<T>(ptr: *mut T) -> u64 {
+        debug_assert!(!ptr.is_null(), "cannot pack a null object pointer");
+        let address = ptr.expose_provenance();
+        debug_assert!(
+            address <= MAX_PACKED_ADDRESS,
+            "object pointer {address:#x} exceeds the packable address range"
+        );
+        ((address >> POINTER_SHIFT) as u64) & PAYLOAD_MASK
     }
 
+    /// Recover a pointer from a packed payload using exposed provenance.
+    ///
+    /// NaN-boxing is architecturally required by the value representation and a
+    /// `u64` cannot carry pointer provenance, so the address is republished with
+    /// [`std::ptr::with_exposed_provenance_mut`]. Every object pointer stored in
+    /// a [`JSValue`] went through [`Self::pack_pointer`], which exposes the
+    /// address via [`std::ptr::addr`].
     #[inline(always)]
-    fn decompress_ptr(compressed: u64) -> usize {
-        (compressed << 3) as usize
+    fn unpack_pointer<T>(compressed: u64) -> *mut T {
+        let address = ((compressed & PAYLOAD_MASK) << POINTER_SHIFT) as usize;
+        debug_assert!(address != 0, "unpacked a null object pointer");
+        debug_assert!(address <= MAX_PACKED_ADDRESS);
+        std::ptr::with_exposed_provenance_mut::<T>(address)
     }
 
     pub const fn undefined() -> Self {
@@ -337,12 +350,12 @@ impl JSValue {
 
     #[inline(always)]
     pub fn get_ptr(&self) -> *mut crate::object::object::JSObject {
-        Self::decompress_ptr(self.get_payload()) as *mut crate::object::object::JSObject
+        Self::unpack_pointer(self.get_payload())
     }
 
     #[inline(always)]
     pub fn get_function_ptr(&self) -> *mut crate::object::function::JSFunction {
-        self.get_ptr() as *mut crate::object::function::JSFunction
+        Self::unpack_pointer(self.get_payload())
     }
 
     #[inline(always)]
@@ -421,7 +434,7 @@ impl JSValue {
     #[inline(always)]
     pub unsafe fn as_function_unchecked(&self) -> &crate::object::function::JSFunction {
         // SAFETY: the caller guarantees the tag and pointer invariants.
-        unsafe { &*(self.get_ptr() as *const crate::object::function::JSFunction) }
+        unsafe { &*self.get_function_ptr() }
     }
 
     /// # Safety
@@ -434,7 +447,7 @@ impl JSValue {
         &mut self,
     ) -> &mut crate::object::function::JSFunction {
         // SAFETY: the caller guarantees the tag, pointer and aliasing invariants.
-        unsafe { &mut *(self.get_ptr() as *mut crate::object::function::JSFunction) }
+        unsafe { &mut *self.get_function_ptr() }
     }
 
     #[inline(always)]
@@ -714,4 +727,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn packed_object_pointer_roundtrips_with_alignment() {
+        let object_ptr = Box::into_raw(Box::new(JSObject::new()));
+        let function_ptr = Box::into_raw(Box::new(JSFunction::new()));
+        let bigint_ptr = Box::into_raw(Box::new(JSObject::new_bigint()));
+
+        let object_value = JSValue::new_object(object_ptr);
+        let function_value = JSValue::new_function(function_ptr);
+        let bigint_value = JSValue::new_bigint(bigint_ptr);
+
+        assert_eq!(object_value.get_ptr().addr(), object_ptr.addr());
+        assert_eq!(function_value.get_function_ptr().addr(), function_ptr.addr());
+        assert_eq!(bigint_value.get_ptr().addr(), bigint_ptr.addr());
+
+        for ptr in [object_value.get_ptr(), bigint_value.get_ptr()] {
+            assert_eq!(ptr.addr() % std::mem::align_of::<JSObject>(), 0);
+        }
+        assert_eq!(
+            function_value.get_function_ptr().addr() % std::mem::align_of::<JSFunction>(),
+            0
+        );
+
+        // SAFETY: each pointer was produced by `Box::into_raw` above and is reclaimed exactly once.
+        unsafe {
+            drop(Box::from_raw(object_ptr));
+            drop(Box::from_raw(function_ptr));
+            drop(Box::from_raw(bigint_ptr));
+        }
+    }
+
+    #[test]
+    fn serialized_bits_cannot_forge_object_pointers() {
+        let object_ptr = Box::into_raw(Box::new(JSObject::new()));
+        let function_ptr = Box::into_raw(Box::new(JSFunction::new()));
+
+        for value in [
+            JSValue::new_object(object_ptr),
+            JSValue::new_function(function_ptr),
+            JSValue::new_bigint(object_ptr),
+        ] {
+            assert!(JSValue::from_serialized_bits(value.raw_bits()).is_none());
+        }
+
+        // SAFETY: each pointer was produced by `Box::into_raw` above and is reclaimed exactly once.
+        unsafe {
+            drop(Box::from_raw(object_ptr));
+            drop(Box::from_raw(function_ptr));
+        }
+    }
+
+    #[test]
+    fn packed_pointer_tags_never_collide_with_numeric_payloads() {
+        let pointers = [0x1000usize, 0x2000, 0x7FFF_FFFF_FFF8];
+        for address in pointers {
+            let value = JSValue(JSValue::pack(TAG_OBJECT, (address >> 3) as u64));
+            assert!(value.is_object());
+            assert!(!value.is_float());
+            assert_eq!(value.get_payload(), (address >> 3) as u64);
+        }
+
+        for value in [
+            JSValue::new_int(-1),
+            JSValue::new_int(0),
+            JSValue::new_int(1i64 << 40),
+            JSValue::new_float(1.5),
+            JSValue::new_float(f64::NAN),
+            JSValue::new_float(f64::INFINITY),
+            JSValue::undefined(),
+            JSValue::null(),
+            JSValue::bool(true),
+        ] {
+            assert!(!value.is_object(), "value {:#x} must not look like an object", value.raw_bits());
+            assert!(!value.is_function());
+            assert!(!value.is_bigint());
+        }
+    }
 }
