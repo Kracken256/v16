@@ -1892,10 +1892,13 @@ mod tests {
 
     #[test]
     fn test_deserialize_rejects_pointer_constants() {
+        let object_ptr = Box::into_raw(Box::new(crate::object::object::JSObject::new()));
+        let function_ptr = Box::into_raw(Box::new(crate::object::function::JSFunction::new()));
+        let bigint_ptr = Box::into_raw(Box::new(crate::object::object::JSObject::new_bigint()));
         for value in [
-            crate::value::JSValue::new_object(0x1000 as *mut crate::object::object::JSObject),
-            crate::value::JSValue::new_function(0x2000 as *mut crate::object::function::JSFunction),
-            crate::value::JSValue::new_bigint(0x3000 as *mut crate::object::object::JSObject),
+            crate::value::JSValue::new_object(object_ptr),
+            crate::value::JSValue::new_function(function_ptr),
+            crate::value::JSValue::new_bigint(bigint_ptr),
         ] {
             let mut bytecode = Bytecode::new();
             bytecode.constants = vec![value];
@@ -1903,6 +1906,12 @@ mod tests {
                 Bytecode::deserialize(&bytecode.serialize()).is_err(),
                 "pointer constants must not load"
             );
+        }
+        // SAFETY: each pointer was produced by `Box::into_raw` above and is reclaimed exactly once.
+        unsafe {
+            drop(Box::from_raw(object_ptr));
+            drop(Box::from_raw(function_ptr));
+            drop(Box::from_raw(bigint_ptr));
         }
     }
 
