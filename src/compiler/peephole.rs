@@ -20,87 +20,6 @@ pub fn optimize_with_level(bytecode: &mut Bytecode, opt_level: OptLevel) {
     }
 }
 
-fn embedded_function_size(code: &[u8], start: usize) -> usize {
-    let mut pc = start;
-    if pc >= code.len() {
-        return 1;
-    }
-    pc += 1; // opcode byte
-    if pc + 2 > code.len() {
-        return pc - start;
-    }
-    pc += 2; // param_count u16
-    if pc + 1 > code.len() {
-        return pc - start;
-    }
-    pc += 1; // uses_arguments u8
-    if pc + 1 > code.len() {
-        return pc - start;
-    }
-    pc += 1; // is_strict u8
-    if pc + 2 > code.len() {
-        return pc - start;
-    }
-    pc += 2; // locals_count u16
-    if pc + 4 > code.len() {
-        return pc - start;
-    }
-    let bytecode_len = read_i32(code, pc) as usize;
-    pc += 4;
-    pc += bytecode_len;
-    if pc + 4 > code.len() {
-        return pc - start;
-    }
-    let constants_len = read_i32(code, pc) as usize;
-    pc += 4;
-    for _ in 0..constants_len {
-        if pc >= code.len() {
-            return pc - start;
-        }
-        let tag = code[pc];
-        pc += 1;
-        match tag {
-            4 => {
-                pc += 8;
-            }
-            5 => {
-                pc += 8;
-            }
-            6 => {
-                pc += 4;
-            }
-            _ => {}
-        }
-    }
-    if pc + 4 > code.len() {
-        return pc - start;
-    }
-    let upvalue_count = read_i32(code, pc) as usize;
-    pc += 4;
-    pc += upvalue_count * 8;
-    if pc + 4 > code.len() {
-        return pc - start;
-    }
-    let line_entry_count = read_i32(code, pc) as usize;
-    pc += 4;
-    pc += line_entry_count * 8;
-    if pc + 4 > code.len() {
-        return pc - start;
-    }
-    pc += 4; // func_name_atom
-    if pc + 4 > code.len() {
-        return pc - start;
-    }
-    let var_count = read_i32(code, pc) as usize;
-    pc += 4;
-    pc += var_count * 6;
-    if pc + 2 > code.len() {
-        return pc - start;
-    }
-    pc += 2; // dst register
-    pc - start
-}
-
 fn run_pass(bytecode: &mut Bytecode) -> bool {
     let mut changed = false;
     let mut pc = 0usize;
@@ -108,15 +27,7 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
 
     while pc < code.len() {
         let op = Opcode::from_u8_unchecked(code[pc]);
-        let size = if op == Opcode::NewFunction
-            || op == Opcode::NewAsyncFunction
-            || op == Opcode::NewGeneratorFunction
-            || op == Opcode::NewAsyncGeneratorFunction
-        {
-            embedded_function_size(code, pc)
-        } else {
-            Opcode::instruction_size(op)
-        };
+        let size = Opcode::instruction_size_at(code, pc);
         if size == 0 || pc + size > code.len() {
             break;
         }
@@ -442,5 +353,44 @@ mod tests {
         assert_eq!(read_i32(&out, 3), i32::MAX);
         assert_eq!(out[7], Opcode::LoadInt as u8);
         assert_eq!(out[14], Opcode::Add as u8);
+    }
+
+    fn embedded_function(dst: u16) -> Vec<u8> {
+        let mut code = vec![Opcode::NewFunction as u8];
+        code.extend_from_slice(&0u16.to_le_bytes());
+        code.push(0);
+        code.push(0);
+        code.push(1);
+        code.push(0);
+        code.extend_from_slice(&2u16.to_le_bytes());
+        code.extend_from_slice(&3u32.to_le_bytes());
+        code.extend(std::iter::repeat(Opcode::Nop as u8).take(3));
+        code.extend_from_slice(&1u32.to_le_bytes());
+        code.push(0);
+        code.extend_from_slice(&1u32.to_le_bytes());
+        code.extend_from_slice(&[0u8; 8]);
+        code.extend_from_slice(&2u32.to_le_bytes());
+        code.extend_from_slice(&[0u8; 8]);
+        code.extend_from_slice(&[0u8; 8]);
+        code.extend_from_slice(&123u32.to_le_bytes());
+        code.extend_from_slice(&1u32.to_le_bytes());
+        code.extend_from_slice(&[0u8; 7]);
+        code.extend_from_slice(&dst.to_le_bytes());
+        code
+    }
+
+    #[test]
+    fn load_int_pair_fold_applies_after_embedded_function() {
+        let mut code = embedded_function(0);
+        code.extend_from_slice(&load_int(1, 300));
+        code.extend_from_slice(&load_int(2, 500));
+        code.extend_from_slice(&binary(Opcode::Add, 3, 1, 2));
+        let out = optimize_code(code);
+        let fold_at = out.len() - 14;
+        assert_eq!(out[fold_at], Opcode::LoadInt as u8);
+        assert_eq!(read_u16(&out, fold_at + 1), 3);
+        assert_eq!(read_i32(&out, fold_at + 3), 800);
+        assert_eq!(out[fold_at - 7], Opcode::Nop as u8);
+        assert_eq!(out[fold_at + 7], Opcode::Nop as u8);
     }
 }

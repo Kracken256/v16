@@ -612,6 +612,23 @@ impl Opcode {
             Opcode::IteratorNextSendAwait => 9,
         }
     }
+
+    pub fn instruction_size_at(code: &[u8], pc: usize) -> usize {
+        let Some(byte) = code.get(pc) else {
+            return 0;
+        };
+        match Opcode::from_u8_unchecked(*byte) {
+            Opcode::NewFunction
+            | Opcode::NewGeneratorFunction
+            | Opcode::NewAsyncFunction
+            | Opcode::NewAsyncGeneratorFunction => embedded_function_size(code, pc),
+            Opcode::Call | Opcode::CallNew => 7 + read_u16_at(code, pc + 5) as usize * 2,
+            Opcode::CallMethod => 9 + read_u16_at(code, pc + 7) as usize * 2,
+            Opcode::CallCurrent => 5 + read_u16_at(code, pc + 3) as usize * 2,
+            Opcode::CallNamedMethod => 11 + read_u16_at(code, pc + 9) as usize * 2,
+            op => Opcode::instruction_size(op),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -715,6 +732,112 @@ fn read_u64_checked(data: &[u8], offset: &mut usize) -> Result<u64, String> {
     ]))
 }
 
+fn read_u32_at(code: &[u8], offset: usize) -> u32 {
+    let Some(end) = offset.checked_add(4) else {
+        return 0;
+    };
+    let Some(bytes) = code.get(offset..end) else {
+        return 0;
+    };
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn read_u16_at(code: &[u8], offset: usize) -> u16 {
+    let Some(end) = offset.checked_add(2) else {
+        return 0;
+    };
+    let Some(bytes) = code.get(offset..end) else {
+        return 0;
+    };
+    u16::from_le_bytes([bytes[0], bytes[1]])
+}
+
+fn embedded_function_size(code: &[u8], start: usize) -> usize {
+    let mut pc = start;
+    if pc >= code.len() {
+        return 0;
+    }
+    pc += 1;
+    if pc + 2 > code.len() {
+        return pc - start;
+    }
+    pc += 2;
+    if pc + 1 > code.len() {
+        return pc - start;
+    }
+    pc += 1;
+    if pc + 1 > code.len() {
+        return pc - start;
+    }
+    pc += 1;
+    if pc + 1 > code.len() {
+        return pc - start;
+    }
+    pc += 1;
+    if pc + 1 > code.len() {
+        return pc - start;
+    }
+    pc += 1;
+    if pc + 2 > code.len() {
+        return pc - start;
+    }
+    pc += 2;
+    if pc + 4 > code.len() {
+        return pc - start;
+    }
+    let bytecode_len = read_u32_at(code, pc) as usize;
+    pc += 4;
+    pc += bytecode_len;
+    if pc + 4 > code.len() {
+        return pc - start;
+    }
+    let constants_len = read_u32_at(code, pc) as usize;
+    pc += 4;
+    for _ in 0..constants_len {
+        if pc >= code.len() {
+            return pc - start;
+        }
+        let tag = code[pc];
+        pc += 1;
+        match tag {
+            4 | 5 => {
+                pc += 8;
+            }
+            6 => {
+                pc += 4;
+            }
+            _ => {}
+        }
+    }
+    if pc + 4 > code.len() {
+        return pc - start;
+    }
+    let upvalue_count = read_u32_at(code, pc) as usize;
+    pc += 4;
+    pc += upvalue_count * 8;
+    if pc + 4 > code.len() {
+        return pc - start;
+    }
+    let line_entry_count = read_u32_at(code, pc) as usize;
+    pc += 4;
+    pc += line_entry_count * 8;
+    if pc + 4 > code.len() {
+        return pc - start;
+    }
+    pc += 4;
+    if pc + 4 > code.len() {
+        return pc - start;
+    }
+    let var_count = read_u32_at(code, pc) as usize;
+    pc += 4;
+    pc += var_count * 7;
+    if pc + 2 > code.len() {
+        return pc - start;
+    }
+    pc += 2;
+    pc - start
+}
+
 impl Bytecode {
     pub fn new() -> Self {
         Self {
@@ -801,7 +924,7 @@ impl Bytecode {
         while pc < self.code.len() {
             let op_val = self.code[pc];
             let op = Opcode::from_u8_unchecked(op_val);
-            let size = Opcode::instruction_size(op);
+            let size = Opcode::instruction_size_at(&self.code, pc);
             let remaining = self.code.len().saturating_sub(pc + 1);
 
             let read_u8 = |offset: usize| -> u8 {
@@ -1928,5 +2051,80 @@ mod tests {
             );
         }
         assert!(Bytecode::deserialize(&data).is_ok());
+    }
+
+    #[test]
+    fn test_instruction_size_at_walks_compiled_programs_exactly() {
+        use crate::{JSContext, JSRuntime};
+        let mut rt = JSRuntime::new();
+        let mut ctx = JSContext::new(&mut rt);
+        let sources = [
+            "var a = 0; for (var i = 0; i < 10; i++) { a += i; } a;",
+            "function f(a, b) { return a + b; } f(1, 2);",
+            "function f(a, b, c, d, e) { return a + b + c + d + e; } f(1, 2, 3, 4, 5);",
+            "function r(a, b, c) { if (a > 0) { return r(a - 1, b, c); } return b + c; } r(2, 3, 4);",
+            "function* g(x) { yield x; yield x + 1; } g(1);",
+            "async function h(x) { return await x; } h(1);",
+            "async function* i(x) { yield await x; } i(1);",
+            "var fn = function named(x) { var v = arguments.length + x; return v; }; fn(1);",
+            "class C { x = 1; y = 2; m(a) { return a + this.x; } static s() { return 0; } } new C();",
+            "class D { constructor(a) { this.a = a; } m(a, b, c, d) { return a + b + c + d; } } var d = new D(1, 2); d.m(1, 2, 3, 4);",
+            "var o = { m(a = 1, ...rest) { return a + rest.length; } }; o.m();",
+            "var o2 = { m(a) { return a; } }; o2.m(...[1]);",
+            "let d = (function (x) { return x * 2; })(21); d;",
+            "try { throw 1; } catch (e) { e; } finally { 0; }",
+            "switch (1) { case 1: break; default: break; }",
+            "label: for (;;) { break label; }",
+            "var { p = 1, ...q } = { r: 2 }; p + q.r;",
+            "var [u = 1, ...v] = [2, 3]; u + v.length;",
+            "Math.max(1, 2, 3, 4);",
+            "with ({ a: 1 }) { a; }",
+            "var re = /a(b)c/gi; re.test('abc');",
+            "function* gen() { try { yield 1; } finally { 0; } } gen().next();",
+        ];
+        for src in sources {
+            for opt in [crate::OptLevel::O0, crate::OptLevel::O2] {
+                let (code, _constants) =
+                    crate::compile_to_register_bytecode_with_opt_level(&mut ctx, src, opt)
+                        .unwrap();
+                let mut pc = 0usize;
+                while pc < code.len() {
+                    let size = Opcode::instruction_size_at(&code, pc);
+                    assert!(
+                        size > 0 && pc + size <= code.len(),
+                        "instruction at {pc} in {src:?} ({opt:?}) has size {size} past the end"
+                    );
+                    pc += size;
+                }
+                assert_eq!(pc, code.len(), "walk desynced in {src:?} ({opt:?})");
+            }
+        }
+    }
+
+    #[test]
+    fn test_instruction_size_at_reads_variable_call_arity() {
+        fn encoded(op: Opcode, header: usize, argc_offset: usize, argc: u16) -> Vec<u8> {
+            let mut buf = vec![0u8; header + argc as usize * 2 + 16];
+            buf[0] = op as u8;
+            buf[argc_offset..argc_offset + 2].copy_from_slice(&argc.to_le_bytes());
+            buf
+        }
+        let cases = [
+            (Opcode::Call, 7, 5),
+            (Opcode::CallNew, 7, 5),
+            (Opcode::CallMethod, 9, 7),
+            (Opcode::CallCurrent, 5, 3),
+            (Opcode::CallNamedMethod, 11, 9),
+        ];
+        for (op, header, argc_offset) in cases {
+            for argc in 0..=8u16 {
+                let buf = encoded(op, header, argc_offset, argc);
+                assert_eq!(
+                    Opcode::instruction_size_at(&buf, 0),
+                    header + argc as usize * 2,
+                    "{op:?} with argc={argc}"
+                );
+            }
+        }
     }
 }

@@ -3104,7 +3104,7 @@ impl CodeGenerator {
             let mut pc = 0usize;
             while pc < code.len() {
                 let op = Opcode::from_u8_unchecked(code[pc]);
-                let size = Opcode::instruction_size(op);
+                let size = Opcode::instruction_size_at(code, pc);
                 if size == 0 || pc + size > code.len() {
                     break;
                 }
@@ -12671,7 +12671,7 @@ pub(crate) fn detect_simple_constructor_props(
     let pc_limit = bytecode.param_count;
     while pc < code.len() {
         let op = crate::compiler::opcode::Opcode::from_u8_unchecked(code[pc]);
-        let size = crate::compiler::opcode::Opcode::instruction_size(op);
+        let size = crate::compiler::opcode::Opcode::instruction_size_at(code, pc);
         if size == 0 || pc + size > code.len() {
             break;
         }

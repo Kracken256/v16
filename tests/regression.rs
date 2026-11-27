@@ -494,3 +494,23 @@ fn top_level_load_int_fold_keeps_results() {
         if (x !== 300) throw new Error('x clobbered => ' + x);
     "#);
 }
+
+#[test]
+fn top_level_folds_after_embedded_functions() {
+    js_bare(r#"
+        function f() { return 1; }
+        function* g() { yield 1; }
+        async function h() { return 1; }
+        class C { x = 1; m() { return this.x; } }
+        var r1 = 300 + 500; if (r1 !== 800) throw new Error('300 + 500 => ' + r1);
+        var r2 = !!"a"; if (r2 !== true) throw new Error('!!"a" => ' + r2);
+        var r3 = ~~"5.7"; if (r3 !== 5) throw new Error('~~"5.7" => ' + r3);
+        var t = "2";
+        var r4 = - -t; if (r4 !== 2) throw new Error('- -t => ' + r4);
+        var r5 = f() + 300 + 500; if (r5 !== 801) throw new Error('f() + 300 + 500 => ' + r5);
+        var r6 = 0; for (var i = 0; i < 3; i++) { r6 += 300 + 500; }
+        if (r6 !== 2400) throw new Error('loop => ' + r6);
+        if (g().next().value !== 1) throw new Error('g()');
+        if (new C().x !== 1) throw new Error('new C().x');
+    "#);
+}
