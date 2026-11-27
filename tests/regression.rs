@@ -552,3 +552,63 @@ fn top_level_boolean_short_circuit_keeps_values_across_opt_levels() {
         js_bare_at(src, opt_level);
     }
 }
+
+#[test]
+fn default_params_with_rest_bind_correctly() {
+    let src = r#"
+        function f(p = 100, ...rest) { return [p, rest.length, rest[0], rest[rest.length - 1]]; }
+        var r1 = f(1, 2, 3);
+        if (r1[0] !== 1 || r1[1] !== 2 || r1[2] !== 2 || r1[3] !== 3) {
+            throw new Error('default+rest => ' + JSON.stringify(r1));
+        }
+        var r2 = f();
+        if (r2[0] !== 100 || r2[1] !== 0) throw new Error('default only => ' + JSON.stringify(r2));
+        var r3 = f(9, 8, 7, 6, 5, 4);
+        if (r3[0] !== 9 || r3[1] !== 5 || r3[3] !== 4) {
+            throw new Error('extra args => ' + JSON.stringify(r3));
+        }
+        function g(a = 0, b = 0, ...rest) { return a + b + rest.length; }
+        if (g(1, 2, 3, 4) !== 5) throw new Error('mid default => ' + g(1, 2, 3, 4));
+        function h(a, b = 1, ...rest) { return JSON.stringify([a, b, rest]); }
+        var r4 = h(1, 2, 3, 4);
+        if (r4 !== '[1,2,[3,4]]') throw new Error('trailing default => ' + r4);
+        function p5(a, ...rest) { return a + ':' + rest.join(','); }
+        var r5 = p5(1, 2, 3, 4, 5, 6);
+        if (r5 !== '1:2,3,4,5,6') throw new Error('simple+rest extra args => ' + r5);
+        function d(p = 1, ...[a, b]) { return p + a + b; }
+        if (d(10, 1, 2) !== 13) throw new Error('pattern rest => ' + d(10, 1, 2));
+        var arrow = (p = 1, ...rest) => p + rest.length;
+        if (arrow(5, 1, 2) !== 7) throw new Error('arrow => ' + arrow(5, 1, 2));
+        var obj = { m(p = 1, ...rest) { return p + rest.length; } };
+        if (obj.m(5, 1, 2) !== 7) throw new Error('method => ' + obj.m(5, 1, 2));
+        var nfe = function foo(p = 1, ...rest) { return [p, rest]; };
+        var r6 = nfe(1, 2, 3);
+        if (r6[0] !== 1 || r6[1].length !== 2 || r6[1][0] !== 2 || r6[1][1] !== 3) {
+            throw new Error('named function expr => ' + JSON.stringify(r6));
+        }
+        var r7 = nfe(9);
+        if (r7[0] !== 9 || r7[1].length !== 0) {
+            throw new Error('named function expr default only => ' + JSON.stringify(r7));
+        }
+        var plainNfe = function baz(...rest) { return rest; };
+        var r8 = plainNfe(1, 2, 3);
+        if (r8.length !== 3 || r8[1] !== 2 || r8[2] !== 3) {
+            throw new Error('named function expr plain rest => ' + JSON.stringify(r8));
+        }
+        if (nfe.name !== 'foo') throw new Error('named function expr name => ' + nfe.name);
+        function tdA(a = b, b) { return a; }
+        var caughtA = false;
+        try { tdA(); } catch (e) { caughtA = e instanceof ReferenceError; }
+        if (!caughtA) throw new Error('later param TDZ not enforced');
+        function tdB(a = a) { return a; }
+        var caughtB = false;
+        try { tdB(); } catch (e) { caughtB = e instanceof ReferenceError; }
+        if (!caughtB) throw new Error('self param TDZ not enforced');
+        if (tdB(3) !== 3) throw new Error('self param with value => ' + tdB(3));
+        function argsLen(p = 1, ...rest) { return arguments.length; }
+        if (argsLen(1, 2, 3) !== 3) throw new Error('arguments.length => ' + argsLen(1, 2, 3));
+    "#;
+    for opt_level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::O3] {
+        js_bare_at(src, opt_level);
+    }
+}

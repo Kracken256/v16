@@ -2583,11 +2583,10 @@ impl CodeGenerator {
             self.next_register = param_slot_start;
         }
 
+        let mut named_function_slot: Option<u16> = None;
         if is_named_expression {
             if let Some(name) = function_name {
-                let slot = self.declare_function_name(name);
-                self.emit(Opcode::GetCurrentFunction);
-                self.emit_u16(slot);
+                named_function_slot = Some(self.declare_function_name(name));
             }
         }
 
@@ -2609,6 +2608,7 @@ impl CodeGenerator {
         let mut fixed_param_count = 0u16;
         let mut before_default = true;
         let mut needs_tdz = false;
+        let mut tdz_slots: Vec<u16> = Vec::new();
 
         for param in params {
             if self.is_strict {
@@ -2630,12 +2630,10 @@ impl CodeGenerator {
                     } else {
                         needs_tdz = true;
                     }
-                    // Only emit LoadTdz for params that come AFTER the first
-                    // default (may be referenced by earlier defaults) or for
-                    // params that ARE defaults (self-reference check).
-                    if needs_tdz || matches!(param, Parameter::AssignmentPattern(_)) {
-                        self.emit(Opcode::LoadTdz);
-                        self.emit_u16(slot);
+                    // Only mark params that come AFTER the first default
+                    // (may be referenced by earlier defaults) as TDZ.
+                    if needs_tdz {
+                        tdz_slots.push(slot);
                     }
                 }
                 Parameter::Pattern(pattern) => {
@@ -2653,8 +2651,7 @@ impl CodeGenerator {
                     // default value evaluation can detect self-references.
                     if let Some(name) = self.first_binding_name(&ap.left) {
                         if let Some(slot) = self.lookup_var_slot(&name) {
-                            self.emit(Opcode::LoadTdz);
-                            self.emit_u16(slot);
+                            tdz_slots.push(slot);
                         }
                     }
                 }
@@ -2665,6 +2662,37 @@ impl CodeGenerator {
             }
         }
         self.max_register = self.max_register.max(fixed_param_count);
+
+        // Gather rest parameters BEFORE LoadTdz (which overwrites param
+        // slots that may overlap with extra argument registers).
+        if params
+            .iter()
+            .any(|p| matches!(p, Parameter::RestElement(_)))
+        {
+            let rest_source_reg = params.len() as u16;
+            self.emit(Opcode::GatherRest);
+            self.emit_u16(rest_source_reg);
+
+            for param in params {
+                if let Parameter::RestElement(rest) = param {
+                    self.gen_assignment_target_binding(
+                        &rest.argument,
+                        rest_source_reg,
+                        VariableKind::Let,
+                        ctx,
+                    )?;
+                    break;
+                }
+            }
+        }
+
+        // The self-binding of a named function expression must also be
+        // written after the gather, since its slot may overlap with extra
+        // argument registers.
+        if let Some(slot) = named_function_slot {
+            self.emit(Opcode::GetCurrentFunction);
+            self.emit_u16(slot);
+        }
 
         // Save argument values into temp registers before loading TDZ.
         // This preserves the actual argument values from being overwritten
@@ -2684,27 +2712,9 @@ impl CodeGenerator {
             arg_saves.push(Some(tmp));
         }
 
-        // Gather rest parameters BEFORE LoadTdz (which overwrites param
-        // slots that may overlap with extra argument registers).
-        if params
-            .iter()
-            .any(|p| matches!(p, Parameter::RestElement(_)))
-        {
-            let rest_source_reg = fixed_param_count + 1;
-            self.emit(Opcode::GatherRest);
-            self.emit_u16(rest_source_reg);
-
-            for param in params {
-                if let Parameter::RestElement(rest) = param {
-                    self.gen_assignment_target_binding(
-                        &rest.argument,
-                        rest_source_reg,
-                        VariableKind::Let,
-                        ctx,
-                    )?;
-                    break;
-                }
-            }
+        for slot in tdz_slots {
+            self.emit(Opcode::LoadTdz);
+            self.emit_u16(slot);
         }
 
         self.in_parameter_initializer = true;
