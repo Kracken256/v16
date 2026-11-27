@@ -1,4 +1,4 @@
-use v16::{JSRuntime, eval};
+use v16::{JSRuntime, OptLevel, eval, eval_with_opt_level};
 
 const ASSERT_LIB: &str = r#"
 function assert_eq(actual, expected, msg) {
@@ -32,6 +32,12 @@ fn js_bare(code: &str) {
     let mut rt = JSRuntime::new();
     let mut ctx = rt.new_context();
     eval(&mut ctx, code).expect("JS threw an error");
+}
+
+fn js_bare_at(code: &str, opt_level: OptLevel) {
+    let mut rt = JSRuntime::new();
+    let mut ctx = rt.new_context();
+    eval_with_opt_level(&mut ctx, code, opt_level).expect("JS threw an error");
 }
 
 #[test]
@@ -513,4 +519,36 @@ fn top_level_folds_after_embedded_functions() {
         if (g().next().value !== 1) throw new Error('g()');
         if (new C().x !== 1) throw new Error('new C().x');
     "#);
+}
+
+#[test]
+fn top_level_boolean_short_circuit_keeps_values_across_opt_levels() {
+    let src = r#"
+        var x = 123;
+        var y1 = false && (x = 456);
+        if (y1 !== false) throw new Error('false && => ' + y1);
+        if (x !== 123) throw new Error('false && ran right side, x => ' + x);
+        var y2 = true || (x = 789);
+        if (y2 !== true) throw new Error('true || => ' + y2);
+        if (x !== 123) throw new Error('true || ran right side, x => ' + x);
+        var y3 = (false && true) ? 'T' : 'F';
+        if (y3 !== 'F') throw new Error('(false && true) ? => ' + y3);
+        var y4 = (true || false) ? 'T' : 'F';
+        if (y4 !== 'T') throw new Error('(true || false) ? => ' + y4);
+        var a = 0;
+        if (false && (a = 1)) { a = 2; }
+        if (a !== 0) throw new Error('if false && => ' + a);
+        var b = 0;
+        if (true || (b = 1)) { b = 3; }
+        if (b !== 3) throw new Error('if true || => ' + b);
+        function g() { return false && (x = 999); }
+        var y5 = g();
+        if (y5 !== false) throw new Error('return false && => ' + y5);
+        if (x !== 123) throw new Error('function short-circuit ran, x => ' + x);
+        var y6 = x === 123 && 'yes' || 'no';
+        if (y6 !== 'yes') throw new Error('mixed && || => ' + y6);
+    "#;
+    for opt_level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::O3] {
+        js_bare_at(src, opt_level);
+    }
 }
