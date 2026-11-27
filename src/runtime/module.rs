@@ -1118,6 +1118,7 @@ pub fn load_and_evaluate_module_with_attributes(
         rb
     };
 
+    let rb = std::rc::Rc::new(rb);
     let mut module_vm = VM::new();
     let result = module_vm.execute_preserving_registers(ctx, &rb);
     let thrown = module_vm.pending_throw.take();

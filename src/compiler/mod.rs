@@ -317,7 +317,7 @@ pub fn compile_script_to_bytecode_with_opt_level_and_super_new_target(
 
 fn eval_bytecode_with_caller(
     ctx: &mut JSContext,
-    rb: &Bytecode,
+    rb: &std::rc::Rc<Bytecode>,
     caller_vm: Option<*mut crate::runtime::vm::VM>,
     caller_this: JSValue,
 ) -> Result<JSValue, String> {
@@ -348,13 +348,13 @@ pub fn eval_code_as_eval(
     ctx: &mut JSContext,
     source: &str,
 ) -> Result<JSValue, String> {
-    let rb = compile_script_to_bytecode_with_opt_level(
+    let rb = std::rc::Rc::new(compile_script_to_bytecode_with_opt_level(
         ctx,
         source,
         ctx.get_compiler_opt_level(),
         false,
         true,
-    )?;
+    )?);
     let caller_this = ctx.global();
     eval_bytecode_with_caller(ctx, &rb, None, caller_this)
 }
@@ -372,7 +372,7 @@ pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
     allow_new_target: bool,
     caller_this: JSValue,
 ) -> Result<JSValue, String> {
-    let rb = compile_script_to_bytecode_with_opt_level_and_super_new_target(
+    let rb = std::rc::Rc::new(compile_script_to_bytecode_with_opt_level_and_super_new_target(
         ctx,
         source,
         opt_level,
@@ -382,7 +382,7 @@ pub fn eval_code_via_ast_with_opt_level_as_eval_with_caller(
         allow_super_call,
         in_field_initializer,
         allow_new_target,
-    )?;
+    )?);
     eval_bytecode_with_caller(ctx, &rb, Some(caller_vm), caller_this)
 }
 
@@ -391,7 +391,7 @@ pub fn eval_code_via_ast_with_opt_level(
     source: &str,
     opt_level: OptLevel,
 ) -> Result<JSValue, String> {
-    let rb = compile_script_to_bytecode_with_opt_level(ctx, source, opt_level, false, false)?;
+    let rb = std::rc::Rc::new(compile_script_to_bytecode_with_opt_level(ctx, source, opt_level, false, false)?);
 
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
 
@@ -452,6 +452,7 @@ pub fn eval_code_with_exception(
         Ok(rb) => rb,
         Err(e) => return Err(eval_exception_from_message(ctx, &e)),
     };
+    let rb = std::rc::Rc::new(rb);
 
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
 

@@ -12,6 +12,7 @@ fn eval_register(ctx: &mut v16::JSContext, code: &str) -> Result<v16::JSValue, S
         lines: ast.lines,
     };
     let (rb, _) = codegen.compile_function(&[], &block, ctx)?;
+    let rb = std::rc::Rc::new(rb);
     let mut vm = VM::new();
     let outcome = vm.execute(ctx, &rb)?;
     match outcome {

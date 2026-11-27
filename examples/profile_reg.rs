@@ -21,6 +21,7 @@ fib(20)
         lines: ast.lines,
     };
     let (rb, _) = codegen.compile_script(&block, &mut ctx).unwrap();
+    let rb = std::rc::Rc::new(rb);
     let mut vm = VM::new();
 
     for _ in 0..100 {

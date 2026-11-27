@@ -12769,6 +12769,7 @@ mod tests {
         }
         bytecode.code.push(Opcode::End as u8);
 
+        let bytecode = std::rc::Rc::new(bytecode);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bytecode).unwrap() {
             crate::runtime::vm::ExecutionOutcome::Complete(v) => v,
@@ -12792,6 +12793,7 @@ mod tests {
             .compile_function(&func.params, &func.body, &mut ctx)
             .unwrap();
 
+        let bytecode = std::rc::Rc::new(bytecode);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bytecode).unwrap() {
             crate::runtime::vm::ExecutionOutcome::Complete(v) => v,
@@ -12963,6 +12965,7 @@ mod tests {
         }
         bytecode.code.push(Opcode::End as u8);
 
+        let bytecode = std::rc::Rc::new(bytecode);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bytecode).unwrap() {
             crate::runtime::vm::ExecutionOutcome::Complete(v) => v,
@@ -13565,6 +13568,7 @@ mod tests {
         bytecode.code.extend_from_slice(&call_dst.to_le_bytes());
         bytecode.code.push(Opcode::End as u8);
 
+        let bytecode = std::rc::Rc::new(bytecode);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bytecode).unwrap() {
             crate::runtime::vm::ExecutionOutcome::Complete(v) => v,
@@ -13602,6 +13606,7 @@ mod tests {
         bytecode.code.extend_from_slice(&call_dst.to_le_bytes());
         bytecode.code.push(Opcode::End as u8);
 
+        let bytecode = std::rc::Rc::new(bytecode);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bytecode).unwrap() {
             crate::runtime::vm::ExecutionOutcome::Complete(v) => v,
@@ -13635,6 +13640,7 @@ mod tests {
         bytecode.code.extend_from_slice(&dst.to_le_bytes());
         bytecode.code.push(Opcode::End as u8);
 
+        let bytecode = std::rc::Rc::new(bytecode);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bytecode).unwrap() {
             crate::runtime::vm::ExecutionOutcome::Complete(v) => v,
@@ -13686,6 +13692,7 @@ mod tests {
         bytecode.code.extend_from_slice(&call_dst.to_le_bytes());
         bytecode.code.push(Opcode::End as u8);
 
+        let bytecode = std::rc::Rc::new(bytecode);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bytecode).unwrap() {
             crate::runtime::vm::ExecutionOutcome::Complete(v) => v,

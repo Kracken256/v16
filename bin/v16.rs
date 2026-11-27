@@ -182,6 +182,7 @@ fn execute_jsc(script_path: &str) {
         }
     };
 
+    let bytecode = std::rc::Rc::new(bytecode);
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
     setup_context(&mut ctx);
@@ -466,7 +467,7 @@ fn eval_repl(ctx: &mut JSContext, code: &str) -> Result<JSValue, String> {
     use v16::builtins::promise::run_microtasks_with_vm;
     use v16::runtime::vm::{ExecutionOutcome, VM};
 
-    let rb = v16::compile_to_bytecode_with_opt_level(ctx, code, ctx.get_compiler_opt_level())?;
+    let rb = std::rc::Rc::new(v16::compile_to_bytecode_with_opt_level(ctx, code, ctx.get_compiler_opt_level())?);
 
     let saved_register_vm_ptr = ctx.get_register_vm_ptr();
     let mut vm = VM::new();

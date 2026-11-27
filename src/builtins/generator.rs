@@ -460,13 +460,13 @@ fn run_generator_step(
         new_param_env,
         new_param_env_own,
     ) = {
-        let bytecode = &*gen_obj.get_generator_state().unwrap().bytecode;
+        let bytecode = gen_obj.get_generator_state().unwrap().bytecode.clone();
         let mut vm = crate::runtime::vm::VM::new();
 
         ctx.runtime_mut().gc_heap_mut().gc_suppressed = true;
         let result = vm.execute_generator_step(
             ctx,
-            bytecode,
+            &bytecode,
             &snapshot_clone,
             current_pc,
             resume_value,

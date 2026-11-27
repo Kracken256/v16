@@ -43,6 +43,7 @@ pub struct CallFrame {
     pub bytecode_len: usize,
     pub constants_ptr: *const JSValue,
     pub constants_len: usize,
+    pub bytecode_owner: Option<std::rc::Rc<Bytecode>>,
     pub function_ptr: Option<*mut crate::object::function::JSFunction>,
     pub ic_table: Option<std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>>,
     pub this_value: JSValue,
@@ -85,6 +86,7 @@ impl CallFrame {
             bytecode_len: 0,
             constants_ptr: std::ptr::null(),
             constants_len: 0,
+            bytecode_owner: None,
             function_ptr: None,
             ic_table: None,
             this_value: JSValue::undefined(),
@@ -1232,7 +1234,7 @@ impl VM {
 
     fn push_frame(
         &mut self,
-        bytecode: &Bytecode,
+        bytecode: &std::rc::Rc<Bytecode>,
         return_pc: usize,
         function_ptr: Option<*mut crate::object::function::JSFunction>,
         this_value: JSValue,
@@ -1249,6 +1251,7 @@ impl VM {
             bytecode.effective_code_len(),
             bytecode.effective_const_ptr(),
             bytecode.effective_const_len(),
+            Some(std::rc::Rc::clone(bytecode)),
             return_pc,
             function_ptr,
             this_value,
@@ -1268,6 +1271,7 @@ impl VM {
         bytecode_len: usize,
         constants_ptr: *const JSValue,
         constants_len: usize,
+        bytecode_owner: Option<std::rc::Rc<Bytecode>>,
         return_pc: usize,
         function_ptr: Option<*mut crate::object::function::JSFunction>,
         this_value: JSValue,
@@ -1310,6 +1314,7 @@ impl VM {
         frame.bytecode_len = bytecode_len;
         frame.constants_ptr = constants_ptr;
         frame.constants_len = constants_len;
+        frame.bytecode_owner = bytecode_owner;
         frame.function_ptr = function_ptr;
         frame.with_env = function_ptr
             .map(|ptr| {
@@ -1382,6 +1387,7 @@ impl VM {
         bytecode_len: usize,
         constants_ptr: *const JSValue,
         constants_len: usize,
+        bytecode_owner: Option<std::rc::Rc<Bytecode>>,
         return_pc: usize,
         function_ptr: Option<*mut crate::object::function::JSFunction>,
         ic_table: Option<std::rc::Rc<std::cell::RefCell<crate::compiler::InlineCacheTable>>>,
@@ -1433,6 +1439,7 @@ impl VM {
         frame.bytecode_len = bytecode_len;
         frame.constants_ptr = constants_ptr;
         frame.constants_len = constants_len;
+        frame.bytecode_owner = bytecode_owner;
         frame.function_ptr = function_ptr;
         frame.with_env = function_ptr
             .map(|ptr| {
@@ -1589,6 +1596,7 @@ impl VM {
         }
         self.frames[self.frame_index].param_env = JSValue::undefined();
         self.frames[self.frame_index].param_env_own = false;
+        self.frames[self.frame_index].bytecode_owner = None;
         let frame = &self.frames[self.frame_index];
         let dst_reg = frame.dst_reg;
         let return_pc = frame.return_pc;
@@ -2117,6 +2125,7 @@ impl VM {
                     rb.effective_code_len(),
                     rb.effective_const_ptr(),
                     rb.effective_const_len(),
+                    Some(std::rc::Rc::clone(rb)),
                     return_pc,
                     Some(ptr),
                     Some(rb.effective_ic_table()),
@@ -5507,6 +5516,7 @@ impl VM {
                 rb.effective_code_len(),
                 rb.effective_const_ptr(),
                 rb.effective_const_len(),
+                Some(std::rc::Rc::clone(rb)),
                 self.frames[self.frame_index].bytecode_len,
                 Some(ptr),
                 fn_this,
@@ -5591,7 +5601,7 @@ impl VM {
     pub fn execute(
         &mut self,
         ctx: &mut JSContext,
-        bytecode: &Bytecode,
+        bytecode: &std::rc::Rc<Bytecode>,
     ) -> Result<ExecutionOutcome, String> {
         let result = self.execute_inner(ctx, bytecode, false, 0, true);
 
@@ -5609,7 +5619,7 @@ impl VM {
     pub fn execute_preserving_registers(
         &mut self,
         ctx: &mut JSContext,
-        bytecode: &Bytecode,
+        bytecode: &std::rc::Rc<Bytecode>,
     ) -> Result<ExecutionOutcome, String> {
         let result = self.execute_inner(ctx, bytecode, true, 0, true);
         self.ctx_ptr = std::ptr::null_mut();
@@ -5619,7 +5629,7 @@ impl VM {
     pub fn execute_eval(
         &mut self,
         ctx: &mut JSContext,
-        bytecode: &Bytecode,
+        bytecode: &std::rc::Rc<Bytecode>,
         this_value: JSValue,
         caller_vm_ptr: Option<*mut VM>,
     ) -> Result<ExecutionOutcome, String> {
@@ -5652,6 +5662,7 @@ impl VM {
         frame.bytecode_len = bytecode.effective_code_len();
         frame.constants_ptr = bytecode.effective_const_ptr();
         frame.constants_len = bytecode.effective_const_len();
+        frame.bytecode_owner = Some(std::rc::Rc::clone(bytecode));
         frame.return_pc = 0;
         frame.function_ptr = None;
         frame.with_env = None;
@@ -6045,7 +6056,7 @@ impl VM {
     fn execute_inner(
         &mut self,
         ctx: &mut JSContext,
-        bytecode: &Bytecode,
+        bytecode: &std::rc::Rc<Bytecode>,
         preserve_registers: bool,
         start_pc: usize,
         setup_frame: bool,
@@ -6082,7 +6093,7 @@ impl VM {
     fn execute_inner_impl(
         &mut self,
         ctx: &mut JSContext,
-        bytecode: &Bytecode,
+        bytecode: &std::rc::Rc<Bytecode>,
         preserve_registers: bool,
         start_pc: usize,
         setup_frame: bool,
@@ -6118,6 +6129,7 @@ impl VM {
             frame.bytecode_len = bytecode.effective_code_len();
             frame.constants_ptr = bytecode.effective_const_ptr();
             frame.constants_len = bytecode.effective_const_len();
+            frame.bytecode_owner = Some(std::rc::Rc::clone(bytecode));
             frame.return_pc = 0;
             frame.function_ptr = self.pending_function_ptr.take();
             frame.with_env = frame
@@ -11894,6 +11906,7 @@ impl VM {
                         caller.bytecode_len,
                         caller.constants_ptr,
                         caller.constants_len,
+                        caller.bytecode_owner.clone(),
                         self.pc,
                         function_ptr,
                         caller.ic_table.clone(),
@@ -12000,6 +12013,7 @@ impl VM {
                             caller.bytecode_len,
                             caller.constants_ptr,
                             caller.constants_len,
+                            caller.bytecode_owner.clone(),
                             self.pc,
                             function_ptr,
                             caller.ic_table.clone(),
@@ -13951,7 +13965,7 @@ impl VM {
     pub fn execute_generator_step(
         &mut self,
         ctx: &mut JSContext,
-        bytecode: &Bytecode,
+        bytecode: &std::rc::Rc<Bytecode>,
         registers_snapshot: &[JSValue],
         start_pc: usize,
         send_value: JSValue,
@@ -18351,6 +18365,7 @@ mod tests {
 
     fn run_bytecode(code: Vec<u8>, constants: Vec<JSValue>, locals_count: u32) -> JSValue {
         let bc = make_bytecode(code, constants, locals_count);
+        let bc = std::rc::Rc::new(bc);
         let mut rt = JSRuntime::new();
         let mut ctx = JSContext::new(&mut rt);
         let mut vm = VM::new();
@@ -18423,6 +18438,7 @@ mod tests {
         code.push(Opcode::End as u8);
 
         let bc = make_bytecode(code, vec![JSValue::new_string(atom_x)], 5);
+        let bc = std::rc::Rc::new(bc);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bc).unwrap() {
             ExecutionOutcome::Complete(v) => v,
@@ -18470,6 +18486,7 @@ mod tests {
         code.push(Opcode::End as u8);
 
         let bc = make_bytecode(code, vec![JSValue::new_function(func_ptr)], 3);
+        let bc = std::rc::Rc::new(bc);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bc).unwrap() {
             ExecutionOutcome::Complete(v) => v,
@@ -18508,6 +18525,7 @@ mod tests {
         code.push(Opcode::End as u8);
 
         let bc = make_bytecode(code, vec![JSValue::new_function(func_ptr)], 4);
+        let bc = std::rc::Rc::new(bc);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bc).unwrap() {
             ExecutionOutcome::Complete(v) => v,
@@ -18557,6 +18575,7 @@ mod tests {
         code.push(Opcode::End as u8);
 
         let bc = make_bytecode(code, vec![JSValue::new_function(func_ptr)], 5);
+        let bc = std::rc::Rc::new(bc);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bc).unwrap() {
             ExecutionOutcome::Complete(v) => v,
@@ -18612,6 +18631,7 @@ mod tests {
         code.push(Opcode::End as u8);
 
         let bc = make_bytecode(code, vec![JSValue::new_function(func_ptr)], 6);
+        let bc = std::rc::Rc::new(bc);
         let mut vm = VM::new();
         let result = match vm.execute(&mut ctx, &bc).unwrap() {
             ExecutionOutcome::Complete(v) => v,
