@@ -282,7 +282,7 @@ impl GcHeap {
         };
         self.total_allocated += size;
         self.live_count += 1;
-        unsafe { self.debug_alloc(idx, ptr as usize, tag, false) };
+        self.debug_alloc(idx, ptr, tag, false);
         idx
     }
 
@@ -304,7 +304,7 @@ impl GcHeap {
 
         JSValue::new_object(ptr).try_as_object_mut().expect("object value").gc_slot = idx as u32;
         self.nursery_indices.push(idx);
-        unsafe { self.debug_alloc(idx, ptr as usize, tag, true) };
+        self.debug_alloc(idx, ptr, tag, true);
         idx
     }
 
@@ -684,6 +684,11 @@ impl GcHeap {
         }
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must have been allocated as a `Box<T>` whose concrete type matches
+    /// `tag` (`JSArrayObject`, `JSFunction`, or `JSObject`), and the collector
+    /// must own that allocation so this call performs its final free.
     #[inline(always)]
     unsafe fn drop_tracked(ptr: *mut JSObject, tag: u8) {
         if tag == TAG_ARRAY {
@@ -704,6 +709,11 @@ impl GcHeap {
         }
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must point at a live allocation recorded in the collector's tables
+    /// whose concrete type matches `tag`, and the caller must not use the slot
+    /// again after the in-place drop.
     #[inline(always)]
     unsafe fn drop_in_place_tracked(ptr: *mut JSObject, tag: u8) {
         if tag == TAG_ARRAY {
@@ -741,14 +751,14 @@ impl GcHeap {
         }
     }
 
-    unsafe fn debug_alloc(&mut self, handle: usize, ptr: usize, tag: u8, in_nursery: bool) {
+    fn debug_alloc(&mut self, handle: usize, ptr: *const JSObject, tag: u8, in_nursery: bool) {
         self.debug_stats.alloc_events += 1;
         if self.debug.enabled && self.debug.dump_alloc {
             eprintln!(
                 "[gcdump] alloc#{} handle={} ptr={:#x} tag={} nursery={}",
                 self.debug_stats.alloc_events,
                 handle,
-                ptr,
+                ptr as usize,
                 Self::tag_name(tag),
                 in_nursery
             );
