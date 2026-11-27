@@ -10296,7 +10296,7 @@ impl VM {
                 }
                     }
                 Opcode::NewRegExp => {
-                    let cache_key = self.cached_code_ptr as usize + self.pc;
+                    let cache_key = self.cached_code_ptr.addr() + self.pc;
                     let dst = self.read_u16_pc();
                     let pattern_idx = self.read_u32() as usize;
                     let flags_idx = self.read_u32() as usize;

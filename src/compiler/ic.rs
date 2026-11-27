@@ -55,7 +55,9 @@ impl std::fmt::Debug for InlineCacheRead {
         write!(
             f,
             "ICRead(shape={}, off={}, proto={})",
-            self.shape_id as usize, self.offset, self.proto_ptr as usize
+            self.shape_id as usize,
+            self.offset,
+            self.proto_ptr.addr()
         )
     }
 }

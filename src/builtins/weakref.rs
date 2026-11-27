@@ -260,7 +260,7 @@ pub fn finalization_registry_register(ctx: &mut JSContext, args: &[JSValue]) -> 
             let held_obj = hvv.try_as_object_mut().expect("object value");
 
             let key = if unregister_token.is_object() {
-                let token_ptr = unregister_token.get_ptr() as usize;
+                let token_ptr = unregister_token.get_ptr().addr();
                 ctx.intern(&format!("__token_{}__", token_ptr))
             } else {
                 ctx.intern(&format!("__entry_{}__", held_obj.inline_values_len()))
@@ -301,7 +301,7 @@ pub fn finalization_registry_unregister(ctx: &mut JSContext, args: &[JSValue]) -
         return JSValue::bool(false);
     }
 
-    let token_ptr = unregister_token.get_ptr() as usize;
+    let token_ptr = unregister_token.get_ptr().addr();
     let key = ctx.intern(&format!("__token_{}__", token_ptr));
 
     let held_values_atom = ctx.intern("__held_values__");

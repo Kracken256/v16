@@ -69,7 +69,7 @@ fn patch_function_values_recursive(
     fn_proto_ptr: *mut JSObject,
     visited: &mut Vec<usize>,
 ) {
-    let obj_addr = obj as *mut JSObject as usize;
+    let obj_addr = std::ptr::from_mut(obj).addr();
     if visited.contains(&obj_addr) {
         return;
     }
