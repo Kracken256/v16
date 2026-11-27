@@ -28,6 +28,12 @@ fn js(code: &str) {
     eval(&mut ctx, &src).expect("JS threw an error");
 }
 
+fn js_bare(code: &str) {
+    let mut rt = JSRuntime::new();
+    let mut ctx = rt.new_context();
+    eval(&mut ctx, code).expect("JS threw an error");
+}
+
 #[test]
 fn closure_read_outer_var() {
     js(r#"
@@ -434,5 +440,40 @@ fn direct_method_call_pattern() {
         var result = suite.RunStep();
         assert_eq(result, 1, 'direct method call result');
         assert_eq(suite.ran, true, 'direct method call side effect');
+    "#);
+}
+
+#[test]
+fn top_level_double_not_keeps_boolean() {
+    js_bare(r#"var r = !!"a"; if (r !== true) throw new Error('!!"a" => ' + r);"#);
+}
+
+#[test]
+fn top_level_double_bitnot_coerces_number() {
+    js_bare(r#"var r = ~~"5.7"; if (r !== 5) throw new Error('~~"5.7" => ' + r);"#);
+}
+
+#[test]
+fn top_level_double_neg_coerces_number() {
+    js_bare(r#"var t = "2"; var r = - -t; if (r !== 2) throw new Error('- -t => ' + r);"#);
+}
+
+#[test]
+fn top_level_identity_folds_keep_results() {
+    js_bare(r#"
+        var x = 7;
+        var r1 = x + 0; if (r1 !== 7) throw new Error('x + 0 => ' + r1);
+        var r2 = 0 + x; if (r2 !== 7) throw new Error('0 + x => ' + r2);
+        var r3 = x - 0; if (r3 !== 7) throw new Error('x - 0 => ' + r3);
+        var r4 = x * 1; if (r4 !== 7) throw new Error('x * 1 => ' + r4);
+        var r5 = 1 * x; if (r5 !== 7) throw new Error('1 * x => ' + r5);
+        var r6 = x / 1; if (r6 !== 7) throw new Error('x / 1 => ' + r6);
+        var s = "5";
+        var r7 = s + 0; if (r7 !== "50") throw new Error('s + 0 => ' + r7);
+        var r8 = 0 + s; if (r8 !== "05") throw new Error('0 + s => ' + r8);
+        var r9 = s - 0; if (r9 !== 5) throw new Error('s - 0 => ' + r9);
+        var r10 = s * 1; if (r10 !== 5) throw new Error('s * 1 => ' + r10);
+        var r11 = 1 * s; if (r11 !== 5) throw new Error('1 * s => ' + r11);
+        var r12 = s / 1; if (r12 !== 5) throw new Error('s / 1 => ' + r12);
     "#);
 }

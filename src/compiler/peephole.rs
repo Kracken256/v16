@@ -134,201 +134,19 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
             }
         }
 
-        if op == Opcode::LoadInt {
-            let dst = read_u16(code, pc + 1);
-            let val = read_i32(code, pc + 3);
-            if val == 0 {
-                let next_pc = pc + size;
-                if next_pc < code.len() {
-                    let next_op = Opcode::from_u8_unchecked(code[next_pc]);
-                    if next_op == Opcode::Sub || next_op == Opcode::SubNum {
-                        let sub_dst = read_u16(code, next_pc + 1);
-                        let sub_a = read_u16(code, next_pc + 3);
-                        let sub_b = read_u16(code, next_pc + 5);
-                        if sub_b == dst && sub_dst == sub_a {
-                            code[next_pc] = Opcode::Move as u8;
-                            write_i32(code, next_pc + 1, 0);
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        } else if sub_a == dst && sub_dst == sub_b {
-                            code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 1] = code[next_pc + 5];
-                            code[next_pc + 2] = code[next_pc + 6];
-                            code[next_pc + 3] = 0;
-                            code[next_pc + 4] = 0;
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        }
-                    } else if next_op == Opcode::Add || next_op == Opcode::AddNum {
-                        let add_a = read_u16(code, next_pc + 3);
-                        let add_b = read_u16(code, next_pc + 5);
-                        if add_b == dst {
-                            code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        } else if add_a == dst {
-                            code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 3] = code[next_pc + 5];
-                            code[next_pc + 4] = code[next_pc + 6];
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if op == Opcode::LoadInt {
-            let dst = read_u16(code, pc + 1);
-            let val = read_i32(code, pc + 3);
-            if val == 1 {
-                let next_pc = pc + size;
-                if next_pc < code.len() {
-                    let next_op = Opcode::from_u8_unchecked(code[next_pc]);
-                    if next_op == Opcode::Div || next_op == Opcode::DivNum {
-                        let div_dst = read_u16(code, next_pc + 1);
-                        let div_a = read_u16(code, next_pc + 3);
-                        let div_b = read_u16(code, next_pc + 5);
-                        if div_b == dst && div_dst == div_a {
-                            code[next_pc] = Opcode::Move as u8;
-                            write_i32(code, next_pc + 1, 0);
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        } else if div_a == dst && div_dst == div_b {
-                            code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 1] = code[next_pc + 5];
-                            code[next_pc + 2] = code[next_pc + 6];
-                            code[next_pc + 3] = 0;
-                            code[next_pc + 4] = 0;
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        }
-                    } else if next_op == Opcode::Mul || next_op == Opcode::MulNum {
-                        let mul_a = read_u16(code, next_pc + 3);
-                        let mul_b = read_u16(code, next_pc + 5);
-                        if mul_b == dst {
-                            code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        } else if mul_a == dst {
-                            code[next_pc] = Opcode::Move as u8;
-                            code[next_pc + 3] = code[next_pc + 5];
-                            code[next_pc + 4] = code[next_pc + 6];
-                            code[next_pc + 5] = 0;
-                            code[next_pc + 6] = 0;
-                            code[pc] = Opcode::Nop as u8;
-                            for i in 1..size {
-                                code[pc + i] = 0;
-                            }
-                            changed = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if op == Opcode::LoadInt {
-            let dst = read_u16(code, pc + 1);
-            let val = read_i32(code, pc + 3);
-            let next_pc = pc + size;
-            if next_pc < code.len() {
-                let next_op = Opcode::from_u8_unchecked(code[next_pc]);
-                if next_op == Opcode::Move {
-                    let move_src = read_u16(code, next_pc + 3);
-                    if move_src == dst && (i8::MIN as i32..=i8::MAX as i32).contains(&val) {
-                        code[next_pc] = Opcode::LoadInt8 as u8;
-                        code[next_pc + 3] = val as i8 as u8;
-
-                        code[next_pc + 4] = 0;
-                        code[pc] = Opcode::Nop as u8;
-                        for i in 1..size {
-                            code[pc + i] = 0;
-                        }
-                        changed = true;
-                    }
-                }
-            }
-        }
-
         if op == Opcode::Jump {
             let offset = read_i32(code, pc + 1);
-            if offset == size as i32 {
-                code[pc] = Opcode::Nop as u8;
-                for i in 1..size {
-                    code[pc + i] = 0;
-                }
-                changed = true;
-            } else {
-                let target = (pc as i32 + size as i32 + offset) as usize;
-                if target < code.len() {
-                    let target_op = Opcode::from_u8_unchecked(code[target]);
-                    if target_op == Opcode::Jump {
-                        let target_offset = read_i32(code, target + 1);
-                        let final_target = (target as i32
-                            + Opcode::instruction_size(Opcode::Jump) as i32
-                            + target_offset) as i32;
-                        let new_offset = final_target - (pc as i32 + size as i32);
-                        write_i32(code, pc + 1, new_offset);
-                        changed = true;
-                    }
-                }
-            }
-        }
-
-        if op == Opcode::Neg || op == Opcode::BitNot || op == Opcode::Not {
-            let dst1 = read_u16(code, pc + 1);
-            let next_pc = pc + size;
-            if next_pc < code.len() {
-                let next_op = Opcode::from_u8_unchecked(code[next_pc]);
-                if next_op == op {
-                    let _dst2 = read_u16(code, next_pc + 1);
-                    let src2 = read_u16(code, next_pc + 3);
-                    if src2 == dst1 {
-                        code[next_pc] = Opcode::Move as u8;
-                        code[next_pc + 3] = code[pc + 3];
-                        code[next_pc + 4] = code[pc + 4];
-                        code[pc] = Opcode::Nop as u8;
-                        for i in 1..size {
-                            code[pc + i] = 0;
-                        }
-                        changed = true;
-                    }
+            let target = (pc as i32 + size as i32 + offset) as usize;
+            if target < code.len() {
+                let target_op = Opcode::from_u8_unchecked(code[target]);
+                if target_op == Opcode::Jump {
+                    let target_offset = read_i32(code, target + 1);
+                    let final_target = (target as i32
+                        + Opcode::instruction_size(Opcode::Jump) as i32
+                        + target_offset) as i32;
+                    let new_offset = final_target - (pc as i32 + size as i32);
+                    write_i32(code, pc + 1, new_offset);
+                    changed = true;
                 }
             }
         }
@@ -495,4 +313,99 @@ fn read_i32(code: &[u8], offset: usize) -> i32 {
         code[offset + 2],
         code[offset + 3],
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load_int(dst: u16, val: i32) -> Vec<u8> {
+        let mut code = vec![Opcode::LoadInt as u8];
+        code.extend_from_slice(&dst.to_le_bytes());
+        code.extend_from_slice(&val.to_le_bytes());
+        code
+    }
+
+    fn unary(op: Opcode, dst: u16, src: u16) -> Vec<u8> {
+        let mut code = vec![op as u8];
+        code.extend_from_slice(&dst.to_le_bytes());
+        code.extend_from_slice(&src.to_le_bytes());
+        code
+    }
+
+    fn binary(op: Opcode, dst: u16, a: u16, b: u16) -> Vec<u8> {
+        let mut code = vec![op as u8];
+        code.extend_from_slice(&dst.to_le_bytes());
+        code.extend_from_slice(&a.to_le_bytes());
+        code.extend_from_slice(&b.to_le_bytes());
+        code
+    }
+
+    fn optimize_code(code: Vec<u8>) -> Vec<u8> {
+        let mut bytecode = Bytecode::new();
+        bytecode.code = code;
+        optimize_with_level(&mut bytecode, OptLevel::O2);
+        bytecode.code
+    }
+
+    #[test]
+    fn self_move_becomes_nop() {
+        let out = optimize_code(unary(Opcode::Move, 3, 3));
+        assert_eq!(out[0], Opcode::Nop as u8);
+    }
+
+    #[test]
+    fn jump_offset_equal_to_own_size_is_preserved() {
+        let mut code = vec![Opcode::Jump as u8];
+        code.extend_from_slice(&5i32.to_le_bytes());
+        code.extend_from_slice(&[Opcode::Nop as u8; 7]);
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::Jump as u8);
+        assert_eq!(read_i32(&out, 1), 5);
+    }
+
+    #[test]
+    fn double_not_pair_is_preserved() {
+        let mut code = unary(Opcode::Not, 1, 0);
+        code.extend_from_slice(&unary(Opcode::Not, 1, 1));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::Not as u8);
+        assert_eq!(out[5], Opcode::Not as u8);
+    }
+
+    #[test]
+    fn load_int_add_zero_is_preserved() {
+        let mut code = load_int(1, 0);
+        code.extend_from_slice(&binary(Opcode::Add, 2, 3, 1));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::LoadInt as u8);
+        assert_eq!(read_i32(&out, 3), 0);
+    }
+
+    #[test]
+    fn load_int_sub_zero_is_preserved() {
+        let mut code = load_int(1, 0);
+        code.extend_from_slice(&binary(Opcode::Sub, 2, 2, 1));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::LoadInt as u8);
+        assert_eq!(read_i32(&out, 3), 0);
+    }
+
+    #[test]
+    fn load_int_mul_one_is_preserved() {
+        let mut code = load_int(1, 1);
+        code.extend_from_slice(&binary(Opcode::Mul, 2, 3, 1));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::LoadInt as u8);
+        assert_eq!(read_i32(&out, 3), 1);
+    }
+
+    #[test]
+    fn load_int_move_pair_is_preserved() {
+        let mut code = load_int(1, 5);
+        code.extend_from_slice(&unary(Opcode::Move, 2, 1));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::LoadInt as u8);
+        assert_eq!(out[7], Opcode::Move as u8);
+    }
 }
