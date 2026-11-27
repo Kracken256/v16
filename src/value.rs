@@ -164,6 +164,11 @@ impl JSValue {
         ))
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must be the address of a live, 8-byte-aligned, non-null object
+    /// allocation owned by the active runtime, and that address must fit in the
+    /// compressed payload (the platform heap must live below 2^51).
     #[inline(always)]
     unsafe fn compress_ptr(ptr: usize) -> u64 {
         let compressed = (ptr >> 3) as u64;
@@ -678,6 +683,7 @@ mod tests {
         );
         assert!(bigint_value.try_as_function().is_none());
 
+        // SAFETY: each pointer was produced by `Box::into_raw` above and is reclaimed exactly once.
         drop(unsafe { Box::from_raw(object_ptr) });
         drop(unsafe { Box::from_raw(function_ptr) });
         drop(unsafe { Box::from_raw(bigint_ptr) });
@@ -699,6 +705,7 @@ mod tests {
         assert!(function_value.try_as_function_mut().is_some());
         assert!(function_value.try_as_object_mut().is_some());
 
+        // SAFETY: each pointer was produced by `Box::into_raw` above and is reclaimed exactly once.
         drop(unsafe { Box::from_raw(object_ptr) });
         drop(unsafe { Box::from_raw(function_ptr) });
     }
