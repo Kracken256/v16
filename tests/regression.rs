@@ -477,3 +477,20 @@ fn top_level_identity_folds_keep_results() {
         var r12 = s / 1; if (r12 !== 5) throw new Error('s / 1 => ' + r12);
     "#);
 }
+
+#[test]
+fn top_level_load_int_fold_keeps_results() {
+    js_bare(r#"
+        var r1 = 300 + 500; if (r1 !== 800) throw new Error('300 + 500 => ' + r1);
+        var r2 = 300 - 500; if (r2 !== -200) throw new Error('300 - 500 => ' + r2);
+        var r3 = 300 * 500; if (r3 !== 150000) throw new Error('300 * 500 => ' + r3);
+        var r4 = 300 & 500; if (r4 !== 292) throw new Error('300 & 500 => ' + r4);
+        var r5 = 300 | 500; if (r5 !== 508) throw new Error('300 | 500 => ' + r5);
+        var r6 = 300 ^ 500; if (r6 !== 216) throw new Error('300 ^ 500 => ' + r6);
+        var r7 = 2147483647 + 2147483647;
+        if (r7 !== 4294967294) throw new Error('int overflow => ' + r7);
+        var x = 300;
+        var r8 = x + 500; if (r8 !== 800) throw new Error('x + 500 => ' + r8);
+        if (x !== 300) throw new Error('x clobbered => ' + x);
+    "#);
+}

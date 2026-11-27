@@ -155,14 +155,14 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
             let dst1 = read_u16(code, pc + 1);
             let a = read_i32(code, pc + 3);
             let next1 = pc + size;
-            if next1 < code.len() && Opcode::from_u8_unchecked(code[next1]) == Opcode::LoadInt {
+            if next1 + size <= code.len()
+                && Opcode::from_u8_unchecked(code[next1]) == Opcode::LoadInt
+            {
                 let dst2 = read_u16(code, next1 + 1);
                 let b = read_i32(code, next1 + 3);
                 let next2 = next1 + size;
-                if next2 < code.len() {
+                if next2 + size <= code.len() && dst1 != dst2 {
                     let op3 = Opcode::from_u8_unchecked(code[next2]);
-                    let add_size = Opcode::instruction_size(op3);
-                    let _dst3 = read_u16(code, next2 + 1);
                     let src1 = read_u16(code, next2 + 3);
                     let src2 = read_u16(code, next2 + 5);
                     if src1 == dst1 && src2 == dst2 {
@@ -183,15 +183,13 @@ fn run_pass(bytecode: &mut Bytecode) -> bool {
                             code[next1] = Opcode::LoadInt as u8;
                             code[next1 + 1] = code[next2 + 1];
                             code[next1 + 2] = code[next2 + 2];
-                            write_i32(code, next1 + 3, r as i32);
-
-                            if add_size > size {
-                                for i in size..add_size {
-                                    code[next1 + i] = 0;
-                                }
+                            write_i32(code, next1 + 3, r);
+                            code[next2] = Opcode::Nop as u8;
+                            for i in 1..size {
+                                code[next2 + i] = 0;
                             }
                             changed = true;
-                            pc = next2;
+                            pc = next2 + size;
                             continue;
                         }
                     }
@@ -407,5 +405,42 @@ mod tests {
         let out = optimize_code(code);
         assert_eq!(out[0], Opcode::LoadInt as u8);
         assert_eq!(out[7], Opcode::Move as u8);
+    }
+
+    #[test]
+    fn load_int_pair_with_binop_folds_to_constant() {
+        let mut code = load_int(1, 300);
+        code.extend_from_slice(&load_int(2, 500));
+        code.extend_from_slice(&binary(Opcode::Add, 3, 1, 2));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::Nop as u8);
+        assert_eq!(out[7], Opcode::LoadInt as u8);
+        assert_eq!(read_u16(&out, 8), 3);
+        assert_eq!(read_i32(&out, 10), 800);
+        assert_eq!(out[14], Opcode::Nop as u8);
+    }
+
+    #[test]
+    fn load_int_pair_with_aliased_dst_is_preserved() {
+        let mut code = load_int(1, 300);
+        code.extend_from_slice(&load_int(1, 500));
+        code.extend_from_slice(&binary(Opcode::Add, 2, 1, 1));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::LoadInt as u8);
+        assert_eq!(read_i32(&out, 3), 300);
+        assert_eq!(out[7], Opcode::LoadInt as u8);
+        assert_eq!(read_i32(&out, 10), 500);
+    }
+
+    #[test]
+    fn load_int_fold_overflow_is_preserved() {
+        let mut code = load_int(1, i32::MAX);
+        code.extend_from_slice(&load_int(2, 1));
+        code.extend_from_slice(&binary(Opcode::Add, 3, 1, 2));
+        let out = optimize_code(code);
+        assert_eq!(out[0], Opcode::LoadInt as u8);
+        assert_eq!(read_i32(&out, 3), i32::MAX);
+        assert_eq!(out[7], Opcode::LoadInt as u8);
+        assert_eq!(out[14], Opcode::Add as u8);
     }
 }
