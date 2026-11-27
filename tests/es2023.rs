@@ -308,7 +308,7 @@ fn test_import_syntax() {
         "export var x = 42;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import './module.js';");
     assert!(r.is_ok(), "import syntax failed: {:?}", r);
@@ -324,7 +324,7 @@ fn test_import_namespace() {
         "export var x = 42;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import * as ns from './module.js'; ns.x");
     assert!(r.is_ok(), "import * as ns failed: {:?}", r);
@@ -341,7 +341,7 @@ fn test_import_named() {
         "export var x = 42;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import { x } from './module.js'; x");
     assert!(r.is_ok(), "import named failed: {:?}", r);
@@ -358,7 +358,7 @@ fn test_import_default() {
         "export default 42;".to_string(),
     );
     module.add_export("default".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import x from './module.js'; x");
     assert!(r.is_ok(), "import default failed: {:?}", r);

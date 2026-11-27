@@ -157,7 +157,7 @@ fn test_import_namespace() {
         "export var x = 42;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import * as ns from './module.js'; ns.x");
     assert!(r.is_ok(), "import failed: {:?}", r);
@@ -176,7 +176,7 @@ fn test_import_namespace_multiple_exports() {
     module.add_export("a".to_string(), v16::JSValue::new_int(1), false);
     module.add_export("b".to_string(), v16::JSValue::new_int(2), false);
     module.add_export("c".to_string(), v16::JSValue::new_int(3), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -196,7 +196,7 @@ fn test_import_named() {
         "export var x = 42;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import { x } from './module.js'; x");
     assert!(r.is_ok(), "import failed: {:?}", r);
@@ -213,7 +213,7 @@ fn test_import_default() {
         "export default 42;".to_string(),
     );
     module.add_export("default".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import foo from './module.js'; foo");
     assert!(r.is_ok(), "import failed: {:?}", r);
@@ -288,7 +288,7 @@ fn test_export_multiple_named() {
     module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
     module.add_export("y".to_string(), v16::JSValue::new_int(2), false);
     module.add_export("z".to_string(), v16::JSValue::new_int(3), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -306,12 +306,12 @@ fn test_re_export_all() {
     let mut module_a =
         v16::runtime::module::Module::new("./a.js".to_string(), "export var a = 10;".to_string());
     module_a.add_export("a".to_string(), v16::JSValue::new_int(10), false);
-    rt.module_registry_mut().register(module_a);
+    ctx.runtime_mut().module_registry_mut().register(module_a);
 
     let mut module_b =
         v16::runtime::module::Module::new("./b.js".to_string(), "export var b = 20;".to_string());
     module_b.add_export("b".to_string(), v16::JSValue::new_int(20), false);
-    rt.module_registry_mut().register(module_b);
+    ctx.runtime_mut().module_registry_mut().register(module_b);
 
     let r = eval(&mut ctx, "import * as ns from './a.js'; ns.a");
     assert!(r.is_ok(), "import failed: {:?}", r);
@@ -348,7 +348,7 @@ fn test_import_aliased() {
         "export var x = 42;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import { x as y } from './module.js'; y");
     assert!(r.is_ok(), "import {{ x as y }} failed: {:?}", r);
@@ -366,7 +366,7 @@ fn test_import_multiple_aliased() {
     );
     module.add_export("a".to_string(), v16::JSValue::new_int(1), false);
     module.add_export("b".to_string(), v16::JSValue::new_int(2), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -387,7 +387,7 @@ fn test_import_default_and_named() {
     );
     module.add_export("default".to_string(), v16::JSValue::new_int(100), false);
     module.add_export("x".to_string(), v16::JSValue::new_int(50), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -508,7 +508,7 @@ fn test_import_side_effect_only() {
     let mut module =
         v16::runtime::module::Module::new("./sideeffect.js".to_string(), "var x = 1;".to_string());
     module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import './sideeffect.js';");
     assert!(r.is_ok(), "side-effect import failed: {:?}", r);
@@ -523,12 +523,12 @@ fn test_circular_dependency_simple() {
     let mut module_a =
         v16::runtime::module::Module::new("./a.js".to_string(), "export var a = 1;".to_string());
     module_a.add_export("a".to_string(), v16::JSValue::new_int(1), false);
-    rt.module_registry_mut().register(module_a);
+    ctx.runtime_mut().module_registry_mut().register(module_a);
 
     let mut module_b =
         v16::runtime::module::Module::new("./b.js".to_string(), "export var b = 2;".to_string());
     module_b.add_export("b".to_string(), v16::JSValue::new_int(2), false);
-    rt.module_registry_mut().register(module_b);
+    ctx.runtime_mut().module_registry_mut().register(module_b);
 
     let r = eval(
         &mut ctx,
@@ -548,14 +548,14 @@ fn test_circular_dependency_mutual() {
         "export var a = 10;".to_string(),
     );
     module_a.add_export("a".to_string(), v16::JSValue::new_int(10), false);
-    rt.module_registry_mut().register(module_a);
+    ctx.runtime_mut().module_registry_mut().register(module_a);
 
     let mut module_b = v16::runtime::module::Module::new(
         "./cycle_b.js".to_string(),
         "export var b = 20;".to_string(),
     );
     module_b.add_export("b".to_string(), v16::JSValue::new_int(20), false);
-    rt.module_registry_mut().register(module_b);
+    ctx.runtime_mut().module_registry_mut().register(module_b);
 
     let r = eval(
         &mut ctx,
@@ -575,7 +575,7 @@ fn test_module_namespace_immutable() {
         "export var x = 1;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -594,7 +594,7 @@ fn test_namespace_contains_default() {
         "export default 42;".to_string(),
     );
     module.add_export("default".to_string(), v16::JSValue::new_int(42), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -626,7 +626,7 @@ fn test_import_nonexistent_export_returns_undefined() {
         "export var x = 1;".to_string(),
     );
     module.add_export("x".to_string(), v16::JSValue::new_int(1), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -647,7 +647,7 @@ fn test_multiple_imports_same_module() {
     );
     module.add_export("a".to_string(), v16::JSValue::new_int(1), false);
     module.add_export("b".to_string(), v16::JSValue::new_int(2), false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(
         &mut ctx,
@@ -729,14 +729,14 @@ fn test_module_evaluation_order() {
         "export var a = 1;".to_string(),
     );
     module_a.add_export("a".to_string(), v16::JSValue::new_int(1), false);
-    rt.module_registry_mut().register(module_a);
+    ctx.runtime_mut().module_registry_mut().register(module_a);
 
     let mut module_b = v16::runtime::module::Module::new(
         "./order_b.js".to_string(),
         "export var b = 2;".to_string(),
     );
     module_b.add_export("b".to_string(), v16::JSValue::new_int(2), false);
-    rt.module_registry_mut().register(module_b);
+    ctx.runtime_mut().module_registry_mut().register(module_b);
 
     let r = eval(
         &mut ctx,
@@ -787,7 +787,7 @@ fn test_import_export_function() {
     );
     let add_fn = v16::JSValue::new_function(0);
     module.add_export("add".to_string(), add_fn, false);
-    rt.module_registry_mut().register(module);
+    ctx.runtime_mut().module_registry_mut().register(module);
 
     let r = eval(&mut ctx, "import { add } from './func.js'; typeof add");
     assert!(r.is_ok(), "import function failed: {:?}", r);

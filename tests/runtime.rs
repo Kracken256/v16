@@ -91,7 +91,7 @@ fn test_interrupt() {
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
 
-    set_interrupt(&runtime, true);
+    set_interrupt(ctx.runtime(), true);
     let result = eval(&mut ctx, "1 + 1");
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "interrupted");
@@ -102,7 +102,7 @@ fn test_no_interrupt() {
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
 
-    set_interrupt(&runtime, false);
+    set_interrupt(ctx.runtime(), false);
     let result = eval(&mut ctx, "1 + 1");
     assert!(result.is_ok());
 }

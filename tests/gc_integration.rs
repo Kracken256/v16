@@ -29,7 +29,7 @@ fn test_gc_heap_info() {
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
 
-    let initial_count = runtime.gc_heap().object_count();
+    let initial_count = ctx.runtime().gc_heap().object_count();
 
     let code = r#"
         var obj = { x: 1, y: 2 };
@@ -51,7 +51,7 @@ fn test_gc_memory_size() {
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
 
-    let initial_size = runtime.gc_heap().total_size();
+    let initial_size = ctx.runtime().gc_heap().total_size();
 
     let code = r#"
         var arr = [1, 2, 3, 4, 5];
@@ -86,7 +86,7 @@ fn test_gc_array_tracking() {
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
 
-    let initial_count = runtime.gc_heap().object_count();
+    let initial_count = ctx.runtime().gc_heap().object_count();
 
     let code = r#"
         var arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -290,7 +290,7 @@ fn test_gc_many_allocations() {
     let mut runtime = JSRuntime::new();
     let mut ctx = runtime.new_context();
 
-    let initial_count = runtime.gc_heap().object_count();
+    let initial_count = ctx.runtime().gc_heap().object_count();
 
     let code = r#"
         var arr = [];

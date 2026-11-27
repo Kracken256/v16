@@ -71,7 +71,7 @@ impl JSRuntime {
         (&mut self.module_registry, &mut self.atom_table)
     }
 
-    pub fn new_context(&mut self) -> Box<JSContext> {
+    pub fn new_context(&mut self) -> Box<JSContext<'_>> {
         self.ctx_count += 1;
         JSContext::new(self)
     }

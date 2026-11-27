@@ -89,7 +89,7 @@ pub struct JSFunction {
     pub has_private_elements: bool,
     pub arrow_enclosing_ctor_ptr: *mut crate::object::function::JSFunction,
     pub instance_fields: Vec<InstanceFieldDefinition>,
-    pub realm_context: *mut JSContext,
+    pub realm_context: *mut (),
     pub realm_global: JSValue,
     pub param_env: JSValue,
 }
@@ -154,8 +154,8 @@ impl JSFunction {
         if self.realm_context.is_null() {
             None
         } else {
-            // SAFETY: the realm context is installed when the function is created and kept alive for the function's lifetime.
-            Some(unsafe { &*self.realm_context })
+            // SAFETY: the realm context pointer is installed when the function is created and kept alive for the function's lifetime.
+            Some(unsafe { &*(self.realm_context as *mut JSContext) })
         }
     }
 
@@ -164,8 +164,8 @@ impl JSFunction {
         if self.realm_context.is_null() {
             None
         } else {
-            // SAFETY: the realm context is installed when the function is created, stays alive for the function's lifetime, and is mutated only by the single-threaded engine.
-            Some(unsafe { &mut *self.realm_context })
+            // SAFETY: the realm context pointer is installed when the function is created, stays alive for the function's lifetime, and is mutated only by the single-threaded engine.
+            Some(unsafe { &mut *(self.realm_context as *mut JSContext) })
         }
     }
 

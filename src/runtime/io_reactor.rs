@@ -246,7 +246,7 @@ impl IoReactor {
         })
     }
 
-    pub fn get_from_ctx(ctx: &mut JSContext) -> Option<&mut IoReactor> {
+    pub fn get_from_ctx<'a>(ctx: &'a mut JSContext<'_>) -> Option<&'a mut IoReactor> {
         let el = ctx.event_loop_mut();
         for ext in &mut el.extensions {
             let any = ext.as_any_mut();

@@ -45,7 +45,7 @@ pub fn create_builtin_function(ctx: &mut JSContext, name: &str) -> JSValue {
     let arity = ctx.get_builtin_arity(name).unwrap_or(1);
     let mut func = JSFunction::new_builtin(ctx.intern(name), arity);
     func.set_builtin_marker(ctx, name);
-    func.realm_context = ctx as *mut JSContext;
+    func.realm_context = ctx.as_opaque_ptr();
     func.realm_global = ctx.global();
     let ptr = Box::into_raw(Box::new(func));
     ctx.runtime_mut().gc_heap_mut().track_function(ptr);

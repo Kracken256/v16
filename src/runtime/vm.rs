@@ -756,7 +756,7 @@ pub struct VM {
     pending_finally_depth: usize,
     caught_exception_value: Option<JSValue>,
 
-    ctx_ptr: *mut crate::runtime::JSContext,
+    ctx_attached: bool,
 
     allocation_count: u64,
 
@@ -860,7 +860,7 @@ impl VM {
             pending_finally_jump: None,
             pending_finally_depth: 0,
             caught_exception_value: None,
-            ctx_ptr: std::ptr::null_mut(),
+            ctx_attached: false,
             allocation_count: 0,
             caller_vm: None,
             eval_binding_frames: 0,
@@ -2968,7 +2968,7 @@ impl VM {
         if let Some(fptr) = self.frames[self.frame_index].function_ptr {
             let func = JSValue::new_function(fptr);
             let func = func.try_as_function().expect("function value");
-            let current = ctx as *mut JSContext;
+            let current = ctx.as_opaque_ptr();
             if !func.realm_context.is_null() && func.realm_context != current {
                 if let Some(realm_proto) =
                     func.realm_ctx().and_then(|realm_ctx| realm_ctx.get_type_error_prototype())
@@ -4467,7 +4467,7 @@ impl VM {
                 return Some(proto_val.get_ptr());
             }
         }
-        let current = ctx as *mut JSContext;
+        let current = ctx.as_opaque_ptr();
         if !js_func.realm_context.is_null() && js_func.realm_context != current {
             if let Some(realm_ctx) = js_func.realm_ctx() {
                 return if js_func.is_async() {
@@ -5605,14 +5605,14 @@ impl VM {
     ) -> Result<ExecutionOutcome, String> {
         let result = self.execute_inner(ctx, bytecode, false, 0, true);
 
-        if !self.ctx_ptr.is_null() {
+        if self.ctx_attached {
             let count = self.frames[0].registers_count;
             for i in 0..count {
                 self.registers[i].release_atoms_in(ctx);
                 self.registers[i] = JSValue::undefined();
             }
         }
-        self.ctx_ptr = std::ptr::null_mut();
+        self.ctx_attached = false;
         result
     }
 
@@ -5622,7 +5622,7 @@ impl VM {
         bytecode: &std::rc::Rc<Bytecode>,
     ) -> Result<ExecutionOutcome, String> {
         let result = self.execute_inner(ctx, bytecode, true, 0, true);
-        self.ctx_ptr = std::ptr::null_mut();
+        self.ctx_attached = false;
         result
     }
 
@@ -5633,7 +5633,7 @@ impl VM {
         this_value: JSValue,
         caller_vm_ptr: Option<*mut VM>,
     ) -> Result<ExecutionOutcome, String> {
-        self.ctx_ptr = ctx;
+        self.ctx_attached = true;
         self.caller_vm = caller_vm_ptr;
         ctx.set_register_vm_ptr(Some(self as *mut VM));
 
@@ -5695,7 +5695,7 @@ impl VM {
         self.refresh_cache();
 
         let result = self.execute_inner(ctx, bytecode, true, 0, false);
-        self.ctx_ptr = std::ptr::null_mut();
+        self.ctx_attached = false;
         result
     }
 
@@ -6098,7 +6098,7 @@ impl VM {
         start_pc: usize,
         setup_frame: bool,
     ) -> Result<ExecutionOutcome, String> {
-        self.ctx_ptr = ctx;
+        self.ctx_attached = true;
 
         if setup_frame {
             let needed = bytecode.locals_count as usize;
@@ -13653,7 +13653,7 @@ impl VM {
         state: &crate::object::object::AsyncState,
         is_generator: bool,
     ) -> Result<AsyncStepResult, String> {
-        self.ctx_ptr = ctx;
+        self.ctx_attached = true;
         self.async_step = true;
         self.await_suspend = None;
         self.pending_close_state = None;
@@ -13993,7 +13993,7 @@ impl VM {
         ),
         String,
     > {
-        self.ctx_ptr = ctx;
+        self.ctx_attached = true;
         self.last_yield_src = None;
         self.last_yield_is_result = false;
         self.generator_resume_kind = 0;

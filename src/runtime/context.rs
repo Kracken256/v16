@@ -258,8 +258,8 @@ impl CommonAtoms {
     }
 }
 
-pub struct JSContext {
-    runtime: *mut JSRuntime,
+pub struct JSContext<'rt> {
+    runtime: &'rt mut JSRuntime,
     global_object: JSValue,
     interrupt_counter: i32,
     builtin_functions: FxHashMap<String, HostFunction>,
@@ -311,7 +311,7 @@ pub struct JSContext {
     promise_prototype: Option<*mut JSObject>,
     promise_constructor: Option<*mut JSObject>,
 
-    active_realm: *mut JSContext,
+    active_realm: *mut (),
 
     register_vm_ptr: Option<*mut crate::runtime::vm::VM>,
     compiler_opt_level: OptLevel,
@@ -350,17 +350,23 @@ pub struct PendingCallback {
     pub is_method_call: bool,
 }
 
-impl JSContext {
+impl<'rt> JSContext<'rt> {
     const INTERRUPT_THRESHOLD: i32 = 1000;
 
-    pub fn new(runtime: &mut JSRuntime) -> Box<Self> {
+    pub fn new(runtime: &'rt mut JSRuntime) -> Box<Self> {
         let global = JSObject::new_global();
         let global_ptr = Box::into_raw(Box::new(global));
         runtime.gc_heap_mut().track(global_ptr);
         let global_value = JSValue::new_object(global_ptr);
 
+        let common_atoms = CommonAtoms::new(runtime.atom_table_mut());
+        let mut cached_int_atoms = [Atom::empty(); 100];
+        for i in 0..100 {
+            cached_int_atoms[i] = runtime.atom_table_mut().intern(&i.to_string());
+        }
+
         let mut ctx = Box::new(JSContext {
-            runtime: runtime as *mut JSRuntime,
+            runtime,
             global_object: global_value,
             interrupt_counter: Self::INTERRUPT_THRESHOLD,
             builtin_functions: FxHashMap::default(),
@@ -423,14 +429,8 @@ impl JSContext {
             event_loop: EventLoop::new(),
             running_event_loop: None,
             shape_cache: ShapeCache::new(),
-            common_atoms: CommonAtoms::new(runtime.atom_table_mut()),
-            cached_int_atoms: {
-                let mut arr = [Atom::empty(); 100];
-                for i in 0..100 {
-                    arr[i] = runtime.atom_table_mut().intern(&i.to_string());
-                }
-                arr
-            },
+            common_atoms,
+            cached_int_atoms,
             args_length_shape: None,
         });
 
@@ -470,13 +470,16 @@ impl JSContext {
     }
 
     pub fn runtime(&self) -> &JSRuntime {
-        // SAFETY: the runtime pointer is set at context construction and the context is never used after its runtime is dropped.
-        unsafe { &*self.runtime }
+        &*self.runtime
     }
 
     pub fn runtime_mut(&mut self) -> &mut JSRuntime {
-        // SAFETY: the runtime pointer is set at context construction, is valid for the context's lifetime, and `&mut self` serializes access.
-        unsafe { &mut *self.runtime }
+        &mut *self.runtime
+    }
+
+    #[inline]
+    pub fn as_opaque_ptr(&self) -> *mut () {
+        self as *const JSContext<'rt> as *mut ()
     }
 
     pub fn array_index_has_own(&self, value: &JSValue, atom: Atom) -> bool {
@@ -548,7 +551,7 @@ impl JSContext {
     }
 
     pub fn refresh_builtin_realm(&mut self) {
-        let context = self as *mut JSContext;
+        let context = self.as_opaque_ptr();
         let global = self.global();
         if !global.is_object_like() {
             return;
@@ -685,11 +688,11 @@ impl JSContext {
         );
     }
 
-    pub fn active_realm(&self) -> *mut JSContext {
+    pub fn active_realm(&self) -> *mut () {
         self.active_realm
     }
 
-    pub fn set_active_realm(&mut self, realm: *mut JSContext) {
+    pub fn set_active_realm(&mut self, realm: *mut ()) {
         self.active_realm = realm;
     }
 
@@ -1366,7 +1369,7 @@ mod tests {
     fn test_context_realm_pointer_is_stable_after_new_context() {
         let mut runtime = JSRuntime::new();
         let mut ctx = runtime.new_context();
-        let ctx_ptr = (&mut *ctx) as *mut JSContext;
+        let ctx_ptr = ctx.as_opaque_ptr();
         let parse_int = ctx.intern("parseInt");
         let func = ctx
             .global()
