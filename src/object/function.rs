@@ -150,7 +150,7 @@ impl JSFunction {
     }
 
     #[inline(always)]
-    pub fn realm_ctx(&self) -> Option<&JSContext> {
+    pub fn realm_ctx(&self) -> Option<&JSContext<'_>> {
         if self.realm_context.is_null() {
             None
         } else {
@@ -160,7 +160,7 @@ impl JSFunction {
     }
 
     #[inline(always)]
-    pub fn realm_ctx_mut(&mut self) -> Option<&mut JSContext> {
+    pub fn realm_ctx_mut(&mut self) -> Option<&mut JSContext<'_>> {
         if self.realm_context.is_null() {
             None
         } else {
