@@ -12586,6 +12586,7 @@ impl VM {
                                 // First check the instance's own nested_bytecodes
                                 let found = bc
                                     .nested_bytecodes
+                                    .borrow()
                                     .iter()
                                     .find(|(k, _)| *k == newfunc_start_pc as u32)
                                     .map(|(_, v)| v.clone());
@@ -12736,6 +12737,7 @@ impl VM {
                                 // Check instance's own nested_bytecodes first
                                 let found_nb = bc
                                     .nested_bytecodes
+                                    .borrow()
                                     .iter()
                                     .find(|(k, _)| *k == key)
                                     .map(|(_, v)| v.clone())
@@ -12777,7 +12779,7 @@ impl VM {
                                     );
                                     nb_for_ic = Some(nb.clone());
                                     // Store in instance's nested_bytecodes
-                                    bc.nested_bytecodes.push((key, nb.clone()));
+                                    bc.nested_bytecodes.borrow_mut().push((key, nb.clone()));
                                     // Also store in shared NestedBytecode's nested_bytecodes
                                     // so sub-sub-closures persist across re-creations of this closure
                                     if let Some(shared_nb) = shared_nb {
@@ -12863,7 +12865,7 @@ impl VM {
                         has_simple_parameters,
                         is_strict,
                         var_name_to_slot: func_var_name_to_slot,
-                        nested_bytecodes: Vec::new(),
+                        nested_bytecodes: std::cell::RefCell::new(Vec::new()),
                         is_simple_constructor: false,
                         simple_constructor_props: Vec::new(),
                         cached_constructor_final_shape: None,
@@ -18330,7 +18332,7 @@ mod tests {
             has_simple_parameters: false,
             is_strict: false,
             var_name_to_slot: std::rc::Rc::new(Vec::new()),
-            nested_bytecodes: Vec::new(),
+            nested_bytecodes: std::cell::RefCell::new(Vec::new()),
             is_simple_constructor: false,
             simple_constructor_props: Vec::new(),
             cached_constructor_final_shape: None,

@@ -3092,7 +3092,7 @@ impl CodeGenerator {
             has_simple_parameters: is_simple_params,
             is_strict: self.is_strict,
             var_name_to_slot,
-            nested_bytecodes: Vec::new(),
+            nested_bytecodes: std::cell::RefCell::new(Vec::new()),
             is_simple_constructor: false,
             simple_constructor_props: Vec::new(),
             cached_constructor_final_shape: None,
