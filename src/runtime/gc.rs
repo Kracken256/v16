@@ -401,7 +401,12 @@ impl GcHeap {
         }
     }
 
-    pub fn untrack(&mut self, ptr: *mut JSObject) {
+    /// # Safety
+    ///
+    /// `ptr` must be a live object pointer registered with this heap; after the
+    /// call the heap no longer tracks or frees it, so the caller retakes
+    /// ownership of the allocation.
+    pub unsafe fn untrack(&mut self, ptr: *mut JSObject) {
         let idx = JSValue::new_object(ptr).try_as_object().expect("object value").gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
@@ -420,7 +425,10 @@ impl GcHeap {
 
     pub fn mark_value(&mut self, value: &JSValue) {
         if value.is_object() || value.is_function() {
-            self.mark(value.get_ptr());
+            // SAFETY: object- and function-tagged values carry live tracked object pointers.
+            unsafe {
+                self.mark(value.get_ptr());
+            }
         }
     }
 
@@ -453,11 +461,17 @@ impl GcHeap {
         });
 
         if let Some(proto_ptr) = func.base.prototype {
-            self.mark(proto_ptr);
+            // SAFETY: prototype pointers stored on live traced objects reference tracked objects.
+            unsafe {
+                self.mark(proto_ptr);
+            }
         }
 
         if !func.cached_prototype_ptr.is_null() {
-            self.mark(func.cached_prototype_ptr);
+            // SAFETY: the cached prototype pointer of a live function references a tracked object.
+            unsafe {
+                self.mark(func.cached_prototype_ptr);
+            }
         }
 
         if let Some(ref env) = func.with_env {
@@ -505,21 +519,24 @@ impl GcHeap {
         JSValue::new_object(ptr).try_as_object().expect("object value").is_dense_array()
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must be a live object pointer registered with this heap, so that
+    /// its `gc_slot` addresses the slot that still stores `ptr`.
     #[inline]
-    pub fn mark(&mut self, ptr: *mut JSObject) -> bool {
+    unsafe fn mark(&mut self, ptr: *mut JSObject) {
         let idx = JSValue::new_object(ptr).try_as_object().expect("object value").gc_slot;
         if idx == u32::MAX {
-            return false;
+            return;
         }
         let idx = idx as usize;
         if self.objects.get(idx) != Some(&ptr) {
-            return false;
+            return;
         }
         if self.marks[idx] == COLOR_WHITE {
             self.marks[idx] = COLOR_GRAY;
             self.gray_stack.push(idx);
         }
-        true
     }
 
     fn trace_object(&mut self, idx: usize, ptr: *mut JSObject) {
@@ -559,7 +576,10 @@ impl GcHeap {
                 self.mark_value(&value);
             });
             if let Some(proto_ptr) = arr.header.prototype {
-                self.mark(proto_ptr);
+                // SAFETY: prototype pointers stored on live traced arrays reference tracked objects.
+                unsafe {
+                    self.mark(proto_ptr);
+                }
             }
         } else if tag == TAG_FUNCTION {
             let func_value = JSValue::new_function(ptr.cast::<JSFunction>());
@@ -614,7 +634,10 @@ impl GcHeap {
                 }
             }
             if let Some(proto_ptr) = obj.prototype {
-                self.mark(proto_ptr);
+                // SAFETY: prototype pointers stored on live traced objects reference tracked objects.
+                unsafe {
+                    self.mark(proto_ptr);
+                }
             }
 
             if let Some(target) = obj.proxy_target() {
@@ -1195,7 +1218,10 @@ impl GcHeap {
         !self.gray_stack.is_empty()
     }
 
-    pub fn write_barrier(&mut self, obj_ptr: *mut JSObject, new_value: &JSValue) {
+    /// # Safety
+    ///
+    /// `obj_ptr` must be a live object pointer registered with this heap.
+    pub unsafe fn write_barrier(&mut self, obj_ptr: *mut JSObject, new_value: &JSValue) {
         let idx = JSValue::new_object(obj_ptr).try_as_object().expect("object value").gc_slot;
         if idx != u32::MAX {
             let idx = idx as usize;
@@ -1350,7 +1376,10 @@ mod tests {
         heap.track(ptr);
         assert_eq!(heap.object_count(), 1);
 
-        heap.untrack(ptr);
+        // SAFETY: `ptr` is a live boxed object registered with the heap above.
+        unsafe {
+            heap.untrack(ptr);
+        }
         assert_eq!(heap.object_count(), 0);
 
         // SAFETY: the pointer came from `Box::into_raw` above and is reclaimed exactly once.
@@ -2008,7 +2037,10 @@ mod tests {
             .resolve_weak(func_handle)
             .expect("live function should resolve");
         assert!(resolved.is_function());
-        heap.untrack(func_ptr.cast::<JSObject>());
+        // SAFETY: `func_ptr` is a live boxed function registered with the heap above.
+        unsafe {
+            heap.untrack(func_ptr.cast::<JSObject>());
+        }
         // SAFETY: the function pointer came from `Box::into_raw` above and is reclaimed exactly once.
         unsafe {
             let _ = Box::from_raw(func_ptr);
@@ -2157,7 +2189,10 @@ mod tests {
         }
 
         let child_value = JSValue::new_object(child_ptr);
-        heap.write_barrier(parent_ptr, &child_value);
+        // SAFETY: `parent_ptr` is a live boxed object registered with the heap above.
+        unsafe {
+            heap.write_barrier(parent_ptr, &child_value);
+        }
 
         while heap.incremental_mark_step(10) {}
         let freed = heap.finish_incremental_sweep();
