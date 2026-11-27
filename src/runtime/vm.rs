@@ -6159,6 +6159,7 @@ impl VM {
             if let Some(args) = saved_args {
                 frame.saved_args = args;
             }
+            frame.arg_count = frame.saved_args.len() as u16;
             frame.upvalue_sync_map = None;
             frame.upvalue_sync_bitset = 0;
             if let Some(cells) = self.pending_upvalue_cells.take() {
@@ -13666,7 +13667,7 @@ impl VM {
         self.pending_this = state.snapshot.first().copied();
         self.pending_handlers = Some(state.handlers.clone());
 
-        let needed = state.bytecode.locals_count as usize;
+        let needed = (state.bytecode.locals_count as usize).max(state.snapshot.len());
         if needed > self.registers.len() {
             self.registers.resize(needed, JSValue::undefined());
         }
@@ -14021,7 +14022,7 @@ impl VM {
             }
         }
 
-        let needed = bytecode.locals_count as usize;
+        let needed = (bytecode.locals_count as usize).max(registers_snapshot.len());
         if needed > self.registers.len() {
             self.registers.resize(needed, JSValue::undefined());
         }

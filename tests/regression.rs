@@ -612,3 +612,57 @@ fn default_params_with_rest_bind_correctly() {
         js_bare_at(src, opt_level);
     }
 }
+
+#[test]
+fn generator_and_async_rest_params_bind_correctly() {
+    let src = r#"
+        function* g(a, ...rest) { yield rest; }
+        var r1 = g(1, 2, 3).next().value;
+        if (r1.length !== 2 || r1[0] !== 2 || r1[1] !== 3) {
+            throw new Error('generator rest => ' + JSON.stringify(r1));
+        }
+        var r2 = g().next().value;
+        if (r2.length !== 0) throw new Error('generator no args => ' + JSON.stringify(r2));
+        function* g2(a, ...rest) { yield 1; yield rest.length; }
+        var it = g2(1, 2, 3, 4);
+        if (it.next().value !== 1) throw new Error('generator first yield');
+        var r3 = it.next().value;
+        if (r3 !== 3) throw new Error('generator resumed rest => ' + r3);
+        function* g3(a = 10, ...rest) { yield [a, rest]; }
+        var r4 = g3(undefined, 2, 3).next().value;
+        if (r4[0] !== 10 || r4[1].length !== 2 || r4[1][0] !== 2 || r4[1][1] !== 3) {
+            throw new Error('generator default+rest => ' + JSON.stringify(r4));
+        }
+        var done = false;
+        var failure = null;
+        async function af(a, ...rest) { await 0; return rest; }
+        af(1, 2, 3).then(function (r) {
+            if (r.length !== 2 || r[0] !== 2 || r[1] !== 3) {
+                throw new Error('async rest => ' + JSON.stringify(r));
+            }
+            done = true;
+        }).catch(function (e) { failure = e.message; done = true; });
+        async function* ag(a, ...rest) { yield 'first'; yield rest; }
+        var gen = ag(1, 2, 3);
+        gen.next().then(function (x) {
+            if (x.value !== 'first') throw new Error('async generator first => ' + x.value);
+            return gen.next();
+        }).then(function (y) {
+            if (y.value.length !== 2 || y.value[0] !== 2 || y.value[1] !== 3) {
+                throw new Error('async generator rest => ' + JSON.stringify(y.value));
+            }
+            done = true;
+        }).catch(function (e) { failure = e.message; done = true; });
+    "#;
+    for opt_level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::O3] {
+        let mut rt = JSRuntime::new();
+        let mut ctx = rt.new_context();
+        eval_with_opt_level(&mut ctx, src, opt_level).expect("JS threw an error");
+        v16::run_event_loop(&mut ctx).expect("run_event_loop failed");
+        eval(
+            &mut ctx,
+            "if (failure) throw new Error(failure); if (!done) throw new Error('async checks did not complete');",
+        )
+        .expect("JS threw an error");
+    }
+}
