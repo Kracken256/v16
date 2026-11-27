@@ -66,7 +66,7 @@ pub struct JSFunction {
     pub builtin_func: Option<HostFunc>,
     pub upvalues: Option<Box<UpvalueData>>,
 
-    pub bytecode: Option<crate::compiler::opcode::Bytecode>,
+    pub bytecode: Option<std::rc::Rc<crate::compiler::opcode::Bytecode>>,
 
     pub shared_nb_for_ic: Option<std::sync::Arc<crate::compiler::opcode::NestedBytecode>>,
 

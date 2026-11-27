@@ -1585,7 +1585,7 @@ mod tests {
         heap.track_function(func_ptr);
 
         let state = crate::object::object::GeneratorState {
-            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            bytecode: std::rc::Rc::new(crate::compiler::opcode::Bytecode::new()),
             snapshot: Vec::new(),
             pc: 0,
             done: false,
@@ -1628,7 +1628,7 @@ mod tests {
         heap.track_function(func_ptr);
 
         let state = crate::object::object::AsyncState {
-            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            bytecode: std::rc::Rc::new(crate::compiler::opcode::Bytecode::new()),
             snapshot: Vec::new(),
             pc: 0,
             done: false,
@@ -1678,7 +1678,7 @@ mod tests {
         heap.track(arg_ptr);
 
         let state = crate::object::object::GeneratorState {
-            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            bytecode: std::rc::Rc::new(crate::compiler::opcode::Bytecode::new()),
             snapshot: Vec::new(),
             pc: 0,
             done: false,
@@ -1721,7 +1721,7 @@ mod tests {
         heap.track(arg_ptr);
 
         let state = crate::object::object::AsyncState {
-            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            bytecode: std::rc::Rc::new(crate::compiler::opcode::Bytecode::new()),
             snapshot: Vec::new(),
             pc: 0,
             done: false,
@@ -1772,7 +1772,7 @@ mod tests {
 
         let cell = std::rc::Rc::new(std::cell::Cell::new(JSValue::new_object(captured_ptr)));
         let state = crate::object::object::GeneratorState {
-            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            bytecode: std::rc::Rc::new(crate::compiler::opcode::Bytecode::new()),
             snapshot: Vec::new(),
             pc: 0,
             done: false,
@@ -1816,7 +1816,7 @@ mod tests {
 
         let cell = std::rc::Rc::new(std::cell::Cell::new(JSValue::new_object(captured_ptr)));
         let state = crate::object::object::AsyncState {
-            bytecode: Box::new(crate::compiler::opcode::Bytecode::new()),
+            bytecode: std::rc::Rc::new(crate::compiler::opcode::Bytecode::new()),
             snapshot: Vec::new(),
             pc: 0,
             done: false,

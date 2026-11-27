@@ -205,7 +205,7 @@ pub fn start_async_call(
     let promise_atom = ctx.intern("__v16_promise__");
     holder.set(promise_atom, promise);
     holder.set_async_state(crate::object::object::AsyncState {
-        bytecode: Box::new(rb.clone()),
+        bytecode: rb.clone(),
         snapshot,
         pc: 0,
         done: false,
@@ -5434,7 +5434,7 @@ impl VM {
                 }
                 if js_func.is_async() {
                     gen_obj.set_async_state(crate::object::object::AsyncState {
-                        bytecode: Box::new(rb.clone()),
+                        bytecode: rb.clone(),
                         snapshot: result_snapshot,
                         pc: result_pc,
                         done: result_done,
@@ -5466,7 +5466,7 @@ impl VM {
                     });
                 } else {
                     gen_obj.set_generator_state(crate::object::object::GeneratorState {
-                        bytecode: Box::new(rb.clone()),
+                        bytecode: rb.clone(),
                         snapshot: result_snapshot,
                         pc: result_pc,
                         done: result_done,
@@ -6342,7 +6342,8 @@ impl VM {
                                         if let Some(shape) = obj.get_shape() {
                                             let mut func_mut_val = JSValue::new_function(fptr);
                                             let func_mut = func_mut_val.try_as_function_mut().expect("function value");
-                                            if let Some(ref mut bc_mut) = func_mut.bytecode {
+                                            if let Some(bc) = func_mut.bytecode.as_mut() {
+                                                let bc_mut = std::rc::Rc::make_mut(bc);
                                                 bc_mut.cached_constructor_final_shape = Some(shape);
                                             }
                                         }
@@ -12731,7 +12732,7 @@ impl VM {
                         if let Some(parent_ptr) = self.frames[self.frame_index].function_ptr {
                             let mut parent_func_val = JSValue::new_function(parent_ptr);
                             let parent_func = parent_func_val.try_as_function_mut().expect("function value");
-                            if let Some(bc) = parent_func.bytecode.as_mut() {
+                            if let Some(bc) = parent_func.bytecode.clone() {
                                 let key = newfunc_start_pc as u32;
                                 let shared_nb = parent_func.shared_nb_for_ic.as_ref();
                                 // Check instance's own nested_bytecodes first
@@ -12853,14 +12854,16 @@ impl VM {
                         func.arrow_new_target = parent.new_target;
                     }
                     func.line_number_table = line_number_table_opt.clone();
-                    func.bytecode = Some(Bytecode {
+                    let effective_nb = nb_for_ic.or_else(|| cached.clone());
+                    func.shared_nb_for_ic = effective_nb.clone();
+                    func.bytecode = Some(std::rc::Rc::new(Bytecode {
                         code: fb_code,
                         constants: fb_constants,
                         locals_count,
                         param_count,
                         line_number_table: line_number_table_opt,
                         ic_table: std::rc::Rc::new(std::cell::RefCell::new(crate::compiler::InlineCacheTable::new())),
-                        shared_nested_bytecode: None,
+                        shared_nested_bytecode: effective_nb,
                         uses_arguments,
                         has_simple_parameters,
                         is_strict,
@@ -12870,13 +12873,7 @@ impl VM {
                         simple_constructor_props: Vec::new(),
                         cached_constructor_final_shape: None,
                         cached_constructor_atoms: Vec::new(),
-                    });
-
-                    let effective_nb = nb_for_ic.or_else(|| cached.clone());
-                    if let Some(bc) = func.bytecode.as_mut() {
-                        bc.shared_nested_bytecode = effective_nb.clone();
-                    }
-                    func.shared_nb_for_ic = effective_nb;
+                    }));
 
                     let inherited_sentinel = u16::MAX as usize;
                     let current_frame_base = self.frames[self.frame_index].registers_base;
@@ -13793,7 +13790,7 @@ impl VM {
     fn instantiate_generator_object(
         &mut self,
         ctx: &mut JSContext,
-        rb: &Bytecode,
+        rb: &std::rc::Rc<Bytecode>,
         func_val: JSValue,
         this_val: JSValue,
         args: &[JSValue],
@@ -13899,7 +13896,7 @@ impl VM {
         }
         if js_func.is_async() {
             gen_obj.set_async_state(crate::object::object::AsyncState {
-                bytecode: Box::new(rb.clone()),
+                bytecode: rb.clone(),
                 snapshot: result_snapshot,
                 pc: result_pc,
                 done: result_done,
@@ -13931,7 +13928,7 @@ impl VM {
             });
         } else {
             gen_obj.set_generator_state(crate::object::object::GeneratorState {
-                bytecode: Box::new(rb.clone()),
+                bytecode: rb.clone(),
                 snapshot: result_snapshot,
                 pc: result_pc,
                 done: result_done,

@@ -4,7 +4,7 @@ use crate::util::{FxHashMap, FxHashSet};
 use crate::value::JSValue;
 
 pub struct GeneratorState {
-    pub bytecode: Box<crate::compiler::opcode::Bytecode>,
+    pub bytecode: std::rc::Rc<crate::compiler::opcode::Bytecode>,
 
     pub snapshot: Vec<JSValue>,
 
@@ -32,7 +32,7 @@ pub struct GeneratorState {
 }
 
 pub struct AsyncState {
-    pub bytecode: Box<crate::compiler::opcode::Bytecode>,
+    pub bytecode: std::rc::Rc<crate::compiler::opcode::Bytecode>,
 
     pub snapshot: Vec<JSValue>,
 
