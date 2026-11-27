@@ -73,9 +73,15 @@ fn test_module_namespace_object() {
     module.add_export("b".to_string(), JSValue::new_int(2), false);
 
     let mut atom_table = AtomTable::new();
-    let ns_ptr = module.get_or_create_namespace_object(&mut atom_table);
+    let to_string_tag_key = atom_table.intern("Symbol.toStringTag");
+    let module_tag_atom = atom_table.intern("Module");
+    let ns_ptr = module.get_or_create_namespace_object(
+        &mut atom_table,
+        to_string_tag_key,
+        module_tag_atom,
+    );
 
-    assert!(ns_ptr != 0);
+    assert!(!ns_ptr.is_null());
 }
 
 #[test]
@@ -785,7 +791,8 @@ fn test_import_export_function() {
         "./func.js".to_string(),
         "export function add(a, b) { return a + b; }".to_string(),
     );
-    let add_fn = v16::JSValue::new_function(0);
+    let add_fn = eval(&mut ctx, "(function add(a, b) { return a + b; })")
+        .expect("function literal failed");
     module.add_export("add".to_string(), add_fn, false);
     ctx.runtime_mut().module_registry_mut().register(module);
 
