@@ -2423,6 +2423,7 @@ impl VM {
     #[inline(always)]
     fn read_u8(&mut self) -> u8 {
         let pc = self.pc;
+        debug_assert!(pc < self.cached_code_len);
         // SAFETY: `cached_code_ptr` points at the current bytecode and `pc` is an in-bounds instruction offset tracked by the decoder.
         let val = unsafe { *self.cached_code_ptr.add(pc) };
         self.pc = pc + 1;
@@ -2431,6 +2432,7 @@ impl VM {
 
     #[inline(always)]
     fn read_i64(&mut self) -> i64 {
+        debug_assert!(self.pc + 8 <= self.cached_code_len);
         // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const i64) };
@@ -2440,6 +2442,7 @@ impl VM {
 
     #[inline(always)]
     fn read_i32(&mut self) -> i32 {
+        debug_assert!(self.pc + 4 <= self.cached_code_len);
         // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const i32) };
@@ -15471,6 +15474,7 @@ impl VM {
 
     #[inline(always)]
     fn read_u16_pc(&mut self) -> u16 {
+        debug_assert!(self.pc + 2 <= self.cached_code_len);
         // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const u16) };
@@ -15480,6 +15484,7 @@ impl VM {
 
     #[inline(always)]
     fn read_u32_pc(&mut self) -> u32 {
+        debug_assert!(self.pc + 4 <= self.cached_code_len);
         // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const u32) };
@@ -15489,6 +15494,7 @@ impl VM {
 
     #[inline(always)]
     fn read_i32_pc(&mut self) -> i32 {
+        debug_assert!(self.pc + 4 <= self.cached_code_len);
         // SAFETY: the operand lies in bounds of the current bytecode and unaligned reads are required because operands are packed at arbitrary offsets.
         let val =
             unsafe { std::ptr::read_unaligned(self.cached_code_ptr.add(self.pc) as *const i32) };
