@@ -118,7 +118,7 @@ pub(crate) struct GcSnapshot {
 #[derive(Clone, Copy)]
 struct GcDebugEntry {
     handle: usize,
-    ptr: usize,
+    ptr: *mut JSObject,
     tag: u8,
     in_nursery: bool,
 }
@@ -149,9 +149,9 @@ impl Nursery {
         if aligned + size > self.capacity {
             return None;
         }
-        let base = self.backing.as_mut_ptr() as *mut u8;
+        let base = self.backing.as_mut_ptr().cast::<u8>();
         // SAFETY: the capacity check above guarantees the aligned slot fits in the backing buffer, whose alignment is at least 8.
-        let ptr = unsafe { base.add(aligned) as *mut T };
+        let ptr = unsafe { base.add(aligned) }.cast::<T>();
         // SAFETY: `ptr` addresses a fresh, properly aligned slot inside the nursery buffer that is not yet initialized.
         unsafe {
             std::ptr::write(ptr, value);
@@ -184,9 +184,9 @@ impl Nursery {
 
     #[inline]
     pub fn contains<T>(&self, ptr: *const T) -> bool {
-        let start = self.backing.as_ptr() as usize;
+        let start = self.backing.as_ptr().addr();
         let end = start + self.capacity;
-        let p = ptr as usize;
+        let p = ptr.addr();
         p >= start && p < end
     }
 }
@@ -781,7 +781,7 @@ impl GcHeap {
                 "[gcdump] alloc#{} handle={} ptr={:#x} tag={} nursery={}",
                 self.debug_stats.alloc_events,
                 handle,
-                ptr as usize,
+                ptr.addr(),
                 Self::tag_name(tag),
                 in_nursery
             );
@@ -804,22 +804,22 @@ impl GcHeap {
         } else if value.is_symbol() {
             format!("symbol(atom={})", value.get_atom().0)
         } else if value.is_bigint() {
-            format!("bigint(ptr={:#x})", value.get_ptr() as usize)
+            format!("bigint(ptr={:#x})", value.get_ptr().addr())
         } else if value.is_function() {
             let ptr = value.get_ptr();
             let handle = value.try_as_object().expect("object value").gc_slot;
             if handle != u32::MAX {
-                format!("function(handle={} ptr={:#x})", handle, ptr as usize)
+                format!("function(handle={} ptr={:#x})", handle, ptr.addr())
             } else {
-                format!("function(ptr={:#x})", ptr as usize)
+                format!("function(ptr={:#x})", ptr.addr())
             }
         } else if value.is_object() {
             let ptr = value.get_ptr();
             let handle = value.try_as_object().expect("object value").gc_slot;
             if handle != u32::MAX {
-                format!("object(handle={} ptr={:#x})", handle, ptr as usize)
+                format!("object(handle={} ptr={:#x})", handle, ptr.addr())
             } else {
-                format!("object(ptr={:#x})", ptr as usize)
+                format!("object(ptr={:#x})", ptr.addr())
             }
         } else if value.is_tdz() {
             "tdz".to_string()
@@ -839,9 +839,9 @@ impl GcHeap {
                 }
                 Some(GcDebugEntry {
                     handle: idx,
-                    ptr: ptr as usize,
+                    ptr,
                     tag: self.tags[idx],
-                    in_nursery: self.nursery.contains(ptr as *const u8),
+                    in_nursery: self.nursery.contains(ptr),
                 })
             })
             .collect()
@@ -855,9 +855,9 @@ impl GcHeap {
             }
             entries.push(GcDebugEntry {
                 handle: idx,
-                ptr: ptr as usize,
+                ptr,
                 tag: self.tags[idx],
-                in_nursery: self.nursery.contains(ptr as *const u8),
+                in_nursery: self.nursery.contains(ptr),
             });
             if entries.len() >= self.debug.limit {
                 break;
@@ -925,7 +925,7 @@ impl GcHeap {
                 kind,
                 label,
                 entry.handle,
-                entry.ptr,
+                entry.ptr.addr(),
                 Self::tag_name(entry.tag),
                 entry.in_nursery
             );
@@ -1135,7 +1135,7 @@ impl GcHeap {
         for idx in to_free {
             let ptr = self.objects[idx];
             let tag = self.tags[idx];
-            let in_nursery = self.nursery.contains(ptr as *const u8);
+            let in_nursery = self.nursery.contains(ptr);
             let size = if tag == TAG_ARRAY {
                 std::mem::size_of::<JSArrayObject>()
             } else if tag == TAG_FUNCTION {
@@ -1250,7 +1250,7 @@ impl GcHeap {
         for idx in to_free {
             let ptr = self.objects[idx];
             let tag = self.tags[idx];
-            let in_nursery = self.nursery.contains(ptr as *const u8);
+            let in_nursery = self.nursery.contains(ptr);
             // SAFETY: unreachable objects are owned solely by the collector, and the drop path matches nursery versus boxed allocation.
             unsafe {
                 if in_nursery {
@@ -2063,7 +2063,7 @@ mod tests {
         assert_eq!(heap.nursery_indices.len(), 1);
 
         // SAFETY: `ptr` is a live nursery object owned by `heap`.
-        let idx = unsafe { (*(ptr as usize as *const JSObject)).gc_slot } as usize;
+        let idx = unsafe { (*ptr).gc_slot } as usize;
         assert_eq!(heap.nursery_indices[0], idx);
         let new_ptr = heap.objects[idx];
         // SAFETY: `new_ptr` is the promoted copy of the live object recorded in the heap.
@@ -2092,7 +2092,7 @@ mod tests {
         assert_eq!(heap.object_count(), 1);
 
         // SAFETY: `reachable` is the live object promoted by the collector above.
-        let idx = unsafe { (*(reachable as *const JSObject)).gc_slot } as usize;
+        let idx = unsafe { (*reachable).gc_slot } as usize;
         let new_ptr = heap.objects[idx];
         // SAFETY: the promoted object is owned by the heap and this test reclaims it exactly once.
         unsafe {
