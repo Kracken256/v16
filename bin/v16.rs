@@ -1,7 +1,6 @@
 use std::fs;
 use v16::host::HostFunction;
 use v16::object::function::JSFunction;
-use v16::object::object::JSObject;
 use v16::runtime::context::JSContext;
 use v16::{
     JSRuntime, JSValue, OptLevel, compile_to_bytecode_with_opt_level, eval, eval_with_opt_level,
@@ -93,7 +92,7 @@ fn setup_context(ctx: &mut JSContext) {
     let global = ctx.global();
     let global_ptr = global.get_ptr();
     // SAFETY: the context's global value holds a live object for the duration of this borrow.
-    let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
+    let global_obj = unsafe { &mut *global_ptr };
 
     let print_fn_val = {
         let mut func = JSFunction::new_builtin(ctx.intern("print"), 1);
@@ -196,7 +195,7 @@ fn execute_jsc(script_path: &str) {
     let global = ctx.global();
     let global_ptr = global.get_ptr();
     // SAFETY: the context's global value holds a live object for the duration of this borrow.
-    let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
+    let global_obj = unsafe { &mut *global_ptr };
     global_obj.set(
         ctx.intern("__scriptDir"),
         JSValue::new_string(ctx.intern(&script_dir_str)),
@@ -236,7 +235,7 @@ fn execute_js(script_path: &str, opt_level: OptLevel) {
     let global = ctx.global();
     let global_ptr = global.get_ptr();
     // SAFETY: the context's global value holds a live object for the duration of this borrow.
-    let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
+    let global_obj = unsafe { &mut *global_ptr };
     global_obj.set(
         ctx.intern("__scriptDir"),
         JSValue::new_string(ctx.intern(&script_dir_str)),
@@ -321,7 +320,7 @@ fn load_fn(ctx: &mut JSContext, args: &[JSValue]) -> JSValue {
         let global = ctx.global();
         let global_ptr = global.get_ptr();
         // SAFETY: the context's global value holds a live object for this read.
-        let global_obj = unsafe { &*(global_ptr as *const JSObject) };
+        let global_obj = unsafe { &*global_ptr };
         match global_obj.get(ctx.intern("__scriptDir")) {
             Some(v) if v.is_string() => PathBuf::from(ctx.get_atom_str(v.get_atom()).to_string()),
             _ => std::env::current_dir().unwrap_or_default(),
@@ -494,7 +493,7 @@ fn js_value_to_string_safe(result: &Result<JSValue, String>, ctx: &mut JSContext
             let global = ctx.global();
             let global_ptr = global.get_ptr();
             // SAFETY: the context's global value holds a live object for the duration of this borrow.
-            let global_obj = unsafe { &mut *(global_ptr as *mut JSObject) };
+            let global_obj = unsafe { &mut *global_ptr };
             global_obj.set(ctx.intern("_"), *val);
 
             let s = js_value_to_string(val, ctx);
