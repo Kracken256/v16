@@ -838,6 +838,171 @@ fn embedded_function_size(code: &[u8], start: usize) -> usize {
     pc - start
 }
 
+fn take_embedded_bytes(code: &[u8], pc: &mut usize, count: usize) -> Result<(), String> {
+    let end = pc
+        .checked_add(count)
+        .ok_or_else(|| "Invalid .jsc: embedded function truncated".to_string())?;
+    if end > code.len() {
+        return Err("Invalid .jsc: embedded function truncated".to_string());
+    }
+    *pc = end;
+    Ok(())
+}
+
+fn parse_embedded_function_strict(
+    code: &[u8],
+    start: usize,
+) -> Result<(usize, usize, usize), String> {
+    let mut pc = start;
+    take_embedded_bytes(code, &mut pc, 9)?;
+    take_embedded_bytes(code, &mut pc, 4)?;
+    let bytecode_len = read_u32_at(code, pc - 4) as usize;
+    let bytecode_start = pc;
+    take_embedded_bytes(code, &mut pc, bytecode_len)?;
+    let bytecode_end = pc;
+    take_embedded_bytes(code, &mut pc, 4)?;
+    let constants_len = read_u32_at(code, pc - 4) as usize;
+    for _ in 0..constants_len {
+        let tag = *code
+            .get(pc)
+            .ok_or_else(|| "Invalid .jsc: embedded function truncated".to_string())?;
+        pc += 1;
+        let extra_bytes = match tag {
+            0..=3 => 0,
+            4 | 5 => 8,
+            6 => 4,
+            _ => return Err("Invalid .jsc: embedded function constant tag".to_string()),
+        };
+        take_embedded_bytes(code, &mut pc, extra_bytes)?;
+    }
+    take_embedded_bytes(code, &mut pc, 4)?;
+    let upvalue_count = read_u32_at(code, pc - 4) as usize;
+    let upvalue_bytes = upvalue_count
+        .checked_mul(8)
+        .ok_or_else(|| "Invalid .jsc: embedded function too large".to_string())?;
+    take_embedded_bytes(code, &mut pc, upvalue_bytes)?;
+    take_embedded_bytes(code, &mut pc, 4)?;
+    let line_count = read_u32_at(code, pc - 4) as usize;
+    let line_bytes = line_count
+        .checked_mul(8)
+        .ok_or_else(|| "Invalid .jsc: embedded function too large".to_string())?;
+    take_embedded_bytes(code, &mut pc, line_bytes)?;
+    take_embedded_bytes(code, &mut pc, 4)?;
+    take_embedded_bytes(code, &mut pc, 4)?;
+    let var_count = read_u32_at(code, pc - 4) as usize;
+    let var_bytes = var_count
+        .checked_mul(7)
+        .ok_or_else(|| "Invalid .jsc: embedded function too large".to_string())?;
+    take_embedded_bytes(code, &mut pc, var_bytes)?;
+    take_embedded_bytes(code, &mut pc, 2)?;
+    Ok((pc - start, bytecode_start, bytecode_end))
+}
+
+fn verify_register_code(code: &[u8]) -> Result<(), String> {
+    let mut pending: Vec<&[u8]> = vec![code];
+    while let Some(stream) = pending.pop() {
+        verify_register_code_stream(stream, &mut pending)?;
+    }
+    Ok(())
+}
+
+fn verify_register_code_stream<'a>(
+    stream: &'a [u8],
+    pending: &mut Vec<&'a [u8]>,
+) -> Result<(), String> {
+    let len = stream.len();
+    let mut is_boundary = vec![false; len + 1];
+    let mut instructions: Vec<(usize, usize, Opcode)> = Vec::new();
+    let mut pc = 0usize;
+    while pc < len {
+        let byte = stream[pc];
+        let op = Opcode::from_u8(byte)
+            .ok_or_else(|| format!("Invalid .jsc: unknown opcode {} at {}", byte, pc))?;
+        is_boundary[pc] = true;
+        let size = match op {
+            Opcode::NewFunction
+            | Opcode::NewGeneratorFunction
+            | Opcode::NewAsyncFunction
+            | Opcode::NewAsyncGeneratorFunction => {
+                let (size, bytecode_start, bytecode_end) =
+                    parse_embedded_function_strict(stream, pc)?;
+                pending.push(&stream[bytecode_start..bytecode_end]);
+                size
+            }
+            _ => Opcode::instruction_size_at(stream, pc),
+        };
+        if size == 0 || size > len - pc {
+            return Err(format!("Invalid .jsc: instruction at {} overruns code", pc));
+        }
+        instructions.push((pc, size, op));
+        pc += size;
+    }
+    is_boundary[len] = true;
+    for &(pc, size, op) in &instructions {
+        let target = match op {
+            Opcode::Jump => {
+                Some(pc as i64 + size as i64 + read_u32_at(stream, pc + 1) as i32 as i64)
+            }
+            Opcode::Jump8 => Some(pc as i64 + size as i64 + stream[pc + 1] as i8 as i64),
+            Opcode::JumpIf | Opcode::JumpIfNot | Opcode::JumpIfNullish => {
+                Some(pc as i64 + size as i64 + read_u32_at(stream, pc + 3) as i32 as i64)
+            }
+            Opcode::JumpIf8 | Opcode::JumpIfNot8 => {
+                Some(pc as i64 + size as i64 + stream[pc + 3] as i8 as i64)
+            }
+            Opcode::JumpBreak => {
+                Some(pc as i64 + size as i64 + read_u32_at(stream, pc + 3) as i32 as i64)
+            }
+            Opcode::LtJumpIfNot
+            | Opcode::LtJumpIf
+            | Opcode::LteJumpIfNot
+            | Opcode::LteJumpIf
+            | Opcode::GtJumpIfNot
+            | Opcode::GtJumpIf
+            | Opcode::GteJumpIfNot
+            | Opcode::GteJumpIf
+            | Opcode::EqJumpIfNot
+            | Opcode::EqJumpIf
+            | Opcode::NeqJumpIfNot
+            | Opcode::NeqJumpIf
+            | Opcode::StrictEqJumpIfNot
+            | Opcode::StrictEqJumpIf
+            | Opcode::StrictNeqJumpIfNot
+            | Opcode::StrictNeqJumpIf => {
+                Some(pc as i64 + size as i64 + read_u32_at(stream, pc + 5) as i32 as i64)
+            }
+            Opcode::Try => {
+                let catch_pc = read_u32_at(stream, pc + 1) as i32 as i64;
+                let finally_pc = read_u32_at(stream, pc + 5) as i32 as i64;
+                if catch_pc < 0 || catch_pc > len as i64 || !is_boundary[catch_pc as usize] {
+                    return Err(format!(
+                        "Invalid .jsc: exception handler at {} escapes code",
+                        pc
+                    ));
+                }
+                if finally_pc != 0
+                    && (finally_pc < 0
+                        || finally_pc > len as i64
+                        || !is_boundary[finally_pc as usize])
+                {
+                    return Err(format!(
+                        "Invalid .jsc: finally handler at {} escapes code",
+                        pc
+                    ));
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(target) = target
+            && (target < 0 || target > len as i64 || !is_boundary[target as usize])
+        {
+            return Err(format!("Invalid .jsc: invalid jump target at {}", pc));
+        }
+    }
+    Ok(())
+}
+
 impl Bytecode {
     pub fn new() -> Self {
         Self {
@@ -1732,6 +1897,7 @@ impl Bytecode {
             .ok_or_else(|| "Invalid .jsc: code truncated".to_string())?
             .to_vec();
         offset = code_end;
+        verify_register_code(&code)?;
         let constants_count = usize::try_from(read_u64_checked(data, &mut offset)?)
             .map_err(|_| "Invalid .jsc: too many constants".to_string())?;
         let constants_bytes = constants_count
@@ -2051,6 +2217,118 @@ mod tests {
             );
         }
         assert!(Bytecode::deserialize(&data).is_ok());
+    }
+
+    #[test]
+    fn test_deserialize_verifies_compiled_scripts() {
+        use crate::{JSContext, JSRuntime};
+        let mut rt = JSRuntime::new();
+        let mut ctx = JSContext::new(&mut rt);
+        let sources = [
+            "function f(a, b) { return a + b; } f(1, 2);",
+            "var g = function (x) { return function (y) { return x + y; }; }; g(1)(2);",
+            "class C { m(a) { return a; } } new C().m(1);",
+            "var o = { m(a = 1, ...r) { return a + r.length; } }; o.m();",
+            "try { throw 1; } catch (e) { e; } finally { 0; }",
+            "for (var i = 0; i < 3; i++) { i; } i;",
+            "switch (1) { case 1: break; default: break; }",
+        ];
+        for src in sources {
+            for opt in [
+                crate::OptLevel::O0,
+                crate::OptLevel::O1,
+                crate::OptLevel::O2,
+                crate::OptLevel::O3,
+            ] {
+                let bytecode = crate::compile_to_bytecode_with_opt_level(&mut ctx, src, opt)
+                    .unwrap_or_else(|e| panic!("compile failed for {src:?} ({opt:?}): {e}"));
+                let data = bytecode.serialize();
+                Bytecode::deserialize(&data).unwrap_or_else(|e| {
+                    panic!("compiled script {src:?} ({opt:?}) was rejected: {e}")
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_deserialize_rejects_misaligned_jump_targets() {
+        let mut bytecode = Bytecode::new();
+        let mut code = vec![Opcode::Nop as u8, Opcode::Jump as u8];
+        code.extend_from_slice(&(-4i32).to_le_bytes());
+        bytecode.code = code;
+        assert!(Bytecode::deserialize(&bytecode.serialize()).is_err());
+
+        let mut bytecode = Bytecode::new();
+        let code = vec![Opcode::Nop as u8, Opcode::Jump8 as u8, 0x7f];
+        bytecode.code = code;
+        assert!(Bytecode::deserialize(&bytecode.serialize()).is_err());
+    }
+
+    #[test]
+    fn test_deserialize_accepts_jump_to_code_end() {
+        for code in [Vec::new(), vec![Opcode::Nop as u8], {
+            let mut code = vec![Opcode::Nop as u8, Opcode::Jump as u8];
+            code.extend_from_slice(&0i32.to_le_bytes());
+            code
+        }] {
+            let mut bytecode = Bytecode::new();
+            bytecode.code = code;
+            assert!(Bytecode::deserialize(&bytecode.serialize()).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_deserialize_rejects_unknown_opcode_bytes() {
+        let mut bytecode = Bytecode::new();
+        bytecode.code = vec![0xff];
+        assert!(Bytecode::deserialize(&bytecode.serialize()).is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_truncated_embedded_functions() {
+        let mut prefix = vec![Opcode::NewFunction as u8];
+        prefix.extend_from_slice(&0u16.to_le_bytes());
+        prefix.extend_from_slice(&[0, 0, 0, 0]);
+        prefix.extend_from_slice(&0u16.to_le_bytes());
+        prefix.extend_from_slice(&3u32.to_le_bytes());
+        prefix.extend_from_slice(&[Opcode::Return as u8, 0, 0]);
+
+        let mut bytecode = Bytecode::new();
+        bytecode.code = prefix.clone();
+        assert!(Bytecode::deserialize(&bytecode.serialize()).is_err());
+
+        let mut bad_tag = prefix.clone();
+        bad_tag.extend_from_slice(&1u32.to_le_bytes());
+        bad_tag.push(9);
+        let mut bytecode = Bytecode::new();
+        bytecode.code = bad_tag;
+        assert!(Bytecode::deserialize(&bytecode.serialize()).is_err());
+
+        let mut bad_inner_jump = vec![Opcode::NewFunction as u8];
+        bad_inner_jump.extend_from_slice(&0u16.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&[0, 0, 0, 0]);
+        bad_inner_jump.extend_from_slice(&0u16.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&5u32.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&[Opcode::Jump as u8, 0x7f, 0, 0, 0]);
+        bad_inner_jump.extend_from_slice(&0u32.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&0u32.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&0u32.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&0u32.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&0u32.to_le_bytes());
+        bad_inner_jump.extend_from_slice(&0u16.to_le_bytes());
+        let mut bytecode = Bytecode::new();
+        bytecode.code = bad_inner_jump;
+        assert!(Bytecode::deserialize(&bytecode.serialize()).is_err());
+    }
+
+    #[test]
+    fn test_deserialize_rejects_bad_exception_handlers() {
+        let mut bytecode = Bytecode::new();
+        let mut code = vec![Opcode::Try as u8];
+        code.extend_from_slice(&3i32.to_le_bytes());
+        code.extend_from_slice(&0i32.to_le_bytes());
+        bytecode.code = code;
+        assert!(Bytecode::deserialize(&bytecode.serialize()).is_err());
     }
 
     #[test]
