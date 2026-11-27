@@ -684,9 +684,11 @@ mod tests {
         assert!(bigint_value.try_as_function().is_none());
 
         // SAFETY: each pointer was produced by `Box::into_raw` above and is reclaimed exactly once.
-        drop(unsafe { Box::from_raw(object_ptr) });
-        drop(unsafe { Box::from_raw(function_ptr) });
-        drop(unsafe { Box::from_raw(bigint_ptr) });
+        unsafe {
+            drop(Box::from_raw(object_ptr));
+            drop(Box::from_raw(function_ptr));
+            drop(Box::from_raw(bigint_ptr));
+        }
     }
 
     #[test]
@@ -706,8 +708,10 @@ mod tests {
         assert!(function_value.try_as_object_mut().is_some());
 
         // SAFETY: each pointer was produced by `Box::into_raw` above and is reclaimed exactly once.
-        drop(unsafe { Box::from_raw(object_ptr) });
-        drop(unsafe { Box::from_raw(function_ptr) });
+        unsafe {
+            drop(Box::from_raw(object_ptr));
+            drop(Box::from_raw(function_ptr));
+        }
     }
 
 }
